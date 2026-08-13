@@ -43,9 +43,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
         Line::from(vec![
             Span::raw(" "),
             text("Build time ", theme::MUTED),
-            strong(app.build_time, theme::TEXT),
+            // Live while building, final once it is not. A build time that only
+            // appears at the end tells you nothing during the wait that matters.
+            strong(app.build_clock(), theme::TEXT),
             text("   Sync ", theme::MUTED),
-            strong(app.sync_time, theme::TEXT),
+            strong(app.sync_time.clone(), theme::TEXT),
             Span::raw(" "),
         ])
         .right_aligned(),
@@ -150,9 +152,9 @@ fn stages(frame: &mut Frame, area: Rect, app: &App) {
                 vec![
                     strong(glyph, color),
                     Span::raw(" "),
-                    text(stage.label, theme::TEXT),
+                    text(stage.label.as_str(), theme::TEXT),
                 ],
-                vec![text(stage.duration, theme::MUTED)],
+                vec![text(stage.duration.as_str(), theme::MUTED)],
             )
         })
         .collect();
@@ -183,22 +185,31 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
         ],
         vec![
             text("build ", theme::MUTED),
-            strong(app.build_time, theme::TEXT),
+            strong(app.build_clock(), theme::TEXT),
             text("  sync ", theme::MUTED),
-            strong(app.sync_time, theme::TEXT),
+            strong(app.sync_time.clone(), theme::TEXT),
         ],
     );
 
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// State 7 detail: the compiler output, with a code frame.
+/// State 7 detail: the compiler output, with a code frame when there is one.
 pub fn render_failure(frame: &mut Frame, area: Rect, app: &mut App) {
     let Some(failure) = &app.failure else {
         return;
     };
 
-    let block = alert_card("COMPILER ERROR", theme::ROSE)
+    // "COMPILER ERROR" only when it is one. A Gradle dependency failure, a
+    // signing error or a missing toolchain names no source position, and calling
+    // those a compiler error sends you looking in the wrong place.
+    let title = if failure.location.is_some() {
+        "COMPILER ERROR"
+    } else {
+        "BUILD ERROR"
+    };
+
+    let block = alert_card(title, theme::ROSE)
         .title_top(
             Line::from(vec![
                 Span::raw(" "),
@@ -213,51 +224,85 @@ pub fn render_failure(frame: &mut Frame, area: Rect, app: &mut App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut lines = vec![
-        Line::from(strong(failure.summary, theme::ROSE)),
-        // The position, split out from the summary so it is machine-shaped
-        // rather than prose: this is what gets read to build the code frame,
-        // and what an editor jump would consume.
-        Line::from(vec![
-            text(failure.file, theme::MUTED),
-            text(":", theme::BORDER),
-            strong(failure.line.to_string(), theme::TEXT),
-            text(":", theme::BORDER),
-            strong(failure.column.to_string(), theme::TEXT),
-        ]),
-        Line::default(),
-    ];
+    let mut lines = Vec::new();
 
-    // Dart emits the offending line and a caret itself, so that much is free
-    // passthrough. The lines either side come from reading the file at the
-    // reported position, which is usually the difference between recognising
-    // the mistake and opening the editor.
-    for (number, source) in failure.context {
-        let hot = *number == failure.line;
+    for chunk in crate::widgets::wrap(&failure.summary, inner.width as usize) {
+        lines.push(Line::from(strong(chunk, theme::ROSE)));
+    }
+
+    // The position, split out from the summary so it is machine-shaped rather
+    // than prose: this is what was read to build the code frame, and what an
+    // editor jump would consume.
+    if let Some((file, line, column)) = &failure.location {
+        lines.push(Line::from(vec![
+            text(file.as_str(), theme::MUTED),
+            text(":", theme::BORDER),
+            strong(line.to_string(), theme::TEXT),
+            text(":", theme::BORDER),
+            strong(column.to_string(), theme::TEXT),
+        ]));
+    }
+
+    lines.push(Line::default());
+
+    // The lines either side of the reported position, read from the file. One
+    // line of context is usually the difference between recognising the mistake
+    // and opening the editor.
+    let hot_line = failure.location.as_ref().map(|(_, line, _)| *line);
+
+    for (number, source) in &failure.context {
+        let hot = Some(*number) == hot_line;
 
         lines.push(Line::from(vec![
             text(
-                format!("{number:>3} "),
+                format!("{number:>4} "),
                 if hot { theme::ROSE } else { theme::MUTED },
             ),
             if hot {
-                strong(*source, theme::TEXT)
+                strong(source.as_str(), theme::TEXT)
             } else {
-                text(*source, theme::MUTED)
+                text(source.as_str(), theme::MUTED)
             },
         ]));
     }
 
-    lines.push(Line::from(vec![
-        Span::raw(" ".repeat(4 + failure.caret_pad)),
-        strong(failure.caret, theme::ROSE),
-        Span::raw(" "),
-        text(failure.caret_note, theme::ROSE),
-    ]));
+    if !failure.context.is_empty() && failure.caret_col > 0 {
+        lines.push(Line::from(vec![
+            Span::raw(" ".repeat(5 + failure.caret_col.saturating_sub(1) as usize)),
+            strong("^", theme::ROSE),
+        ]));
+    }
+
+    // No code frame: the tail of what the build printed takes its place. Showing
+    // nothing here would leave the one screen whose whole job is explaining the
+    // failure with nothing but an exit code.
+    if failure.context.is_empty() {
+        for out in &failure.output {
+            for chunk in crate::widgets::wrap(out, inner.width as usize) {
+                lines.push(Line::from(text(chunk, theme::MUTED)));
+            }
+        }
+    }
 
     lines.push(Line::default());
-    lines.push(Line::from(text(failure.tail, theme::MUTED)));
+    lines.push(Line::from(text(failure.note.as_str(), theme::AMBER)));
+
     lines.push(Line::default());
+
+    // The action row follows the message rather than being pinned to the bottom
+    // of the card. Pinning it put the card's slack in the middle, between the
+    // verdict and the only thing that acts on it, which reads as a rendering
+    // fault; below the action row the same slack reads as room.
+    //
+    // Truncated to leave it a row: whatever is cut is the oldest build output,
+    // and a Retry the layout swallowed is worse than a line of Gradle noise.
+    let action_row = Rect {
+        y: inner.y + lines.len().min(inner.height.saturating_sub(1) as usize) as u16,
+        height: 1,
+        ..inner
+    };
+
+    lines.truncate(inner.height.saturating_sub(1) as usize);
 
     // Retry is a pty restart, not a keypress forwarded to Flutter: kill the
     // child, reap it, respawn with stage state reset. `r` is free here because
@@ -270,24 +315,14 @@ pub fn render_failure(frame: &mut Frame, area: Rect, app: &mut App) {
     actions.push(Span::raw(" "));
     actions.push(text("Quit", theme::MUTED));
 
-    let action_row = Rect {
-        x: inner.x,
-        y: inner.y + lines.len() as u16,
-        width: inner.width,
-        height: 1,
-    };
-
-    lines.push(Line::from(actions));
-
-    if action_row.y < inner.y + inner.height {
-        app.hits.push(Hit {
-            area: Rect {
-                width: 20,
-                ..action_row
-            },
-            action: Action::RetryBuild,
-        });
-    }
+    app.hits.push(Hit {
+        area: Rect {
+            width: 20,
+            ..action_row
+        },
+        action: Action::RetryBuild,
+    });
 
     frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(Line::from(actions)), action_row);
 }

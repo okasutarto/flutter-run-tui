@@ -109,11 +109,20 @@ pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget
 
 /// State 3. Booting, possibly for minutes.
 pub fn render_booting(frame: &mut Frame, area: Rect, app: &App) {
-    let name = app
-        .devices
-        .get(app.selected_device)
-        .map(|d| d.name)
-        .unwrap_or("device");
+    let name = if app.boot_name.is_empty() {
+        "device"
+    } else {
+        app.boot_name.as_str()
+    };
+
+    // What is actually being waited on, which differs by platform: Android polls
+    // a property, a simulator blocks in `bootstatus`.
+    let waiting = match app.selected().map(|d| d.platform) {
+        Some(crate::data::Platform::Ios) => {
+            "  waiting on simctl bootstatus   ·   blocks until ready"
+        }
+        _ => "  waiting for sys.boot_completed   ·   gives up at 180s",
+    };
 
     let lines = vec![
         Line::from(vec![
@@ -121,17 +130,15 @@ pub fn render_booting(frame: &mut Frame, area: Rect, app: &App) {
             text("  Booting ", theme::TEXT),
             strong(name, theme::TEXT),
             text("...", theme::TEXT),
+            Span::raw("   "),
             // An elapsed clock, not just a spinner. Android waits on
-            // sys.boot_completed and the existing implementation gives up at
-            // 180 seconds; frames alone cannot tell a slow boot from a hung
-            // one, and three minutes is long enough for that to matter.
-            text("   42s", theme::MUTED),
+            // sys.boot_completed for up to 180 seconds; frames alone cannot tell
+            // a slow boot from a hung one, and three minutes is long enough for
+            // that to matter.
+            text(app.boot_clock(), theme::MUTED),
         ]),
         Line::default(),
-        Line::from(text(
-            "  waiting for sys.boot_completed   ·   gives up at 180s",
-            theme::MUTED,
-        )),
+        Line::from(text(waiting, theme::MUTED)),
     ];
 
     frame.render_widget(Paragraph::new(lines), area);
@@ -263,9 +270,9 @@ fn draw_row(
         strong(device.platform.glyph(), theme::CYAN),
         Span::raw("  "),
         if selected {
-            strong(device.name, theme::TEXT)
+            strong(device.name.as_str(), theme::TEXT)
         } else {
-            text(device.name, theme::TEXT)
+            text(device.name.as_str(), theme::TEXT)
         },
     ];
 
@@ -277,7 +284,7 @@ fn draw_row(
     // The id is what Flutter and the boot tools actually address, and it is
     // frequently the only way to tell two similarly named targets apart.
     let mut right = vec![
-        text(elide(device.id, 16), theme::BORDER),
+        text(elide(&device.id, 16), theme::BORDER),
         Span::raw("  "),
         text(device.platform.label(), theme::MUTED),
     ];

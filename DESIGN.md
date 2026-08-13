@@ -307,11 +307,26 @@ devices answered.
   running, they interleave with app output, and their position relative to
   surrounding log lines is the information.
 
-### 3.6 `InteractivePrompt`
-* **CLI Input Box**: `➜ ~/cwclub ❯` interactive text input with `[Enter]` submit button and popup autocomplete command suggestions.
-* **Hotkey legend**: none here. Owned by the `TerminalFooter` (3.7), which
-  keeps a single source of truth and survives this prompt being dropped on a
-  short window.
+### 3.6 `InteractivePrompt` — removed
+
+This specified a `➜ ~/cwclub ❯` text input with a submit button and popup
+autocomplete. It is gone, and the rows are the log window's.
+
+It had nothing to command. Flutter's interactive session reads **single
+keypresses**, not lines, so a typed string could not be forwarded to it: sending
+`quit` would have delivered `q` and quit on the first character. The only safe
+version was frun parsing a private vocabulary of its own — and every command
+worth having (`r`, `R`, `q`) is already a single key that works without opening
+a prompt first, and is already listed in the footer.
+
+So the box cost three rows plus its separating gap to duplicate four keycaps and
+offer autocomplete for a command set of three. That is four rows off the one
+region on screen that is permanently short of them: at the 106x45 target the log
+window went from 12 rows to 19, and the ProjectCard logo stopped being conceded
+to pay for it (see 6.2).
+
+The modal-input design in 5.1 goes with it. Key forwarding is no longer in
+tension with anything, so there is no NORMAL mode and no `:` to leave it.
 
 ### 3.7 `TerminalFooter`
 
@@ -339,9 +354,9 @@ symptom is that copying a stack trace quietly stops working.
 ProjectCard, it changed no decision taken from the footer, and it cost 18
 columns on the one row that must never truncate.
 
-Note: this replaces the hotkey legend that 3.6 places under the prompt.
-Listing the same keys twice on one screen is redundant, and the footer
-survives the prompt being dropped on a short window (see 6.2).
+This is now the only place keys are listed. The prompt bar that used to carry a
+second copy is gone (3.6), which also removes the reason this section once had to
+explain why it was not a duplicate.
 
 ### 3.8 `HotReloadView`
 * **`HOT_RELOAD_IN_FLIGHT`**: Live progress indicator (`⚡ Syncing updated Dart libraries to iPhone 16 Pro...`).
@@ -499,14 +514,21 @@ Flutter untouched.
 | Key Binding | Target Action | Scope |
 | :--- | :--- | :--- |
 | `↑` / `↓` | Navigate target list | States 2, 4 |
+| `1`-`9` | Select the nth target directly | States 2, 4 |
 | `Enter` | Select device, or start the highlighted target | States 2, 4 |
-| `Esc` | Cancel and exit (code 130) | States 2, 4 |
+| `Esc` | Cancel and exit (code 130) | States 1, 2, 4 |
 | `r` | Hot reload | States 8, 10, 11 |
+| `r` | Retry build — kill, reap, respawn | State 7 |
 | `R` | Hot restart | States 8, 10, 11 |
 | `q` | Quit gracefully — Flutter shuts itself down (`⏏`) | States 6, 8-11 |
 | `^C` | Stop — SIGINT forwarded to Flutter (`⏹`) | Any |
 | `m` | Toggle mouse capture | Global |
-| `:` | Enter command mode | States 8-11 |
+
+`:` is not bound. It used to open the command prompt, which is gone (3.6), so the
+key now forwards to Flutter like any other.
+
+The digit keys are scoped to the two states that show a list. Everywhere else a
+digit is Flutter's and has to arrive unchanged.
 
 ### 5.1 Key forwarding
 
@@ -515,9 +537,9 @@ detail: Flutter has its own interactive commands (`h` help, `d` detach,
 `c` clear, `p` debug paint, `o` platform toggle, `w` widget tree, and more),
 and intercepting them would silently remove functionality that works today.
 
-Consequently the command prompt is **modal**. In NORMAL mode keystrokes go
-to Flutter; `:` opens the input line and takes them back. A prompt that
-captures keys at all times cannot coexist with key forwarding.
+There is no mode. The earlier design needed one because a permanently focused
+text input cannot coexist with key forwarding; removing the input removed the
+conflict rather than managing it.
 
 ### 5.2 Mouse
 
@@ -568,22 +590,25 @@ draw rather than estimated:
 
 ```
   PROJECT INFO           12 rows   2 border + 1 title gap + 9 body
-                                   body = max(metadata 6 + separators 3, logo 9)
+                                   body = metadata 6 + separators 3
+                                   the logo shares these rows, it does not add any
   SELECTED TARGET        14 rows   2 border + 1 title gap + 11 body
                                    body = banner + blank + 4 fields + blank
                                           + command + 3 separators
   BUILD PHASE            10 rows   2 border + 1 title gap + bar + blank + 5 stages
-  prompt bar              3 rows
   footer                  1 row
-  gaps between blocks     5 rows   blocks - 1, not a constant
+  gaps between blocks     4 rows   blocks - 1, not a constant
   ────────────────────────────────
-  TOTAL                  45 rows
+  TOTAL                  41 rows
 ```
 
-At the 106x45 target that leaves the log window **1 row**. A five-line Dart
+At the 106x45 target that leaves the log window **4 rows**. A five-line Dart
 exception, wrapped at 84 columns of message space, occupies **8 rows**. So a
-single error would not fit on screen at the design's own target size, and full
-detail now needs a 57-row window.
+single error still would not fit on screen at the design's own target size, and
+the cards have to yield.
+
+It was 45 rows, leaving nothing at all, until the prompt bar and its gap were
+removed (3.6).
 
 Two notes on the arithmetic, both learned by getting it wrong:
 
@@ -606,14 +631,24 @@ Elements are given up in this order until the floor is met, cheapest first:
 
 | Order | Given up | Reclaimed |
 | :--- | :--- | :--- |
-| 1 | Flutter logo in ProjectCard | 4 rows |
-| 2 | Row separators in both cards | 6 rows |
-| 3 | Interactive prompt bar (keys remain in the footer) | 4 rows |
-| 4 | Device rows go dense, one line each | ~7 rows in States 2 and 4 |
-| 5 | BuildPhaseTracker collapses to one summary line once the build finished | 9 rows |
-| 6 | ProjectCard and SelectedTargetCard collapse to one metadata row each | ~19 rows |
+| 1 | Row separators in both cards | 6 rows |
+| 2 | Device rows go dense, one line each | ~7 rows in States 2 and 4 |
+| 3 | BuildPhaseTracker collapses to one summary line once the build finished | 9 rows |
+| 4 | ProjectCard and SelectedTargetCard collapse to one metadata row each | ~19 rows |
 
-Step 5 is the important one, and it is state-dependent rather than
+**The logo is no longer a rung, and never should have been.** It was step 1, on
+the stated grounds that it freed four rows. It freed none: the artwork occupies
+the same row range as the metadata beside it, so the card's height is
+`max(metadata, logo)` and metadata is never the smaller of the two. The ladder's
+cheapest step therefore spent the mark and bought nothing, then took the
+separators on the next pass anyway. Every rung must now reclaim rows in the state
+it applies to, and there is a test that says so.
+
+The logo goes when the whole card collapses, at step 4, and on a window too
+narrow to afford 14 columns beside the metadata. Those are the two cases where it
+actually costs something.
+
+Step 3 is the important one, and it is state-dependent rather than
 size-dependent: after the build succeeds, every row the tracker occupies is
 static. It has no reason to hold nine rows while the only region still
 changing is starved.
@@ -632,19 +667,22 @@ wrapped rows per entry.
 
 ### 7.1 Done
 
-All eleven state frames render, at any terminal size, verified rather than
-eyeballed. `src/` layout:
+All eleven state frames render at any terminal size, and every value on them is
+read from the machine. `src/` layout:
 
 ```text
   theme.rs     palette + Nerd Font glyph vocabulary
   data.rs      App state, the 11-variant State enum, mock data per state
   budget.rs    responsive ladder; owns every component height
   widgets.rs   pill, badge, keycap, card, spread, field, separator, elide, wrap
+  probe.rs     pubspec, git, FVM manifest, device discovery, boot
+  flutter.rs   pty session + the Flutter output parser
   dump.rs      TestBackend -> Buffer -> ANSI, plus hit probing and row reports
   ui/          mod (assembly), project, target, devices, build, logs, chrome, logo
 ```
 
-Verification tooling, which exists because layout bugs here are silent:
+Verification tooling, which exists because the failures here are silent — a
+clipped row draws no error, and a device query that answers wrongly still answers:
 
 ```text
   --dump <state> [WxH]   render one frame to stdout
@@ -653,39 +691,77 @@ Verification tooling, which exists because layout bugs here are silent:
   --rows <state> [W]     the degradation ladder across heights
   --states               list the slugs
   --demo                 walk the flow on a timer
+  --probe                report what the machine actually answered
 ```
 
-18 tests. The two that matter most: no row in any state at any size exceeds
-its width budget (measured in cells, not bytes), and every state fills exactly
-the height it was given.
+`--probe` is the counterpart to `--dump`: that one checks the layout without a
+device, this one checks discovery without a terminal.
 
-Crates: `ratatui`, `textwrap`, `unicode-width`, `ratatui-image`, `image`.
-`ratatui-image` runs with default features off, because the default set
-dynamically links libchafa.
+34 tests. The ones that matter most: no row in any state at any size exceeds its
+width budget (measured in cells, not bytes), every state fills exactly the height
+it was given, the log gutter is the same width at every entry count, and every
+rung of the degradation ladder reclaims rows where it applies.
 
-### 7.2 Not done
+Crates: `ratatui`, `textwrap`, `unicode-width`, `ratatui-image`, `image`,
+`serde_json`, `portable-pty`. `ratatui-image` runs with default features off,
+because the default set dynamically links libchafa.
 
-**Every value on screen is static.** Nothing is read, nothing is spawned. No
-pty, no `flutter` invocation, no git, no device query. `Tab` moves between
-states because in a prototype nothing else can.
+Two crates the plan named and the code does without. `vte`, because emulating a
+terminal is more code than replaying backspaces, and there is no cursor
+addressing to honour — the UI redraws itself from state, so all that is wanted
+from the byte stream is its text. And no regex engine: `strip_prefix`, `split`
+and `find` cover every pattern `frun-runner` used one for, including the
+group-separated `1,847ms`.
 
-### 7.3 Crates the remaining work needs
+### 7.2 Known limits
 
-Versions verified 2026-08-14. Already in the tree: `ratatui`, `textwrap`,
-`unicode-width`, `ratatui-image`, `image`.
+Not defects, but the places where the implementation stops short on purpose.
 
-| Step | Crate | Version | For |
-| :--- | :--- | :--- | :--- |
-| 1 | `serde` + `serde_json` | 1.0.229 / 1.0.151 | `flutter.version.json`, `.fvmrc` |
-| 1 | `anyhow` | 1.0.104 | error handling throughout |
-| 2 | — | — | `serde_json` again, plus `std::process::Command` |
-| 3 | `portable-pty` | 0.9.0 | spawning `fvm flutter run` behind a pty |
-| 3 | `vte` | 0.15.0 | terminal emulation over the pty stream |
-| 3 | `regex` | 1.13.1 | duration and Gradle task extraction |
-| 4 | — | — | `Command` and polling only |
+**`Esc` during `DETECTING` exits, it does not cancel.** `flutter devices
+--machine` runs to completion on its worker thread either way; there is no way to
+interrupt a spawned Dart VM that is cheaper than letting it finish and dropping
+the answer.
 
-`portable-pty` pulls `anyhow` regardless, so depending on it directly costs
-nothing.
+**A `SIGTERM` from outside leaks the child.** `q` and `^C` both reap Flutter, and
+so does a normal return from the event loop. Being killed outright skips all
+three, and `fvm` survives the pty hangup that follows. A signal handler would fix
+it; nothing in normal use reaches that path.
+
+**Log history is capped at 4000 entries**, dropping the oldest 1000 when it
+fills. A day-long run would otherwise grow without bound. `flutter logs` is the
+archive.
+
+**One attached device wins outright**, even when macOS and Chrome are also
+listed. That is 3.3 mode 5 working as specified, and it is right for what frun is
+for; `fvm flutter run -d chrome` covers the rare case.
+
+### 7.3 Crates
+
+What is in the tree, and what was declined.
+
+| Crate | For |
+| :--- | :--- |
+| `ratatui` + `ratatui-image` + `image` | rendering, and the logo as a real image |
+| `textwrap` + `unicode-width` | log wrapping and column arithmetic |
+| `serde_json` | `flutter devices --machine`, `simctl list -j`, `flutter.version.json`, `.fvmrc` |
+| `portable-pty` | spawning `fvm flutter run` behind a pty |
+
+**Declined after the plan named them.** Recorded so they are not reconsidered
+from scratch:
+
+* `vte` — the plan wanted it for terminal emulation over the pty stream. But the
+  UI redraws itself from state, so nothing here honours cursor addressing; all
+  that is wanted from the stream is its text. Implementing `Perform` is more code
+  than replaying `\b` and dropping escape sequences, which is ~40 lines ported
+  from an implementation that has been doing it in production for months.
+* `regex` — every pattern turned out to be `starts_with`, `contains`, `split` or a
+  digit scan. The one genuinely fiddly case, Flutter's group-separated `1,847ms`,
+  is a hand-rolled scan with a test pinning it.
+* `anyhow` — the fallible surface is small and each error has exactly one
+  consumer, which either shows it in a card or exits. `Result<_, String>` and
+  `Option` cover it.
+* `serde`'s derive — three JSON shapes read a handful of fields each, so
+  `Value::get` is less code than the structs would be.
 
 **`ansi-to-tui` is not on that list, on reflection.** It converts ANSI-coloured
 bytes into styled `Span`s, which would be needed only if Flutter's own colours
@@ -718,7 +794,11 @@ decision not yet taken.
 * `unicode-segmentation` — grapheme clustering is already handled by ratatui at
   render time.
 
-### 7.4 Remaining work, in order
+### 7.4 How it was built, in order
+
+The five steps below were the plan and are now the record. Each one is described
+as it was designed; where the implementation departed from it, the departure is
+called out.
 
 **1. Project metadata.** `pubspec.yaml` for name and version, `git branch
 --show-current` and `git status --porcelain` for branch and dirty count, and
@@ -743,6 +823,19 @@ which `_frun_device_list` currently discards, because 3.2 needs them.
 
 Brings four states to life at once: Detecting, NoDevices, MultipleDevices,
 SingleDevice.
+
+**Departure: what "how many answered" counts.** The flow in section 4 branches on
+the number of devices, and section 3.3 lists `flutter devices --machine` as one of
+the sources feeding the `NO_DEVICES` screen. Those two cannot both be read
+literally: macOS, Mac Designed for iPad and Chrome are in every answer on a Mac,
+so a count of everything listed is never zero and `NO_DEVICES` — the screen whose
+subtitle reads *nothing is attached* — becomes unreachable.
+
+Resolved by splitting the two jobs. The **branch** counts attached devices only,
+where attached means a platform that has to be booted or plugged in, so zero means
+what the copy says. The **picker** lists everything Flutter reported, because that
+is the screen whose whole purpose is choosing. `Device::attached()` is the one
+predicate, and a test pins it.
 
 **3. pty and the Flutter parser.** The bulk of the work, and where all the
 regression risk lives. `portable-pty` to spawn, `vte` to emulate the terminal
@@ -783,6 +876,32 @@ maintaining an IPC boundary where every new field is a change in two languages,
 and Python stays in the chain. Against that: the ack machine is 26 lines. Porting
 26 lines faithfully is a smaller risk than designing a protocol.
 
+**Departures in the port.** Three, all in the direction of less code:
+
+* **`BUILD_FAILED` is one condition, not a catalogue.** The trigger is that the
+  child exited without ever opening an interactive session. Gradle dying, an Xcode
+  signing failure, `pub get`, a missing entrypoint and whatever breaks next all
+  arrive through it, where a per-error pattern list would have to be extended for
+  each. The failure card then reads the code frame off disk when the output names
+  a `file.dart:line:col`, and shows the tail of the build output when it does not
+  — a Gradle dependency failure names no source position, and calling that a
+  compiler error would send you looking in the wrong place.
+* **The twelve stage booleans are gone.** `frun-runner` tracks `pods_started`,
+  `pods_completed`, `gradle_started` and nine more, plus a scratch string per
+  stage for durations Flutter re-emits. Here the stage list *is* the state:
+  `start_stage` and `finish_stage` are keyed on an enum and idempotent, which is
+  what every `if not pods_started` guard was doing by hand.
+* **`FRUN_LOG_DELAY` is not ported.** The five-second hold before releasing app
+  logs existed because the shell printed the build summary and the log stream into
+  one scrolling region, so a chatty app scrolled the summary away. The tracker and
+  the log window are separate regions here, so there is nothing to protect them
+  from. Startup logs still buffer, for free: `has_logs()` is false until the
+  session is ready, so they simply are not on screen yet.
+
+Also: stages time themselves when Flutter reports no duration. `Syncing files` and
+`Interactive session ready` never carry one, and measuring is both honest and
+smaller than special-casing them.
+
 **4. Boot.** `emulator -avd` with `sys.boot_completed` polling capped at 180
 seconds, and `xcrun simctl bootstatus -b`. Depends on 2.
 
@@ -791,10 +910,31 @@ Rust version reaches parity, so `frun` keeps running throughout.
 
 | File | Fate |
 | :--- | :--- |
-| `frun-runner` | deleted. All 1,748 lines are step 3. |
-| `frun.zsh` | 1,201 lines down to a one-line shim. |
-| `frun-theme.zsh` | deleted. `theme.rs` owns the palette. |
+| `frun.zsh` | 1,201 lines down to a shim that resolves the binary and forwards `"$@"`. |
+| `frun-runner` | unreferenced. All 1,748 lines are step 3. |
+| `frun-theme.zsh` | unreferenced. `theme.rs` owns the palette. |
 | `.frun-last-device` | kept, read and written by the Rust version. |
+
+**The palette question is settled: `theme.rs` owns it outright, and
+`frun-theme.zsh` is not parsed.** The theme file carries 256-colour indices,
+which is what a shell `printf` can address; `theme.rs` carries the RGB values
+section 2 of this document specifies. Parsing the former would mean converting
+256-colour indices back into truthful RGB, which is lossy in the wrong direction:
+the palette here is the source and the shell file was always the approximation.
+It also had exactly two consumers, `frun.zsh` sourcing it and `frun-runner`
+parsing its `FRUN_C_*` lines, and both are gone.
+
+`frun-runner` and `frun-theme.zsh` are left on disk rather than deleted. Nothing
+reads them, so they cost nothing but a directory listing, and deleting a working
+1,748-line implementation is a decision worth taking deliberately rather than as a
+side effect of a cutover. All three files were copied to
+`.backup/*.20260814-041959` first.
+
+**Exit codes are part of the interface.** `0` on a normal exit, `130` when a pick
+is cancelled with `Esc` — the shell's convention, and what the implementation
+being replaced returned — `1` on a fatal, and Flutter's own code when a build
+fails. Without this a script wrapping `frun` cannot tell a failed build from a
+successful run.
 
 `frun.zsh` is not a caller that survives: every part of it is work that moves
 into Rust. Reading pubspec, git and the SDK manifest is step 1; device discovery
@@ -819,9 +959,9 @@ it, and `theme.rs` already carries a newer palette.
 remembered device is not lost in the migration — no reselecting a target on the
 first run after the switch.
 
-### 7.5 Two traps this codebase has already sprung
+### 7.5 Traps this codebase has already sprung
 
-Both cost real debugging time. They will recur.
+All of these cost real debugging time. They will recur.
 
 **Every drawn row must be charged in `budget.rs`.** The Layout splits fixed
 blocks by those heights, so a row added to a card without a row added to the
@@ -833,3 +973,23 @@ the progress bar.
 `./target/release/frun-tui` still runs, and the output looks stale rather than
 broken. Use `cargo run --release --` so a compile error surfaces instead of
 last-good output.
+
+**A fixed-width gutter has to be measured, not assumed.** The log gutter was
+drawn with a two-column entry number and indented by a constant 18. Both were
+right up to 99 entries. The first real run reached 908 and every wrapped line sat
+a column off its own first line. Any constant that describes something drawn
+elsewhere needs a test that measures what is drawn.
+
+**Dropping the master pty handle kills the child.** `pair.master` has to live as
+long as the session. Letting it fall out of scope at the end of `Session::spawn`
+hangs up Flutter's terminal the instant it starts.
+
+**`Logo::detect()` can cost you the keyboard.** It queries the terminal and reads
+the reply from stdin. Against a terminal that never answers — a bare pty, some
+task runners — it returns normally but leaves stdin unreadable, so the UI renders
+every frame and ignores every key, including `q`. Measured: 63 frames drawn, zero
+key events. `FRUN_NO_QUERY=1` skips the query and falls back to halfblocks.
+
+**`main` returning `Err` prints the `Debug` form.** A carefully formatted `✖ FATAL`
+line was followed by `Error: Custom { kind: NotFound, .. }`. Print the message and
+`std::process::exit`.

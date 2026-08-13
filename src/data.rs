@@ -1,36 +1,44 @@
-//! Application state and the mock data behind each frame.
+//! Application state.
 //!
-//! Still static: no pty, no Flutter, no device discovery. What this proves is
-//! that the design survives all eleven states and every terminal size, which
-//! is a different question from whether the parser works.
+//! Two ways in. `App::live` reads the machine and is driven by Flutter;
+//! `App::new` fills every field with the mock data the design was judged
+//! against and is driven by `--dump`, `--all`, `--rows`, `--hits` and `--demo`.
+//!
+//! The mock path is not leftover scaffolding. Layout bugs here are silent (see
+//! DESIGN.md 7.4), and rendering all eleven states at a dozen sizes without a
+//! device attached is the only way to catch them.
+
+use std::time::Instant;
 
 use ratatui::layout::Rect;
 
+use crate::probe::{self, Boot};
 use crate::theme;
+
+// The three types the UI needs that are defined next to the command output they
+// are parsed from. Re-exported so a widget imports one module, not two.
+pub use crate::probe::{Device, Platform};
 
 // ============================================================
 // States
 // ============================================================
 
 /// The eleven frames from DESIGN.md section 4, in flow order.
-///
-/// Derived from `frun.zsh` + `frun-runner` rather than designed alongside
-/// them, so each variant corresponds to a branch that already exists.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
     /// 1. `fvm flutter devices --machine` is running.
     Detecting,
-    /// 2. Zero devices answered; offer everything launchable.
+    /// 2. Nothing is attached; offer everything launchable.
     NoDevices,
     /// 3. Booting a simulator or emulator, possibly for minutes.
     Booting,
-    /// 4. Two or more devices answered; pick one.
+    /// 4. Two or more devices attached; pick one.
     MultipleDevices,
-    /// 5. Exactly one device answered; no picker is shown.
+    /// 5. Exactly one; no picker is shown.
     SingleDevice,
     /// 6. `fvm flutter run` is building.
     Building,
-    /// 7. The build died. No implementation behind this yet.
+    /// 7. The build died before an interactive session opened.
     BuildFailed,
     /// 8. Interactive session live, app logs streaming.
     Running,
@@ -102,8 +110,8 @@ impl State {
     /// Whether the log stream is on screen.
     ///
     /// Not during a build: nothing has printed yet. Not on build failure
-    /// either, where the failure card takes the space and the compiler output
-    /// is the only output that matters.
+    /// either, where the failure card takes the space and the compiler output is
+    /// the only output that matters.
     pub fn has_logs(self) -> bool {
         matches!(
             self,
@@ -118,20 +126,15 @@ impl State {
             State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped
         )
     }
+
 }
 
 // ============================================================
-// Devices
+// Platform presentation
 // ============================================================
-
-/// Which family a target belongs to, for the glyph and the badge.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Platform {
-    Ios,
-    Android,
-    Desktop,
-    Web,
-}
+// The type itself lives in `probe`, next to the `targetPlatform` string it is
+// parsed from. Only the glyph and the label belong here, which is the only part
+// that knows about the theme.
 
 impl Platform {
     pub fn glyph(self) -> &'static str {
@@ -147,40 +150,42 @@ impl Platform {
         match self {
             Platform::Ios => "iOS",
             Platform::Android => "Android",
-            Platform::Desktop => "macOS",
+            Platform::Desktop => "Desktop",
             Platform::Web => "Web",
         }
     }
-
-    /// Desktop and web are always available, so they never pass through
-    /// `State::Booting`. This asymmetry is the practical consequence of
-    /// lifting the mobile-only restriction.
-    pub fn needs_boot(self) -> bool {
-        matches!(self, Platform::Ios | Platform::Android)
-    }
-}
-
-pub struct Device {
-    pub name: &'static str,
-    pub platform: Platform,
-    pub id: &'static str,
-    /// Simulator or emulator rather than hardware.
-    pub virtual_device: bool,
-    /// Promoted to the top of the picker, and labelled as such.
-    pub last_used: bool,
 }
 
 // ============================================================
 // Build stages
 // ============================================================
 
-/// Stage names are the ones Flutter emits, and the set is platform-dependent:
-/// iOS runs CocoaPods then Xcode, Android runs Gradle then an install. There
-/// is no fixed pipeline.
+/// Which stage a row is, so the parser can find it again.
+///
+/// An enum and not a label match: the label carries the Gradle task name, so it
+/// is not stable across the lines that open and close the stage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StageKey {
+    Launch,
+    Pods,
+    Xcode,
+    Gradle,
+    Install,
+    Sync,
+    Ready,
+}
+
+/// The set is platform-dependent by construction: a stage Flutter never
+/// mentions is never created, so iOS gets CocoaPods and Xcode while Android gets
+/// Gradle and an install, with no branch deciding that anywhere.
 pub struct Stage {
-    pub label: &'static str,
-    pub duration: &'static str,
+    pub key: StageKey,
+    pub label: String,
+    pub duration: String,
     pub done: bool,
+    /// When the stage opened, so a duration Flutter never printed can still be
+    /// reported honestly.
+    pub started: Instant,
 }
 
 // ============================================================
@@ -189,10 +194,10 @@ pub struct Stage {
 
 /// Only what the application itself produces.
 ///
-/// `SYS`, `BLD` and `OK` are gone: everything they carried was a build stage,
-/// and the build tracker already owns those. Showing them here put the same
-/// two facts on one screen twice.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// `SYS`, `BLD` and `OK` are gone: everything they carried is a build stage, and
+/// the tracker owns those. Showing them here put the same fact on one screen
+/// twice.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Level {
     Inf,
     Wrn,
@@ -224,31 +229,74 @@ impl Level {
 }
 
 pub struct LogLine {
-    pub time: &'static str,
+    pub time: String,
     pub level: Level,
-    pub message: &'static str,
+    pub message: String,
 }
 
 // ============================================================
-// Compiler failure
+// Build failure
 // ============================================================
 
-/// A code frame around the reported error position.
+/// What the failure card shows.
 ///
-/// Dart emits the offending line and a caret itself, so that much is free
-/// passthrough. The lines either side require reading the file at the reported
-/// line number, which is worth it: one line of context is usually the
-/// difference between recognising the mistake and opening the editor.
-pub struct CodeFrame {
-    pub summary: &'static str,
-    pub file: &'static str,
-    pub line: u32,
-    pub column: u32,
-    pub context: &'static [(u32, &'static str)],
-    pub caret_pad: usize,
-    pub caret: &'static str,
-    pub caret_note: &'static str,
-    pub tail: &'static str,
+/// `location` and `context` are optional because a build can die without naming
+/// a source position at all — a Gradle dependency failure, a signing error, a
+/// missing platform toolchain. When there is no code frame the raw tail of the
+/// build output takes its place, which is the only honest thing to show.
+pub struct Failure {
+    pub summary: String,
+    pub location: Option<(String, u32, u32)>,
+    pub context: Vec<(u32, String)>,
+    pub caret_col: u32,
+    /// Which stage broke.
+    pub note: String,
+    pub output: Vec<String>,
+}
+
+// ============================================================
+// Pending hot reload / restart
+// ============================================================
+
+/// A keypress Flutter has not answered yet.
+///
+/// The reason this is a state machine and not a boolean: Flutter drops keys it
+/// cannot service and reports nothing on stdout, so "requested" and "accepted"
+/// are genuinely different facts and only the second one has a guaranteed
+/// ending.
+pub struct Pending {
+    pub kind: crate::flutter::Kind,
+    pub acked: bool,
+    /// When to give up waiting for an ack. `None` once acknowledged, because an
+    /// accepted reload may legitimately take as long as it likes.
+    pub deadline: Option<Instant>,
+    pub started: Instant,
+    /// Why it is going to fail, learned before the verdict is printed.
+    pub reason: String,
+}
+
+// ============================================================
+// Messages from worker threads
+// ============================================================
+
+/// Everything that reaches the event loop from somewhere other than the
+/// keyboard.
+///
+/// One channel, polled next to the existing input poll. No async runtime: there
+/// are three producers and none of them needs to be cancelled.
+pub enum Msg {
+    /// A complete line from the pty.
+    Line(String),
+    /// The unterminated tail, where an r/R acknowledgement lives.
+    Partial(String),
+    /// The pty closed.
+    Eof,
+    /// Discovery finished: attached devices, then bootable targets.
+    Devices(Result<(Vec<Device>, Vec<Device>), String>),
+    /// A boot finished, carrying the id Flutter will use.
+    Booted(Result<String, String>),
+    /// The slow SDK version lookup landed.
+    Versions(String, String),
 }
 
 // ============================================================
@@ -256,10 +304,6 @@ pub struct CodeFrame {
 // ============================================================
 
 /// Anything the user can trigger, by key or by click.
-///
-/// Both input paths resolve here, so a click cannot drift out of sync with its
-/// keyboard equivalent. In the real build this is also where the byte is
-/// forwarded to the pty.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     Reload,
@@ -311,34 +355,51 @@ pub struct Hit {
 pub struct App {
     pub state: State,
 
-    pub project: &'static str,
-    pub version: &'static str,
-    pub branch: &'static str,
-    pub git_clean: bool,
-    pub flutter: &'static str,
-    pub dart: &'static str,
-    pub cwd: &'static str,
+    // Project card.
+    pub project: String,
+    pub version: String,
+    pub branch: String,
+    pub dirty: usize,
+    pub flutter: String,
+    pub dart: String,
+    pub cwd: String,
 
+    // Devices.
     pub devices: Vec<Device>,
     pub selected_device: usize,
     pub scroll: usize,
 
-    pub target_name: &'static str,
-    pub target_platform_id: &'static str,
-    pub target_os: &'static str,
-    pub target_kind: &'static str,
-    pub command: &'static str,
+    /// The chosen device. Everything the SelectedTargetCard shows is derived
+    /// from it rather than copied out, so the card cannot describe a device that
+    /// is not the one being run.
+    pub target: Option<Device>,
+    pub command: String,
 
+    /// What is booting, and since when. The clock matters: Android waits on
+    /// `sys.boot_completed` for up to three minutes and a spinner alone cannot
+    /// tell a slow boot from a hung one.
+    pub boot_name: String,
+    pub boot_started: Option<Instant>,
+
+    // Build.
     pub stages: Vec<Stage>,
-    pub build_time: &'static str,
-    pub sync_time: &'static str,
+    pub build_started: Instant,
+    pub build_time: String,
+    pub sync_time: String,
 
-    pub failure: Option<CodeFrame>,
+    pub failure: Option<Failure>,
     pub exit_code: i32,
 
     pub logs: Vec<LogLine>,
+    /// True while passing through a `logger.printBox()` block.
+    pub in_box: bool,
 
-    pub reload_note: &'static str,
+    pub pending: Option<Pending>,
+    pub reload_note: String,
+
+    /// Set when the flow cannot continue. Reported after the terminal is
+    /// restored, so the message survives leaving the alternate screen.
+    pub fatal: Option<String>,
 
     /// Spinner frame counter, advanced by the event loop tick.
     pub tick: usize,
@@ -347,58 +408,76 @@ pub struct App {
     pub hover: Option<Action>,
 
     /// Off by default. Capturing the mouse takes text selection away from the
-    /// terminal, and copying a stack trace out of the log window is a large
-    /// part of what that window is for.
+    /// terminal, and copying a stack trace out of the log window is a large part
+    /// of what that window is for.
     pub mouse_on: bool,
 
-    /// Last action dispatched, so a click that landed is distinguishable from
-    /// one that missed.
     pub last_action: Option<Action>,
 
-    /// Walk the states on a timer, for reviewing the flow without driving it.
+    /// Whether this app is talking to a real device. False for the dump and demo
+    /// paths, which is what gates the prototype affordances: `Tab` must not move
+    /// between states when Flutter is deciding them.
+    pub live: bool,
     pub demo: bool,
 
-    /// True while the command line has focus. In NORMAL mode every unbound
-    /// key is forwarded to Flutter, which has its own interactive commands
-    /// (`h`, `d`, `c`, `p`, `o`, `w`); a prompt that captures keys at all
-    /// times cannot coexist with that.
-    pub command_mode: bool,
-    pub command_input: String,
+    clock: probe::Clock,
 }
 
 impl App {
-    pub fn new(state: State) -> Self {
+    /// Live, from what the machine says.
+    pub fn live(project: probe::Project) -> Self {
+        let mut app = Self::empty();
+
+        app.project = project.name;
+        app.version = project.version;
+        app.branch = project.branch;
+        app.dirty = project.dirty;
+        app.flutter = project.flutter;
+        app.dart = project.dart;
+        app.cwd = project.cwd;
+        app.live = true;
+        app.state = State::Detecting;
+
+        app
+    }
+
+    fn empty() -> Self {
         Self {
-            state,
+            state: State::Detecting,
 
-            project: "cwclub",
-            version: "2.1.0+32",
-            branch: "refactor/cwclub-new",
-            git_clean: true,
-            flutter: "3.29.3",
-            dart: "3.7.2",
-            cwd: "~/cwclub",
+            project: "-".into(),
+            version: "-".into(),
+            branch: "-".into(),
+            dirty: 0,
+            flutter: "-".into(),
+            dart: "-".into(),
+            cwd: "~".into(),
 
-            devices: devices_for(state),
+            devices: Vec::new(),
             selected_device: 0,
             scroll: 0,
 
-            target_name: "iPhone 16 Pro (emulator)",
-            target_platform_id: "ios-sim (ios)",
-            target_os: "iOS 18.2 (arm64)",
-            target_kind: "Simulator / Emulator",
-            command: "fvm flutter run -d ios-sim",
+            target: None,
+            command: String::new(),
 
-            stages: stages_for(state),
-            build_time: "3.4s",
-            sync_time: "240ms",
+            boot_name: String::new(),
+            boot_started: None,
 
-            failure: failure_for(state),
-            exit_code: 1,
+            stages: Vec::new(),
+            build_started: Instant::now(),
+            build_time: "-".into(),
+            sync_time: "-".into(),
 
-            logs: logs_for(state),
+            failure: None,
+            exit_code: 0,
 
-            reload_note: reload_note_for(state),
+            logs: Vec::new(),
+            in_box: false,
+
+            pending: None,
+            reload_note: String::new(),
+
+            fatal: None,
 
             tick: 0,
 
@@ -406,10 +485,11 @@ impl App {
             hover: None,
             mouse_on: false,
             last_action: None,
+
+            live: false,
             demo: false,
 
-            command_mode: false,
-            command_input: String::new(),
+            clock: probe::Clock::new(),
         }
     }
 
@@ -419,6 +499,7 @@ impl App {
             .iter()
             .position(|s| *s == self.state)
             .unwrap_or(0);
+
         (i + 1, State::ALL.len())
     }
 
@@ -426,32 +507,33 @@ impl App {
         theme::SPINNER[self.tick % theme::SPINNER.len()]
     }
 
+    /// Move to `state`. Carries no data with it: everything on screen is already
+    /// in `self`, put there by whatever caused the transition.
     pub fn goto(&mut self, state: State) {
         self.state = state;
-        self.devices = devices_for(state);
-        self.stages = stages_for(state);
-        self.failure = failure_for(state);
-        self.logs = logs_for(state);
-        self.reload_note = reload_note_for(state);
-        self.selected_device = 0;
-        self.scroll = 0;
     }
 
-    pub fn next_state(&mut self) {
-        let i = State::ALL
-            .iter()
-            .position(|s| *s == self.state)
-            .unwrap_or(0);
-        self.goto(State::ALL[(i + 1) % State::ALL.len()]);
+    pub fn log(&mut self, level: Level, message: &str) {
+        self.logs.push(LogLine {
+            time: self.clock.now(),
+            level,
+            message: message.to_string(),
+        });
+
+        // A run left open all day would otherwise grow without bound. The window
+        // shows a screenful and the transcript on exit is a debugging aid, not an
+        // archive; `flutter logs` exists for that.
+        //
+        // ponytail: flat cap, add a ring buffer if 4000 lines ever costs
+        // something measurable.
+        if self.logs.len() > 4000 {
+            self.logs.drain(..1000);
+        }
     }
 
-    pub fn prev_state(&mut self) {
-        let i = State::ALL
-            .iter()
-            .position(|s| *s == self.state)
-            .unwrap_or(0);
-        self.goto(State::ALL[(i + State::ALL.len() - 1) % State::ALL.len()]);
-    }
+    // ========================================================
+    // Devices
+    // ========================================================
 
     pub fn select_next(&mut self) {
         if !self.devices.is_empty() && self.selected_device + 1 < self.devices.len() {
@@ -461,6 +543,203 @@ impl App {
 
     pub fn select_prev(&mut self) {
         self.selected_device = self.selected_device.saturating_sub(1);
+    }
+
+    pub fn selected(&self) -> Option<&Device> {
+        self.devices.get(self.selected_device)
+    }
+
+    /// Adopt a device as the run target.
+    pub fn choose(&mut self, device: Device, extra: &[String]) {
+        probe::remember_device(&device.id);
+
+        self.command = crate::flutter::command_line(&device.id, extra);
+        self.target = Some(device);
+    }
+
+    /// How the target card describes the target's kind.
+    pub fn target_kind(&self) -> &'static str {
+        match &self.target {
+            Some(d) if d.virtual_device => "Simulator / Emulator",
+            Some(_) => "Hardware",
+            None => "-",
+        }
+    }
+
+    // ========================================================
+    // Hot reload / restart
+    // ========================================================
+
+    /// A keypress. Only a request: Flutter decides whether to honour it.
+    pub fn request_reload(&mut self, kind: crate::flutter::Kind) {
+        // Already in flight and confirmed: Flutter will ignore the extra key, so
+        // keep the stage that is actually running rather than resetting its ack
+        // window.
+        if let Some(pending) = &self.pending {
+            if pending.kind == kind && pending.acked {
+                return;
+            }
+        }
+
+        self.begin_reload(kind, false);
+    }
+
+    /// Flutter's own progress message arrived, so the key was taken.
+    pub fn ack_reload(&mut self, kind: crate::flutter::Kind) {
+        match &mut self.pending {
+            // Adopt what Flutter is actually doing: a reload can be triggered
+            // from outside frun, or be one Flutter had queued.
+            Some(pending) if pending.kind != kind => self.begin_reload(kind, true),
+
+            Some(pending) => {
+                pending.acked = true;
+                pending.deadline = None;
+            }
+
+            None => self.begin_reload(kind, true),
+        }
+    }
+
+    fn begin_reload(&mut self, kind: crate::flutter::Kind, acked: bool) {
+        self.pending = Some(Pending {
+            kind,
+            acked,
+            deadline: (!acked).then(|| Instant::now() + crate::flutter::ACK_TIMEOUT),
+            started: Instant::now(),
+            reason: String::new(),
+        });
+
+        self.reload_note = match kind {
+            crate::flutter::Kind::Reload => "Syncing updated Dart libraries".into(),
+            crate::flutter::Kind::Restart => "Restarting the application".into(),
+        };
+
+        if let Some(name) = self.target.as_ref().map(|d| d.name.clone()) {
+            self.reload_note = format!("{} to {name}...", self.reload_note);
+        }
+
+        self.goto(State::ReloadInFlight);
+    }
+
+    pub fn finish_reload(&mut self, kind: crate::flutter::Kind, text: &str) {
+        // The result line stays in the log stream rather than being consumed
+        // here: it happens while the app is running, it interleaves with app
+        // output, and its position is the information.
+        self.log(Level::Reload, text);
+
+        self.pending = None;
+        self.reload_note.clear();
+        self.goto(State::Running);
+
+        let _ = kind;
+    }
+
+    pub fn note_reload_failure(&mut self, reason: &str) {
+        if let Some(pending) = &mut self.pending {
+            if pending.reason.is_empty() {
+                pending.reason = reason.to_string();
+            }
+        }
+    }
+
+    pub fn fail_reload(&mut self) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+
+        let reason = if pending.reason.is_empty() {
+            "see the errors above".to_string()
+        } else {
+            pending.reason
+        };
+
+        self.reload_note = format!("{} — {reason}", pending.kind.name());
+        self.goto(State::ReloadFailed);
+    }
+
+    /// Flutter never took the key.
+    pub fn drop_reload(&mut self) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+
+        self.reload_note = format!(
+            "{} not picked up by Flutter — press {} again",
+            pending.kind.name(),
+            pending.kind.key()
+        );
+
+        self.goto(State::ReloadDropped);
+    }
+
+    /// Surface why a reload is slow, once per distinct message.
+    pub fn reload_notice(&mut self, text: &str) {
+        if self.reload_note != text {
+            self.reload_note = text.to_string();
+        }
+    }
+
+    /// Elapsed time on whatever is currently in flight.
+    pub fn pending_clock(&self) -> String {
+        match &self.pending {
+            Some(pending) => crate::flutter::clock(pending.started.elapsed()),
+            None => String::new(),
+        }
+    }
+
+    /// Give up on an unacknowledged keypress whose deadline has passed.
+    pub fn tick_pending(&mut self) {
+        let expired = self
+            .pending
+            .as_ref()
+            .and_then(|p| p.deadline)
+            .is_some_and(|deadline| Instant::now() >= deadline);
+
+        if expired {
+            self.drop_reload();
+        }
+    }
+
+    /// How long the current boot has been running.
+    pub fn boot_clock(&self) -> String {
+        match self.boot_started {
+            Some(started) => crate::flutter::clock(started.elapsed()),
+            None => String::new(),
+        }
+    }
+
+    // ========================================================
+    // Build
+    // ========================================================
+
+    /// Start, or restart, a build.
+    pub fn begin_build(&mut self) {
+        self.stages.clear();
+        self.failure = None;
+        self.exit_code = 0;
+        self.build_started = Instant::now();
+        self.build_time = "-".into();
+        self.sync_time = "-".into();
+        self.pending = None;
+        self.reload_note.clear();
+        self.goto(State::Building);
+    }
+
+    /// Elapsed build time: counting while it builds, frozen once it stops.
+    ///
+    /// Frozen matters on failure as much as on success. A build that died at 11
+    /// seconds whose clock keeps running says the build is still going.
+    pub fn build_clock(&self) -> String {
+        if self.state == State::Building {
+            return crate::flutter::elapsed(self.build_started.elapsed());
+        }
+
+        self.build_time.clone()
+    }
+
+    /// Stop the clock, whatever the outcome.
+    pub fn end_build(&mut self) {
+        self.build_time = crate::flutter::elapsed(self.build_started.elapsed());
     }
 
     pub fn hit_test(&self, col: u16, row: u16) -> Option<Action> {
@@ -477,163 +756,296 @@ impl App {
 }
 
 // ============================================================
-// Mock data per state
+// Mock data
 // ============================================================
+// Reached only through --dump / --all / --rows / --hits / --demo.
 
-fn devices_for(state: State) -> Vec<Device> {
-    let d = |name, platform, id, virtual_device, last_used| Device {
-        name,
-        platform,
-        id,
-        virtual_device,
-        last_used,
-    };
+impl App {
+    pub fn new(state: State) -> Self {
+        let mut app = Self::empty();
 
-    match state {
-        // Every launchable target, not just phones. Desktop and web are
-        // always available and need no boot.
-        State::NoDevices | State::Booting => vec![
-            d(
-                "Pixel 10 Pro XL",
-                Platform::Android,
-                "Pixel_10_Pro_XL",
-                true,
-                false,
-            ),
-            d("Pixel 8", Platform::Android, "Pixel_8", true, false),
-            d("iPhone 17 Pro", Platform::Ios, "8A3F91C2-4D2E", true, false),
-            d(
-                "iPhone 17 Pro Max",
-                Platform::Ios,
-                "1B7C22E9-90AF",
-                true,
-                false,
-            ),
-            d("iPhone Air", Platform::Ios, "C4D1099A-71B3", true, false),
-            d(
-                "iPad Pro 13-inch (M5)",
-                Platform::Ios,
-                "77E0C1B4-2A6D",
-                true,
-                false,
-            ),
-            d("macOS Desktop", Platform::Desktop, "macos", false, false),
-            d("Chrome", Platform::Web, "chrome", false, false),
-        ],
+        app.project = "cwclub".into();
+        app.version = "2.1.0+32".into();
+        app.branch = "refactor/cwclub-new".into();
+        app.flutter = "3.29.3".into();
+        app.dart = "3.7.2".into();
+        app.cwd = "~/cwclub".into();
+        app.build_time = "3.4s".into();
+        app.sync_time = "240ms".into();
+        app.exit_code = 1;
+        app.command = "fvm flutter run -d ios-sim".into();
 
-        State::MultipleDevices => vec![
-            d("iPhone 16 Pro", Platform::Ios, "8A3F91C2-4D2E", true, true),
-            d(
-                "sdk gphone64 arm64",
-                Platform::Android,
-                "emulator-5554",
-                true,
-                false,
-            ),
-            d("macOS Desktop", Platform::Desktop, "macos", false, false),
-            d("Chrome", Platform::Web, "chrome", false, false),
-        ],
+        app.target = Some(mock_device(
+            "8A3F91C2-4D2E",
+            "iPhone 16 Pro",
+            Platform::Ios,
+            "ios",
+            "iOS 18.2 (arm64)",
+            true,
+        ));
 
-        _ => Vec::new(),
+        app.boot_name = "Pixel 10 Pro XL".into();
+        app.boot_started = Some(Instant::now());
+
+        app.mock_goto(state);
+
+        app
+    }
+
+    /// Prototype navigation: swap in the mock data for `state`.
+    pub fn mock_goto(&mut self, state: State) {
+        self.state = state;
+        self.devices = mock_devices(state);
+        self.stages = mock_stages(state);
+        self.failure = mock_failure(state);
+        self.logs = mock_logs(state, &self.clock);
+        self.reload_note = mock_reload_note(state).to_string();
+        self.selected_device = 0;
+        self.scroll = 0;
+    }
+
+    pub fn next_state(&mut self) {
+        let i = State::ALL
+            .iter()
+            .position(|s| *s == self.state)
+            .unwrap_or(0);
+
+        self.mock_goto(State::ALL[(i + 1) % State::ALL.len()]);
+    }
+
+    pub fn prev_state(&mut self) {
+        let i = State::ALL
+            .iter()
+            .position(|s| *s == self.state)
+            .unwrap_or(0);
+
+        self.mock_goto(State::ALL[(i + State::ALL.len() - 1) % State::ALL.len()]);
     }
 }
 
-fn stages_for(state: State) -> Vec<Stage> {
-    let s = |label, duration, done| Stage {
-        label,
-        duration,
-        done,
+fn mock_device(
+    id: &str,
+    name: &str,
+    platform: Platform,
+    target_platform: &str,
+    sdk: &str,
+    virtual_device: bool,
+) -> Device {
+    Device {
+        id: id.into(),
+        name: name.into(),
+        platform,
+        target_platform: target_platform.into(),
+        sdk: sdk.into(),
+        virtual_device,
+        last_used: false,
+        boot: None,
+    }
+}
+
+fn mock_devices(state: State) -> Vec<Device> {
+    let bootable = |id: &str, name: &str, platform: Platform, boot: Boot| Device {
+        id: id.into(),
+        name: name.into(),
+        platform,
+        target_platform: String::new(),
+        sdk: String::new(),
+        virtual_device: platform.needs_boot(),
+        last_used: false,
+        boot: Some(boot),
     };
 
     match state {
-        // iOS: CocoaPods then Xcode. Gradle never appears here.
-        State::Building => vec![
-            s("Launching lib/main.dart", "0.4s", true),
-            s("Running pod install", "1.2s", true),
-            s("Running Xcode build", "", false),
+        // Every launchable target, not just phones. Desktop and web are always
+        // available and need no boot.
+        State::NoDevices | State::Booting => vec![
+            bootable(
+                "Pixel_10_Pro_XL",
+                "Pixel 10 Pro XL",
+                Platform::Android,
+                Boot::Avd("Pixel_10_Pro_XL".into()),
+            ),
+            bootable(
+                "Pixel_8",
+                "Pixel 8",
+                Platform::Android,
+                Boot::Avd("Pixel_8".into()),
+            ),
+            bootable(
+                "8A3F91C2-4D2E",
+                "iPhone 17 Pro",
+                Platform::Ios,
+                Boot::Sim("8A3F91C2-4D2E".into()),
+            ),
+            bootable(
+                "1B7C22E9-90AF",
+                "iPhone 17 Pro Max",
+                Platform::Ios,
+                Boot::Sim("1B7C22E9-90AF".into()),
+            ),
+            bootable(
+                "C4D1099A-71B3",
+                "iPhone Air",
+                Platform::Ios,
+                Boot::Sim("C4D1099A-71B3".into()),
+            ),
+            bootable(
+                "77E0C1B4-2A6D",
+                "iPad Pro 13-inch (M5)",
+                Platform::Ios,
+                Boot::Sim("77E0C1B4-2A6D".into()),
+            ),
+            bootable(
+                "macos",
+                "macOS",
+                Platform::Desktop,
+                Boot::Ready("macos".into()),
+            ),
+            bootable(
+                "chrome",
+                "Chrome",
+                Platform::Web,
+                Boot::Ready("chrome".into()),
+            ),
         ],
 
-        State::BuildFailed => vec![
-            s("Launching lib/main.dart", "0.4s", true),
-            s("Running pod install", "1.2s", true),
-            s("Running Xcode build", "11.1s", false),
-        ],
+        State::MultipleDevices => {
+            let mut devices = vec![
+                mock_device(
+                    "8A3F91C2-4D2E",
+                    "iPhone 16 Pro",
+                    Platform::Ios,
+                    "ios",
+                    "iOS 18.2",
+                    true,
+                ),
+                mock_device(
+                    "emulator-5554",
+                    "Pixel 10 Pro XL",
+                    Platform::Android,
+                    "android-arm64",
+                    "Android 17 (API 37)",
+                    true,
+                ),
+                mock_device(
+                    "macos",
+                    "macOS",
+                    Platform::Desktop,
+                    "darwin",
+                    "macOS 26.6.1",
+                    false,
+                ),
+                mock_device(
+                    "chrome",
+                    "Chrome",
+                    Platform::Web,
+                    "web-javascript",
+                    "Chrome 151",
+                    false,
+                ),
+            ];
 
-        State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped => {
-            vec![
-                s("Launching lib/main.dart", "0.4s", true),
-                s("Running pod install", "1.2s", true),
-                s("Xcode build done", "11.1s", true),
-                s("Syncing files to device", "240ms", true),
-                s("Interactive session ready", "", true),
-            ]
+            devices[0].last_used = true;
+            devices
         }
 
         _ => Vec::new(),
     }
 }
 
-fn failure_for(state: State) -> Option<CodeFrame> {
+fn mock_stages(state: State) -> Vec<Stage> {
+    let stage = |key, label: &str, duration: &str, done| Stage {
+        key,
+        label: label.into(),
+        duration: duration.into(),
+        done,
+        started: Instant::now(),
+    };
+
+    match state {
+        // iOS: CocoaPods then Xcode. Gradle never appears here.
+        State::Building => vec![
+            stage(StageKey::Launch, "Flutter started", "0.4s", true),
+            stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
+            stage(StageKey::Xcode, "Building with Xcode", "", false),
+        ],
+
+        State::BuildFailed => vec![
+            stage(StageKey::Launch, "Flutter started", "0.4s", true),
+            stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
+            stage(StageKey::Xcode, "Building with Xcode", "11.1s", false),
+        ],
+
+        s if s.build_done() => vec![
+            stage(StageKey::Launch, "Flutter started", "0.4s", true),
+            stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
+            stage(StageKey::Xcode, "Building with Xcode", "11.1s", true),
+            stage(StageKey::Sync, "Syncing files", "240ms", true),
+            stage(StageKey::Ready, "Interactive session ready", "0.1s", true),
+        ],
+
+        _ => Vec::new(),
+    }
+}
+
+fn mock_failure(state: State) -> Option<Failure> {
     if state != State::BuildFailed {
         return None;
     }
 
-    Some(CodeFrame {
-        summary: "Compiler Exception: Type mismatch",
-        file: "lib/main.dart",
-        line: 42,
-        column: 18,
-        context: &[
-            (41, "@override"),
-            (42, "Widget build(BuildContext context) {"),
-            (43, "  return const MaterialApp(title: 1234);"),
+    Some(Failure {
+        summary: "lib/main.dart:42:18: Error: The argument type 'int' can't be assigned to \
+                  the parameter type 'String'."
+            .into(),
+        location: Some(("lib/main.dart".into(), 42, 18)),
+        context: vec![
+            (41, "  @override".into()),
+            (42, "  Widget build(BuildContext context) {".into()),
+            (43, "    return const MaterialApp(title: 1234);".into()),
         ],
-        caret_pad: 20,
-        caret: "^^^^",
-        caret_note: "The argument type 'int' can't be assigned to parameter 'String'",
-        tail: "Error: Target //lib:main failed to compile.",
+        caret_col: 18,
+        note: "failed during: Building with Xcode".into(),
+        output: vec![
+            "Error: Compilation failed.".into(),
+            "Target kernel_snapshot_program failed: Exception".into(),
+            "Encountered error while building for device.".into(),
+        ],
     })
 }
 
-fn logs_for(state: State) -> Vec<LogLine> {
+fn mock_logs(state: State, clock: &probe::Clock) -> Vec<LogLine> {
     if !state.has_logs() {
         return Vec::new();
     }
 
-    let l = |time, level, message| LogLine {
-        time,
+    let line = |level, message: &str| LogLine {
+        time: clock.now(),
         level,
-        message,
+        message: message.to_string(),
     };
 
     let mut logs = vec![
-        l(
-            "07:42:22",
+        line(
             Level::Wrn,
             "flutter: [ShorebirdCodePush]: Shorebird Engine not available, using no-op implementation. This occurs when using package:shorebird_code_push in an app that does not contain the Shorebird Engine.",
         ),
-        l(
-            "07:42:25",
+        line(
             Level::Inf,
             "flutter: [CWClub state] Auth token restored from secure storage (user: okasputra@gmail.com)",
         ),
-        l(
-            "07:42:28",
+        line(
             Level::Inf,
             "flutter: [CWClub UI] Initializing homepage feed with 24 widget components...",
         ),
-        l(
-            "07:42:31",
+        line(
             Level::Err,
             "flutter: The following assertion was thrown building CheckoutScreen(dirty, dependencies: [_InheritedProviderScope<CartBloc?>]):",
         ),
-        l(
-            "07:42:31",
+        line(
             Level::Err,
             "flutter: 'package:flutter/src/widgets/framework.dart': Failed assertion: line 4795 pos 12: '_debugCurrentBuildTarget == null': is not true.",
         ),
-        l(
-            "07:42:31",
+        line(
             Level::Err,
             "flutter: #0      _AssertionError._doThrowNew (dart:core-patch/errors_patch.dart:51:61)",
         ),
@@ -643,8 +1055,7 @@ fn logs_for(state: State) -> Vec<LogLine> {
         return logs;
     }
 
-    logs.push(l(
-        "07:42:34",
+    logs.push(line(
         Level::Reload,
         "Reloaded 125 of 1824 libraries in 148ms.",
     ));
@@ -652,13 +1063,13 @@ fn logs_for(state: State) -> Vec<LogLine> {
     logs
 }
 
-fn reload_note_for(state: State) -> &'static str {
+fn mock_reload_note(state: State) -> &'static str {
     match state {
         State::ReloadInFlight => "Syncing updated Dart libraries to iPhone 16 Pro...",
         State::ReloadFailed => {
-            "lib/screens/checkout.dart:88:14 — Expected ';' after this. Hot reload was rejected."
+            "Hot reload — lib/screens/checkout.dart:88:14 Expected ';' after this."
         }
-        State::ReloadDropped => "not picked up by Flutter — press r again",
+        State::ReloadDropped => "Hot reload not picked up by Flutter — press r again",
         _ => "",
     }
 }

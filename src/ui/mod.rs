@@ -49,10 +49,6 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     // on the state. Everything else is fixed.
     rows.push(Constraint::Min(3));
 
-    if app.state.has_logs() && plan.prompt {
-        rows.push(Constraint::Length(plan.prompt_h()));
-    }
-
     rows.push(Constraint::Length(1));
 
     let chunks = Layout::vertical(rows).spacing(1).split(area);
@@ -74,6 +70,12 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     let middle = chunks[i];
     i += 1;
 
+    // No prompt bar between the middle and the footer. It was three rows plus a
+    // separating gap, spent on a command line with nothing to command: Flutter
+    // reads single keys, so a typed string could not be forwarded (`quit` would
+    // have sent `q` and quit), and every key it could have offered is already in
+    // the footer. Those four rows are the log window's.
+
     match app.state {
         State::Detecting => detecting(frame, middle, app),
         State::NoDevices => devices::render_bootable(frame, middle, app, &plan),
@@ -85,11 +87,6 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped => {
             logs::render(frame, middle, app)
         }
-    }
-
-    if app.state.has_logs() && plan.prompt {
-        chrome::prompt(frame, chunks[i], app);
-        i += 1;
     }
 
     chrome::footer(frame, chunks[i], app, &plan);

@@ -9,12 +9,20 @@ use crate::data::{App, State};
 use crate::theme;
 use crate::widgets::{badge, card, spread, strong, text, wrap};
 
-/// `01␣14:32:01␣[INF]␣` measures 18 columns.
+/// `0001␣14:32:01␣INF␣` measures 18 columns.
 ///
 /// The spec called this 16; it is 18. Worth being exact about, because it is
 /// subtracted from every log line and a two-column error compounds across a
 /// wrapped stack trace.
 const GUTTER: u16 = 18;
+
+/// Columns the entry number gets, which is what makes the gutter a constant.
+///
+/// It was `{:>2}`, so the gutter silently grew a column at entry 100 and another
+/// at 1000 while the continuation rows kept indenting to 18 — the first real run
+/// hit 908 entries and every wrapped line sat one column off its own first line.
+/// Four columns covers the 4000-entry cap in `App::log`.
+const INDEX_W: usize = 4;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let block = card("APP LOGS STREAM", theme::CYAN).title_top(
@@ -61,11 +69,11 @@ fn draw_stream(frame: &mut Frame, area: Rect, app: &App) {
     let mut rows: Vec<Line> = Vec::new();
 
     for (index, log) in app.logs.iter().enumerate() {
-        for (i, chunk) in wrap(log.message, msg_w).into_iter().enumerate() {
+        for (i, chunk) in wrap(&log.message, msg_w).into_iter().enumerate() {
             if i == 0 {
                 let mut spans = vec![
-                    text(format!("{:>2} ", index + 1), theme::BORDER),
-                    text(log.time, theme::MUTED),
+                    text(format!("{:>INDEX_W$} ", index + 1), theme::BORDER),
+                    text(log.time.as_str(), theme::MUTED),
                     Span::raw(" "),
                 ];
 
@@ -125,15 +133,19 @@ fn reload_status(frame: &mut Frame, area: Rect, app: &App) {
             vec![
                 strong(app.spinner(), theme::PURPLE),
                 text(format!("  {} ", theme::GLYPH_BOLT), theme::PURPLE),
-                text(app.reload_note, theme::TEXT),
+                text(app.reload_note.as_str(), theme::TEXT),
             ],
-            vec![text("3s", theme::MUTED)],
+            // The clock is the difference between slow and stuck. Once Flutter
+            // has acknowledged the key there is no timeout left to apply — a big
+            // restart may legitimately take a while — so elapsed time is the only
+            // honest thing to show.
+            vec![text(app.pending_clock(), theme::MUTED)],
         ),
 
         State::ReloadFailed => Line::from(vec![
             strong("✖ ", theme::ROSE),
-            strong("Hot reload failed  ", theme::ROSE),
-            text(app.reload_note, theme::TEXT),
+            strong("Failed  ", theme::ROSE),
+            text(app.reload_note.as_str(), theme::TEXT),
         ]),
 
         // Neither success nor failure: the operation never started. Flutter
@@ -141,12 +153,43 @@ fn reload_status(frame: &mut Frame, area: Rect, app: &App) {
         // without this the spinner would run forever.
         State::ReloadDropped => Line::from(vec![
             strong("⚠ ", theme::AMBER),
-            strong("Hot reload ", theme::AMBER),
-            text(app.reload_note, theme::TEXT),
+            text(app.reload_note.as_str(), theme::TEXT),
         ]),
 
         _ => Line::default(),
     };
 
     frame.render_widget(Paragraph::new(line), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::widgets::width;
+
+    /// The drawn gutter must be exactly `GUTTER` wide, at any entry count.
+    ///
+    /// Two numbers described the same column before this: the spans that draw the
+    /// gutter, and the constant the continuation rows indent by. They agreed up to
+    /// 99 entries and then quietly stopped — a real run reached 908 and every
+    /// wrapped line was a column out.
+    #[test]
+    fn the_gutter_is_the_same_width_at_every_entry_count() {
+        for index in [0usize, 9, 99, 999, 3999] {
+            let drawn = format!(
+                "{:>INDEX_W$} {} {} ",
+                index + 1,
+                "14:32:01",
+                crate::data::Level::Inf.badge()
+            );
+
+            assert_eq!(
+                width(&drawn),
+                GUTTER as usize,
+                "entry {} draws a {}-column gutter, budget is {GUTTER}: {drawn:?}",
+                index + 1,
+                width(&drawn),
+            );
+        }
+    }
 }

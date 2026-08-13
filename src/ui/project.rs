@@ -33,7 +33,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
     let block = card("PROJECT INFO", theme::CYAN).title_top(
         Line::from(vec![
             Span::raw(" "),
-            text(app.cwd, theme::MUTED),
+            text(app.cwd.as_str(), theme::MUTED),
             Span::raw("  "),
             text("[COPY]", theme::MUTED),
             Span::raw(" "),
@@ -44,12 +44,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let body = if plan.logo {
-        // Sized to the artwork plus a margin, nothing more.
-        //
-        // It was 20 columns to fit an 18-cell `Cross-Platform CLI` subtitle.
-        // That label is gone, so the justification went with it, and the six
-        // columns it was holding belong to the metadata beside it.
+    // The logo column is not optional and is not in the degradation ladder. It
+    // occupies the same rows as the metadata beside it, so dropping it reclaimed
+    // nothing — see `Budget::project_h`. It goes when the whole card collapses,
+    // which is the branch above.
+    //
+    // Sized to the artwork plus a margin, nothing more. It was 20 columns to fit
+    // an 18-cell `Cross-Platform CLI` subtitle; that label is gone, so the
+    // columns it was holding belong to the metadata.
+    //
+    // Dropped on a narrow window, where 14 columns of artwork is the difference
+    // between a value fitting and being elided.
+    let body = if inner.width >= ART_W + 3 + 30 {
         let split =
             Layout::horizontal([Constraint::Length(ART_W + 3), Constraint::Min(30)]).split(inner);
 
@@ -67,12 +73,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
     // branch name is not the tidy one in the mockup:
     // `feature/PROJ-4821-refactor-checkout-payment-sheet` is 48 characters and
     // ran the pill past the card, taking its closing cap with it.
-    let branch = format!(" {} ", elide(app.branch, BRANCH_MAX));
+    let branch = format!(" {} ", elide(&app.branch, BRANCH_MAX));
 
-    let git = if app.git_clean {
-        pill(" ✔ Clean ", theme::EMERALD)
-    } else {
-        pill(" ● 3 changed ", theme::AMBER)
+    // The count, not just the fact. "3 changed" is what `git status --porcelain`
+    // actually answered, and it is the difference between a stray formatting
+    // change and a working tree you are about to lose track of.
+    let git = match app.dirty {
+        0 => pill(" ✔ Clean ", theme::EMERALD),
+        1 => pill(" ● 1 changed ", theme::AMBER),
+        n => pill(format!(" ● {n} changed "), theme::AMBER),
     };
 
     let mut lines = vec![
@@ -82,7 +91,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
             pill(format!(" {} ", app.project), theme::CYAN),
         ),
         maybe_sep(w, plan),
-        field(w, "Version", vec![text(app.version, theme::TEXT)]),
+        field(w, "Version", vec![text(app.version.as_str(), theme::TEXT)]),
         maybe_sep(w, plan),
         field(w, "Branch", pill(branch, theme::AMBER)),
         maybe_sep(w, plan),
@@ -130,12 +139,15 @@ fn stats(frame: &mut Frame, area: Rect, app: &App) {
         (
             vec![
                 text("Flutter ", theme::MUTED),
-                strong(app.flutter, theme::CYAN),
+                strong(app.flutter.as_str(), theme::CYAN),
             ],
             0,
         ),
         (
-            vec![text("Dart ", theme::MUTED), strong(app.dart, theme::PURPLE)],
+            vec![
+                text("Dart ", theme::MUTED),
+                strong(app.dart.as_str(), theme::PURPLE),
+            ],
             1,
         ),
         (
@@ -174,28 +186,28 @@ fn maybe_sep(w: u16, plan: &Budget) -> Line<'static> {
 /// Nothing here changes during a run, so this is the honest shape once rows are
 /// scarce.
 fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
-    let git = if app.git_clean {
-        "✔ clean"
+    let (git, git_color) = if app.dirty == 0 {
+        ("✔ clean".to_string(), theme::EMERALD)
     } else {
-        "● dirty"
+        (format!("● {} changed", app.dirty), theme::AMBER)
     };
 
     let line = spread(
         area.width,
         vec![
-            strong(app.project, theme::TEXT),
+            strong(app.project.as_str(), theme::TEXT),
             Span::raw(" "),
-            text(app.version, theme::MUTED),
+            text(app.version.as_str(), theme::MUTED),
             Span::raw("  "),
-            text(elide(app.branch, 28), theme::AMBER),
+            text(elide(&app.branch, 28), theme::AMBER),
             Span::raw("  "),
-            text(git, theme::EMERALD),
+            text(git, git_color),
         ],
         vec![
             text("Flutter ", theme::MUTED),
-            text(app.flutter, theme::TEXT),
+            text(app.flutter.as_str(), theme::TEXT),
             text("  Dart ", theme::MUTED),
-            text(app.dart, theme::TEXT),
+            text(app.dart.as_str(), theme::TEXT),
             text("  FVM", theme::MUTED),
         ],
     );

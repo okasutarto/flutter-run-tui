@@ -4,8 +4,8 @@
 //! left over after the cards have taken what they want. It is a floor the
 //! cards have to yield to.
 //!
-//! Row separators and roomy device rows push full chrome to 40 rows, and at
-//! the design's own 106x45 target that leaves the log window 5 rows while a
+//! Row separators and roomy device rows push full chrome to 41 rows, and at
+//! the design's own 106x45 target that leaves the log window 4 rows while a
 //! wrapped five-line Dart exception needs 8. Handing the log window the
 //! remainder produces a layout that cannot show a single error at the size it
 //! was designed for.
@@ -43,21 +43,17 @@ pub const MIN_H: u16 = 14;
 /// table in 6.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Budget {
-    /// 1. Flutter logo in the ProjectCard. 4 rows, no information.
-    pub logo: bool,
-    /// 2. Hairline rules between metadata rows. 6 rows across both cards.
+    /// 1. Hairline rules between metadata rows. 6 rows across both cards.
     pub separators: bool,
-    /// 3. Interactive prompt bar. 4 rows; its keys remain in the footer.
-    pub prompt: bool,
-    /// 4. Device rows collapse from two cell-rows to one.
+    /// 2. Device rows collapse from two cell-rows to one.
     pub roomy_devices: bool,
-    /// 5. Build tracker collapses to a single summary line.
+    /// 3. Build tracker collapses to a single summary line.
     ///
     /// State-dependent as much as size-dependent: once the build has
     /// succeeded, every row the tracker holds is static, so it has no claim on
     /// nine rows while the only changing region is starved.
     pub full_build: bool,
-    /// 6. Both cards collapse to one metadata row each.
+    /// 4. Both cards collapse to one metadata row each.
     pub full_cards: bool,
 }
 
@@ -65,9 +61,7 @@ impl Budget {
     /// Everything on.
     fn full() -> Self {
         Self {
-            logo: true,
             separators: true,
-            prompt: true,
             roomy_devices: true,
             full_build: true,
             full_cards: true,
@@ -78,9 +72,7 @@ impl Budget {
     /// to give up.
     fn concede(&mut self) -> bool {
         for flag in [
-            &mut self.logo,
             &mut self.separators,
-            &mut self.prompt,
             &mut self.roomy_devices,
             &mut self.full_build,
             &mut self.full_cards,
@@ -110,14 +102,6 @@ impl Budget {
     /// lost its `Type` field and its command string.
     const TITLE_GAP: u16 = 1;
 
-    /// Rows the logo block needs: the artwork and nothing else, now that both
-    /// label lines are gone.
-    ///
-    /// Charging only what is drawn matters here. The column ends up as tall as
-    /// the metadata beside it anyway, and the difference is exactly the slack
-    /// `logo` distributes to centre the mark.
-    const LOGO_H: u16 = 5;
-
     /// ProjectCard.
     ///
     /// Content rows, enumerated so the number can be checked against the code
@@ -130,8 +114,16 @@ impl Budget {
     ///   separators between the four fields        3   (optional)
     /// ```
     ///
-    /// The logo sits in a parallel column, so the body is the taller of the two
-    /// rather than their sum.
+    /// The logo is not charged here and is not in the ladder. It sits in a
+    /// parallel column five rows tall, and the metadata beside it is never
+    /// shorter than six, so the body height is the metadata's either way.
+    ///
+    /// It used to be the first concession, described as reclaiming four rows. It
+    /// reclaimed none: `meta.max(5)` is `meta` for every value `meta` can take.
+    /// So the ladder's cheapest rung spent the mark and bought nothing, and then
+    /// took the separators as well on the next pass. The logo now survives
+    /// exactly as long as the card does, which is what `full_cards` already
+    /// decides.
     pub fn project_h(&self) -> u16 {
         if !self.full_cards {
             return 1;
@@ -143,13 +135,7 @@ impl Budget {
             meta += 3;
         }
 
-        let body = if self.logo {
-            meta.max(Self::LOGO_H)
-        } else {
-            meta
-        };
-
-        body + 2 + Self::TITLE_GAP
+        meta + 2 + Self::TITLE_GAP
     }
 
     /// SelectedTargetCard.
@@ -195,14 +181,6 @@ impl Budget {
         1 + 1 + stages + 2 + Self::TITLE_GAP
     }
 
-    pub fn prompt_h(&self) -> u16 {
-        if self.prompt {
-            3
-        } else {
-            0
-        }
-    }
-
     /// How many stacked blocks the frame has, including the flexible middle.
     ///
     /// Needed on its own because `Layout::spacing(1)` inserts a blank row
@@ -218,10 +196,6 @@ impl Budget {
         }
 
         if state.has_build() {
-            n += 1;
-        }
-
-        if state.has_logs() && self.prompt {
             n += 1;
         }
 
@@ -242,10 +216,6 @@ impl Budget {
 
         if state.has_build() {
             rows += self.build_h(state);
-        }
-
-        if state.has_logs() {
-            rows += self.prompt_h();
         }
 
         // Footer, always present.
@@ -283,14 +253,8 @@ impl Budget {
     pub fn describe(&self) -> String {
         let mut given_up = Vec::new();
 
-        if !self.logo {
-            given_up.push("logo");
-        }
         if !self.separators {
             given_up.push("separators");
-        }
-        if !self.prompt {
-            given_up.push("prompt");
         }
         if !self.roomy_devices {
             given_up.push("dense devices");
@@ -328,15 +292,38 @@ mod tests {
 
     #[test]
     fn full_chrome_matches_the_spec_arithmetic() {
-        // DESIGN.md 6.2 quotes 40, which was an estimate written before the
-        // cards existed. 44 is enumerated from the rows they actually draw:
-        // project 12, target 14, build 10, prompt 3, footer 1, five gaps.
+        // Enumerated from the rows the cards actually draw, not estimated:
+        // project 12, target 14, build 10, footer 1, four gaps.
         let chrome = Budget::full().chrome(State::Running);
 
         assert_eq!(
-            chrome, 45,
+            chrome, 41,
             "enumerated from the rows each card actually draws"
         );
+    }
+
+    /// The prompt bar is gone, so the log window keeps the four rows it cost.
+    ///
+    /// A command line that forwarded nothing to Flutter and could not safely
+    /// forward anything (typing `quit` would have sent `q`) spent three rows plus
+    /// a gap on the one region that is always short of them.
+    #[test]
+    fn the_log_window_keeps_what_the_prompt_bar_used_to_cost() {
+        let log_rows = |h: u16| {
+            let plan = Budget::solve(area(106, h), State::Running);
+            h - plan.chrome(State::Running)
+        };
+
+        // At the design target, full chrome now leaves 4 rows rather than 0, and
+        // after the separators go the window clears its floor without having to
+        // collapse the build tracker as well.
+        assert_eq!(45 - Budget::full().chrome(State::Running), 4);
+        assert!(log_rows(45) >= LOG_MIN, "{} rows", log_rows(45));
+
+        // A window tall enough to keep everything gains the same four rows.
+        let plan = Budget::solve(area(106, 60), State::Running);
+        assert_eq!(plan, Budget::full());
+        assert_eq!(60 - plan.chrome(State::Running), 19);
     }
 
     /// Guards the failure mode that adding the title gap caused: the Layout is
@@ -347,7 +334,6 @@ mod tests {
         let full = Budget::full();
         let mut flat = full;
         flat.separators = false;
-        flat.logo = false;
 
         // 6 content + 2 border + 1 title gap.
         assert_eq!(flat.project_h(), 9);
@@ -356,7 +342,7 @@ mod tests {
         assert_eq!(flat.target_h(), 11);
 
         // Separators add three rows to each.
-        assert_eq!(full.project_h(), 12, "logo needs 9, metadata needs 9");
+        assert_eq!(full.project_h(), 12);
         assert_eq!(full.target_h(), 14);
     }
 
@@ -384,13 +370,51 @@ mod tests {
         let mut b = Budget::full();
 
         b.concede();
-        assert!(!b.logo, "logo goes first");
+        assert!(!b.separators, "separators go first");
 
         b.concede();
-        assert!(!b.separators, "separators go second");
+        assert!(!b.roomy_devices, "device rows go second");
 
         b.concede();
-        assert!(!b.prompt, "prompt goes third");
+        assert!(!b.full_build, "the build tracker collapses third");
+
+        b.concede();
+        assert!(!b.full_cards, "the cards collapse last");
+
+        assert!(!b.concede(), "nothing left to give up");
+    }
+
+    /// Every rung must actually reclaim rows in the state it applies to.
+    ///
+    /// This is the check the logo rung would have failed. It was documented as
+    /// worth four rows and worth giving up first; it was worth none, because the
+    /// artwork shares a row range with the metadata beside it.
+    #[test]
+    fn every_concession_reclaims_rows_where_it_applies() {
+        // Running: no device list on screen, so the device-row rung is inert here
+        // by design and is checked against the picker instead.
+        let mut b = Budget::full();
+        let before = b.chrome(State::Running);
+
+        b.separators = false;
+        assert!(
+            b.chrome(State::Running) < before,
+            "separators must reclaim rows"
+        );
+
+        let before = b.chrome(State::Running);
+        b.full_build = false;
+        assert!(
+            b.chrome(State::Running) < before,
+            "collapsing the build tracker must reclaim rows"
+        );
+
+        let before = b.chrome(State::Running);
+        b.full_cards = false;
+        assert!(
+            b.chrome(State::Running) < before,
+            "collapsing the cards must reclaim rows"
+        );
     }
 
     #[test]
@@ -398,6 +422,6 @@ mod tests {
         // The picker has no log window, so it should keep its detail at a
         // height where the running view would already be conceding.
         let budget = Budget::solve(area(106, 34), State::MultipleDevices);
-        assert!(budget.logo, "picker has no log floor to protect");
+        assert!(budget.separators, "picker has no log floor to protect");
     }
 }

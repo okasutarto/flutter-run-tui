@@ -3,12 +3,12 @@ name = "frun-tui"
 version = "0.1.0"
 edition = "2021"
 
-# Design prototype for the frun rewrite. Renders every state frame from
-# DESIGN.md so the spec can be judged in a terminal instead of a browser.
+# frun: a TUI front end for `fvm flutter run`, implementing DESIGN.md.
 #
-# Data is static on purpose. The pty, the Flutter output parser and device
-# discovery are the next stage; the question answered here is whether the
-# design survives all eleven states and every terminal size.
+# The mock data behind every state frame is still here, reachable through
+# --dump/--all/--rows/--hits. Layout bugs in this codebase are silent, so being
+# able to render a state without a device attached is the verification story,
+# not leftover scaffolding.
 
 [dependencies]
 # crossterm is used via ratatui::crossterm rather than as a direct dependency.
@@ -38,6 +38,15 @@ ratatui-image = { version = "11.0.6", default-features = false, features = ["cro
 # ratatui-image's `image-defaults`. That feature pulls decoders for JPEG, GIF,
 # WebP, TIFF and more, none of which are needed for one embedded PNG.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+# JSON, for the three sources that speak it: `flutter devices --machine`,
+# `xcrun simctl list -j`, and the SDK's flutter.version.json. Hand-rolling a
+# parser for nested simctl output would be a bug farm; this is the one place a
+# dependency is cheaper than the code it replaces.
+serde_json = "=1.0.151"
+# pty, for `fvm flutter run`. Flutter only opens its interactive session on a
+# tty, and std has no pty at all, so the alternative is forkpty through unsafe
+# plus hand-rolled child reaping.
+portable-pty = "=0.9.0"
 
 [profile.release]
 strip = true

@@ -1,58 +1,20 @@
-//! InteractivePrompt (3.6) and TerminalFooter (3.7).
+//! TerminalFooter (3.7).
+//!
+//! The InteractivePrompt that used to live here is gone. It cost three rows and a
+//! gap, and it had nothing to command: Flutter's interactive session reads single
+//! keypresses, so a typed line could not be forwarded to it — sending `quit`
+//! would have sent `q` and quit on the first character. Every key it might have
+//! carried is on the footer row below, which costs one row and never scrolls.
 
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
+use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
 use crate::data::{Action, App, Hit, State};
 use crate::theme;
 use crate::widgets::{keycap, spread, strong, text};
-
-/// Modal command line.
-///
-/// In NORMAL mode every unbound key is forwarded to Flutter, which has its own
-/// interactive commands (`h`, `d`, `c`, `p`, `o`, `w`). A prompt that captured
-/// keys at all times would silently remove functionality that works today, so
-/// `:` opens this and takes the keyboard back.
-pub fn prompt(frame: &mut Frame, area: Rect, app: &App) {
-    let border = if app.command_mode {
-        theme::CYAN
-    } else {
-        theme::BORDER
-    };
-
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(border))
-        .padding(Padding::horizontal(1));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let line = if app.command_mode {
-        Line::from(vec![
-            strong("➜ ", theme::EMERALD),
-            text(app.cwd, theme::CYAN),
-            Span::raw(" "),
-            strong("❯ ", theme::CYAN),
-            text(app.command_input.clone(), theme::TEXT),
-            strong("█", theme::CYAN),
-        ])
-    } else {
-        Line::from(vec![
-            strong("➜ ", theme::EMERALD),
-            text(app.cwd, theme::CYAN),
-            Span::raw(" "),
-            strong("❯ ", theme::MUTED),
-            text("press : to type a command", theme::MUTED),
-        ])
-    };
-
-    frame.render_widget(Paragraph::new(line), inner);
-}
 
 /// Hotkey cheatsheet. One row, always last, never scrolls.
 ///
@@ -160,17 +122,19 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // truncate.
     let mut optional: Vec<Vec<Span>> = Vec::new();
 
-    // Prototype-only affordance, styled as chrome rather than content.
-    // DESIGN.md removed the frame switcher because state is decided by what
-    // Flutter is doing, so this must not read as a feature; it exists only
-    // because a static frame that never advances looks like a hang.
-    optional.push(vec![
-        text(
-            format!("proto {index}/{total} {}", app.state.slug()),
-            theme::BORDER,
-        ),
-        text("  ⇥ next", theme::BORDER),
-    ]);
+    // Prototype-only affordance, and only when the data is mock. DESIGN.md
+    // removed the frame switcher because state is decided by what Flutter is
+    // doing; advertising `⇥ next` during a real run would advertise a key that
+    // now belongs to Flutter.
+    if !app.live {
+        optional.push(vec![
+            text(
+                format!("proto {index}/{total} {}", app.state.slug()),
+                theme::BORDER,
+            ),
+            text("  ⇥ next", theme::BORDER),
+        ]);
+    }
 
     // What the layout gave up, so a missing element reads as a decision rather
     // than as a glitch.

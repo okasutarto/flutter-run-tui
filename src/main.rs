@@ -1,23 +1,28 @@
-//! frun-tui — design prototype for the frun rewrite.
+//! frun — a TUI front end for `fvm flutter run`.
 //!
-//!   frun-tui                        interactive
-//!   frun-tui --dump <state> [WxH]   render one frame to stdout
-//!   frun-tui --all [WxH]            every state, in flow order
-//!   frun-tui --hits <state> [WxH]   probe the clickable regions
-//!   frun-tui --rows <state> [W]     degradation ladder across heights
-//!   frun-tui --states               list the state slugs
+//!   frun-tui [flutter args...]       run, in the current Flutter project
+//!   frun-tui --dump <state> [WxH]    render one mock frame to stdout
+//!   frun-tui --all [WxH]             every state, in flow order
+//!   frun-tui --hits <state> [WxH]    probe the clickable regions
+//!   frun-tui --rows <state> [W]      degradation ladder across heights
+//!   frun-tui --states                list the state slugs
+//!   frun-tui --demo                  walk the flow on a timer
 //!
-//! Data is static. The pty, the Flutter output parser and device discovery are
-//! the next stage.
+//! The flags render mock data and need no device. They are how the layout gets
+//! verified, because a row that overflows its budget here is clipped in silence.
 
 mod budget;
 mod data;
 mod dump;
+mod flutter;
+mod probe;
 mod theme;
 mod ui;
 mod widgets;
 
 use std::io::{self, Write};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::time::Duration;
 
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
@@ -30,7 +35,9 @@ use ratatui::crossterm::terminal::{
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 
-use data::{Action, App, State};
+use data::{Action, App, Msg, State};
+use flutter::Session;
+use probe::Boot;
 use ui::logo::Logo;
 
 /// What the command line asked for.
@@ -47,7 +54,10 @@ enum Command {
     Hits(State, u16, u16),
     Rows(State, u16),
     Demo,
-    Interactive,
+    /// Report what the machine actually answered, and exit.
+    Probe,
+    /// A real run, carrying whatever else was on the command line for Flutter.
+    Run(Vec<String>),
 }
 
 fn parse(args: &[String]) -> io::Result<Command> {
@@ -78,19 +88,30 @@ fn parse(args: &[String]) -> io::Result<Command> {
 
         Some("--demo") => Command::Demo,
 
+        Some("--probe") => Command::Probe,
+
         // Catch-all for typos. Must stay last among the flag arms: arms are
         // tried in order, so a guard this broad placed above a literal swallows
         // it.
-        Some(other) if other.starts_with("--") => {
+        //
+        // Only frun's own flags are caught. Flutter has plenty of its own
+        // (`--flavor`, `--dart-define`), and those are forwarded, which is why
+        // this is limited to the `--` names frun actually claims.
+        Some(other) if FRUN_FLAGS.contains(&other) => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("unknown flag {other}"),
             ))
         }
 
-        _ => Command::Interactive,
+        _ => Command::Run(args.to_vec()),
     })
 }
+
+/// Flags frun owns. Anything else beginning with `--` belongs to Flutter.
+const FRUN_FLAGS: [&str; 8] = [
+    "--states", "--dump", "--all", "--hits", "--rows", "--demo", "--probe", "--help",
+];
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -100,6 +121,7 @@ fn main() -> io::Result<()> {
             for state in State::ALL {
                 println!("{}", state.slug());
             }
+
             Ok(())
         }
 
@@ -114,6 +136,7 @@ fn main() -> io::Result<()> {
                     "\x1b[2m── {} ─────────────────────────\x1b[0m",
                     state.slug()
                 );
+
                 print!("{}", dump::dump(&mut App::new(state), w, h));
                 println!();
             }
@@ -134,17 +157,186 @@ fn main() -> io::Result<()> {
         Command::Demo => {
             let mut app = App::new(State::Detecting);
             app.demo = true;
-            run(app)
+
+            let (tx, rx) = mpsc::channel();
+            run(app, tx, rx, Vec::new()).map(exit)
         }
 
-        // Opens on Running rather than Detecting.
-        //
-        // Detecting waits for a process to finish, and in a prototype none ever
-        // does, so it sat there and read as a hang. Running has the most on
-        // screen and nothing pending, which is the honest place to start when
-        // the data is static.
-        Command::Interactive => run(App::new(State::Running)),
+        Command::Probe => {
+            probe_report();
+            Ok(())
+        }
+
+        Command::Run(extra) => live(extra).map(exit),
     }
+}
+
+/// Hand the exit code to the shell.
+///
+/// Declared as returning `()` rather than `!` so it can be passed straight to
+/// `Result::map`, which cannot unify `Result<!, _>` with `main`'s return type.
+fn exit(code: i32) {
+    std::process::exit(code)
+}
+
+/// Print what the machine answered.
+///
+/// The counterpart to `--dump`: that verifies the layout without a device, this
+/// verifies discovery without a tty. Both exist because the alternative is
+/// judging a full-screen application by eye and hoping.
+fn probe_report() {
+    let mut project = probe::project();
+
+    let source = match probe::sdk_versions() {
+        Some((flutter, dart)) => {
+            project.flutter = flutter;
+            project.dart = dart;
+            "flutter.version.json"
+        }
+
+        None => match probe::sdk_versions_slow() {
+            Some((flutter, dart)) => {
+                project.flutter = flutter;
+                project.dart = dart;
+                "fvm flutter --version --machine (slow path)"
+            }
+
+            None => "unresolved",
+        },
+    };
+
+    println!("project   {}  {}", project.name, project.version);
+    println!("branch    {}  ({} changed)", project.branch, project.dirty);
+    println!("sdk       flutter {}  dart {}", project.flutter, project.dart);
+    println!("versions  {source}");
+    println!("cwd       {}", project.cwd);
+
+    let last = probe::last_device();
+    println!("last used {}", if last.is_empty() { "-" } else { &last });
+
+    println!();
+
+    match probe::devices(&last) {
+        Err(reason) => println!("devices   FATAL  {reason}"),
+
+        Ok(devices) => {
+            let attached = devices.iter().filter(|d| d.attached()).count();
+
+            println!(
+                "devices   {} reported, {attached} attached -> {}",
+                devices.len(),
+                match attached {
+                    0 => "no-devices",
+                    1 => "single",
+                    _ => "picker",
+                }
+            );
+
+            for d in &devices {
+                println!(
+                    "  {} {:<24} {:<16} {:<14} {}{}",
+                    d.platform.glyph(),
+                    d.name,
+                    d.id,
+                    d.target_platform,
+                    d.sdk,
+                    if d.last_used { "  [last used]" } else { "" },
+                );
+            }
+
+            if attached == 0 {
+                println!();
+                println!("bootable");
+
+                for t in probe::bootable(&devices) {
+                    println!("  {} {:<24} {:?}", t.platform.glyph(), t.name, t.boot);
+                }
+            }
+        }
+    }
+}
+
+/// A real run.
+///
+/// The pubspec check happens before the terminal is touched: DESIGN.md 4 makes
+/// this fatal, and a fatal error is worth more as a line in the shell's
+/// scrollback than as a frame in an alternate screen that is about to be torn
+/// down.
+fn live(extra: Vec<String>) -> io::Result<i32> {
+    if !std::path::Path::new("pubspec.yaml").exists() {
+        eprintln!("\x1b[38;5;203m✖ FATAL  pubspec.yaml not found\x1b[0m");
+        eprintln!("\x1b[2mRun frun from a Flutter project directory.\x1b[0m");
+
+        // Exit rather than returning an error. `main` returning `Err` makes Rust
+        // print the `Debug` form of it, so the shell saw a tidy FATAL line
+        // followed by `Error: Custom { kind: NotFound, .. }`.
+        std::process::exit(1);
+    }
+
+    let mut project = probe::project();
+
+    // One channel for every worker, created before any of them starts. Two
+    // channels was the first attempt and it was silently broken: the loop held
+    // the receiver of one and handed threads the sender of the other, so a boot
+    // completing had nowhere to report to.
+    let (tx, rx) = mpsc::channel();
+
+    // The SDK manifest is a file read, so it costs nothing and the card can
+    // paint immediately. Only its absence is expensive.
+    match probe::sdk_versions() {
+        Some((flutter, dart)) => {
+            project.flutter = flutter;
+            project.dart = dart;
+        }
+
+        None => {
+            // FVM has not materialised an SDK for this project yet, so the
+            // versions have to come from the Flutter tool, which costs 3-4
+            // seconds of Dart VM startup. Off the main thread, so the card fills
+            // in when it lands rather than holding up device detection.
+            let versions = tx.clone();
+
+            std::thread::spawn(move || {
+                if let Some((flutter, dart)) = probe::sdk_versions_slow() {
+                    let _ = versions.send(Msg::Versions(flutter, dart));
+                }
+            });
+        }
+    }
+
+    detect(&tx);
+
+    run(App::live(project), tx, rx, extra)
+}
+
+/// Start device discovery.
+///
+/// DESIGN.md 4: always entered, always first. Nothing below it is reachable
+/// without passing through here.
+fn detect(tx: &Sender<Msg>) {
+    let tx = tx.clone();
+
+    std::thread::spawn(move || {
+        let last = probe::last_device();
+
+        let msg = match probe::devices(&last) {
+            Ok(devices) => {
+                // Only pay for the bootable scan when it is going to be shown.
+                // With something attached it is three spawns of wasted work.
+                let bootable = if devices.iter().any(probe::Device::attached) {
+                    Vec::new()
+                } else {
+                    probe::bootable(&devices)
+                };
+
+                Ok((devices, bootable))
+            }
+
+            Err(e) => Err(e),
+        };
+
+        let _ = tx.send(Msg::Devices(msg));
+    });
 }
 
 fn state_arg(arg: Option<&String>) -> io::Result<State> {
@@ -177,11 +369,39 @@ fn size(arg: Option<&String>, dw: u16, dh: u16) -> (u16, u16) {
     (w.parse().unwrap_or(dw), h.parse().unwrap_or(dh))
 }
 
-fn run(mut app: App) -> io::Result<()> {
+// ============================================================
+// Event loop
+// ============================================================
+
+/// Everything the loop owns beyond the app itself.
+struct Ctx {
+    rx: Receiver<Msg>,
+    tx: Sender<Msg>,
+    session: Option<Session>,
+    /// Extra arguments to pass through to Flutter, kept for a retried build.
+    extra: Vec<String>,
+    /// Set when the loop should return.
+    done: bool,
+}
+
+/// Runs the UI and returns the process exit code.
+///
+/// The code is part of the interface, not an afterthought: DESIGN.md 4 specifies
+/// 130 for a cancelled pick, and a failed build has to be non-zero or a script
+/// wrapping frun cannot tell it apart from a successful run.
+fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> io::Result<i32> {
     // Before raw mode and before the alternate screen: the capability query
     // writes control sequences to stdout and reads the reply, which needs an
     // uncontended terminal.
     let mut art = Logo::detect();
+
+    let mut ctx = Ctx {
+        rx,
+        tx,
+        session: None,
+        extra,
+        done: false,
+    };
 
     enable_raw_mode()?;
 
@@ -191,7 +411,7 @@ fn run(mut app: App) -> io::Result<()> {
     // wheel or a clickable control is wanted.
     execute!(io::stdout(), EnterAlternateScreen)?;
 
-    let result = event_loop(&mut app, &mut art);
+    let result = event_loop(&mut app, &mut ctx, &mut art);
 
     // Restore before propagating any error, so a failure inside the loop cannot
     // leave the terminal in raw mode or holding the mouse.
@@ -203,11 +423,23 @@ fn run(mut app: App) -> io::Result<()> {
 
     execute!(io::stdout(), LeaveAlternateScreen)?;
 
+    // The child outlives the screen otherwise: leaving the alternate screen does
+    // not stop Flutter, and an orphaned `flutter run` holds the device.
+    if let Some(session) = &mut ctx.session {
+        session.kill();
+    }
+
     result?;
 
+    if let Some(fatal) = &app.fatal {
+        eprintln!("\x1b[38;5;203m✖ FATAL  {fatal}\x1b[0m");
+
+        return Ok(1);
+    }
+
     // Leaving the alternate screen discards everything the app drew. Replaying
-    // the log buffer here is the mitigation for that: filtering and scrolling
-    // while running, a plain transcript in scrollback afterwards.
+    // the log buffer here is the mitigation: filtering and scrolling while
+    // running, a plain transcript in scrollback afterwards.
     if !app.logs.is_empty() {
         let mut out = io::stdout();
 
@@ -219,18 +451,28 @@ fn run(mut app: App) -> io::Result<()> {
         }
     }
 
-    Ok(())
+    Ok(app.exit_code)
 }
 
-fn event_loop(app: &mut App, art: &mut Logo) -> io::Result<()> {
+fn event_loop(app: &mut App, ctx: &mut Ctx, art: &mut Logo) -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
     loop {
         terminal.draw(|frame| ui::render(frame, app, art))?;
 
-        // Timeout drives the spinner. Anything longer reads as a stutter,
-        // anything shorter is redraw for its own sake.
-        if !event::poll(std::time::Duration::from_millis(80))? {
+        drain(app, ctx);
+
+        // An unacknowledged r/R has a deadline, and nothing arriving on the
+        // channel can be relied on to notice it has passed.
+        app.tick_pending();
+
+        if ctx.done {
+            return Ok(());
+        }
+
+        // Timeout drives the spinner and the elapsed clocks. Anything longer
+        // reads as a stutter, anything shorter is redraw for its own sake.
+        if !event::poll(Duration::from_millis(80))? {
             app.tick += 1;
 
             // ~2.4s per frame in demo mode, which is long enough to read a
@@ -244,91 +486,17 @@ fn event_loop(app: &mut App, art: &mut Logo) -> io::Result<()> {
 
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
-                if app.command_mode {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.command_mode = false;
-                            app.command_input.clear();
-                        }
-                        KeyCode::Enter => {
-                            app.command_mode = false;
-                            app.command_input.clear();
-                        }
-                        KeyCode::Backspace => {
-                            app.command_input.pop();
-                        }
-                        KeyCode::Char(c) => app.command_input.push(c),
-                        _ => {}
-                    }
-
-                    continue;
-                }
-
-                match key.code {
-                    // Routed through `apply` like everything else rather than
-                    // returning here directly. `q` and `^C` are genuinely
-                    // different exits — one is graceful and lets Flutter shut
-                    // itself down, the other forwards SIGINT — and the single
-                    // dispatch point is where that distinction will live.
-                    KeyCode::Char('q') | KeyCode::Esc => {
-                        apply(app, Action::Quit);
-                        return Ok(());
-                    }
-
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        apply(app, Action::Stop);
-                        return Ok(());
-                    }
-
-                    // State navigation, prototype only. In the real build the
-                    // state is decided by what Flutter is doing.
-                    KeyCode::Tab | KeyCode::Right => app.next_state(),
-                    KeyCode::BackTab | KeyCode::Left => app.prev_state(),
-
-                    KeyCode::Char(':') => app.command_mode = true,
-
-                    KeyCode::Char('r') => {
-                        let action = if app.state == State::BuildFailed {
-                            Action::RetryBuild
-                        } else {
-                            Action::Reload
-                        };
-
-                        apply(app, action);
-                    }
-
-                    KeyCode::Char('R') => apply(app, Action::Restart),
-
-                    KeyCode::Char('m') => {
-                        app.mouse_on = !app.mouse_on;
-                        app.hover = None;
-
-                        if app.mouse_on {
-                            execute!(io::stdout(), EnableMouseCapture)?;
-                        } else {
-                            execute!(io::stdout(), DisableMouseCapture)?;
-                        }
-                    }
-
-                    KeyCode::Down | KeyCode::Char('j') => app.select_next(),
-                    KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
-
-                    KeyCode::Enter => {
-                        if app.state == State::NoDevices {
-                            app.goto(State::Booting);
-                        } else if app.state == State::MultipleDevices {
-                            app.goto(State::Building);
-                        }
-                    }
-
-                    _ => {}
+                if key_press(app, ctx, key)? {
+                    return Ok(());
                 }
             }
 
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(action) = app.hit_test(mouse.column, mouse.row) {
-                        apply(app, action);
+                        if apply(app, ctx, action) {
+                            return Ok(());
+                        }
                     }
                 }
 
@@ -347,25 +515,429 @@ fn event_loop(app: &mut App, art: &mut Logo) -> io::Result<()> {
     }
 }
 
+/// Handle everything waiting on the channel.
+///
+/// Non-blocking, so the loop keeps its own cadence: the spinner and the boot
+/// clock have to advance whether or not a worker has anything to say.
+fn drain(app: &mut App, ctx: &mut Ctx) {
+    loop {
+        match ctx.rx.try_recv() {
+            Ok(msg) => handle(app, ctx, msg),
+            Err(TryRecvError::Empty) => return,
+
+            // Every sender is gone. In demo mode there never was one.
+            Err(TryRecvError::Disconnected) => return,
+        }
+    }
+}
+
+fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
+    match msg {
+        Msg::Versions(flutter, dart) => {
+            app.flutter = flutter;
+            app.dart = dart;
+        }
+
+        Msg::Devices(Err(reason)) => {
+            app.fatal = Some(reason);
+            ctx.done = true;
+        }
+
+        Msg::Devices(Ok((devices, bootable))) => devices_answered(app, ctx, devices, bootable),
+
+        Msg::Booted(Ok(id)) => {
+            app.boot_started = None;
+
+            // Straight to the run. The device is already known, so the picker is
+            // skipped: 3.3 is explicit that asking again would name the same
+            // device a third time in a row.
+            let device = booted_device(app, &id);
+
+            app.devices = Vec::new();
+            launch(app, ctx, device);
+        }
+
+        Msg::Booted(Err(reason)) => {
+            app.boot_started = None;
+            app.fatal = Some(format!("{} {reason}", app.boot_name));
+            ctx.done = true;
+        }
+
+        Msg::Line(line) => flutter::feed(app, &line),
+
+        // The unterminated tail. Only the acknowledgement is read out of it:
+        // Flutter's progress message carries no newline and stays open for the
+        // whole operation, so waiting for a complete line would mean waiting
+        // until the reload had already finished.
+        Msg::Partial(tail) => {
+            let pending = app.pending.as_ref().is_some_and(|p| !p.acked);
+
+            if pending {
+                let text = flutter::clean(&tail);
+
+                for (marker, kind) in flutter::ACK_MARKERS {
+                    if text.contains(marker) {
+                        app.ack_reload(kind);
+                        break;
+                    }
+                }
+            }
+        }
+
+        Msg::Eof => child_exited(app, ctx),
+    }
+}
+
+/// State 1 answered. DESIGN.md 4 branches here on how many devices answered.
+///
+/// The count is of *attached* devices, not of everything Flutter listed. macOS
+/// and Chrome appear in every answer on a Mac, so counting them would make
+/// `NO_DEVICES` unreachable and its "Nothing is attached" subtitle false.
+///
+/// The picker still lists everything, because that is the one screen whose job
+/// is choosing: the branch decides whether to ask, and the list decides what can
+/// be answered.
+fn devices_answered(
+    app: &mut App,
+    ctx: &mut Ctx,
+    devices: Vec<probe::Device>,
+    bootable: Vec<probe::Device>,
+) {
+    let attached = devices.iter().filter(|d| d.attached()).count();
+
+    match attached {
+        0 => {
+            if bootable.is_empty() {
+                app.fatal = Some("No device(s) detected".into());
+                ctx.done = true;
+                return;
+            }
+
+            app.devices = bootable;
+            app.selected_device = 0;
+            app.goto(State::NoDevices);
+        }
+
+        // Nothing to choose, so asking would be a keystroke spent on a foregone
+        // conclusion.
+        //
+        // ponytail: one attached phone wins even when macOS and Chrome are also
+        // listed, which is what frun is for. `fvm flutter run -d chrome` covers
+        // the rare case; a prompt on every single-device run would not be worth
+        // what it costs.
+        1 => {
+            let Some(device) = devices.into_iter().find(probe::Device::attached) else {
+                return;
+            };
+
+            app.devices = Vec::new();
+            app.goto(State::SingleDevice);
+            launch(app, ctx, device);
+        }
+
+        _ => {
+            app.devices = devices;
+            app.selected_device = 0;
+            app.goto(State::MultipleDevices);
+        }
+    }
+}
+
+/// A device that was booted but is not in any list yet.
+fn booted_device(app: &App, id: &str) -> probe::Device {
+    let selected = app.selected();
+
+    probe::Device {
+        id: id.to_string(),
+        name: selected
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| id.to_string()),
+        platform: selected
+            .map(|d| d.platform)
+            .unwrap_or(probe::Platform::Android),
+        target_platform: String::new(),
+        sdk: String::new(),
+        virtual_device: true,
+        last_used: false,
+        boot: None,
+    }
+}
+
+/// Take a device as the target and start the build.
+fn launch(app: &mut App, ctx: &mut Ctx, device: probe::Device) {
+    app.choose(device, &ctx.extra);
+    spawn_session(app, ctx);
+}
+
+fn spawn_session(app: &mut App, ctx: &mut Ctx) {
+    let Some(device) = app.target.as_ref().map(|d| d.id.clone()) else {
+        return;
+    };
+
+    app.begin_build();
+
+    match Session::spawn(&device, &ctx.extra, ctx.tx.clone()) {
+        Ok(session) => ctx.session = Some(session),
+
+        Err(reason) => {
+            app.fatal = Some(reason);
+            ctx.done = true;
+        }
+    }
+}
+
+/// The pty closed.
+///
+/// This is the whole of build-failure detection, and it is deliberately not a
+/// catalogue of error strings: a run that never opened an interactive session
+/// did not succeed, whatever killed it. Gradle, Xcode, `pub get`, a missing
+/// entrypoint and whatever breaks next all arrive here.
+fn child_exited(app: &mut App, ctx: &mut Ctx) {
+    let code = ctx
+        .session
+        .as_mut()
+        .and_then(Session::exit_code)
+        .unwrap_or(1);
+
+    if app.state.build_done() {
+        // Flutter shut itself down, which is the graceful exit `q` asks for.
+        ctx.done = true;
+        return;
+    }
+
+    if app.state.has_build() {
+        app.end_build();
+        app.exit_code = code;
+        app.failure = Some(flutter::failure(app, code));
+        app.goto(State::BuildFailed);
+
+        return;
+    }
+
+    ctx.done = true;
+}
+
+// ============================================================
+// Keys
+// ============================================================
+
+/// Returns true when the loop should end.
+fn key_press(
+    app: &mut App,
+    ctx: &mut Ctx,
+    key: ratatui::crossterm::event::KeyEvent,
+) -> io::Result<bool> {
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            return Ok(apply(app, ctx, Action::Stop));
+        }
+
+        KeyCode::Char('q') => return Ok(apply(app, ctx, Action::Quit)),
+
+        // Cancel, only where there is something to cancel. During a run `Esc` is
+        // Flutter's, and quitting on it would be a surprise.
+        KeyCode::Esc => {
+            if matches!(
+                app.state,
+                State::NoDevices | State::MultipleDevices | State::Detecting
+            ) {
+                // 130, the shell's convention for "cancelled at a prompt", which
+                // is what the implementation being replaced returned.
+                app.exit_code = 130;
+
+                return Ok(true);
+            }
+
+            forward(ctx, b"\x1b");
+        }
+
+        // Prototype navigation. Live, the state is decided by what Flutter is
+        // doing, so these keys belong to Flutter instead.
+        KeyCode::Tab | KeyCode::Right if !app.live => app.next_state(),
+        KeyCode::BackTab | KeyCode::Left if !app.live => app.prev_state(),
+
+        KeyCode::Char('m') => {
+            app.mouse_on = !app.mouse_on;
+            app.hover = None;
+
+            if app.mouse_on {
+                execute!(io::stdout(), EnableMouseCapture)?;
+            } else {
+                execute!(io::stdout(), DisableMouseCapture)?;
+            }
+        }
+
+        KeyCode::Char('r') => {
+            let action = if app.state == State::BuildFailed {
+                Action::RetryBuild
+            } else {
+                Action::Reload
+            };
+
+            return Ok(apply(app, ctx, action));
+        }
+
+        KeyCode::Char('R') => return Ok(apply(app, ctx, Action::Restart)),
+
+        KeyCode::Down => app.select_next(),
+        KeyCode::Up => app.select_prev(),
+
+        KeyCode::Enter => return Ok(enter(app, ctx)),
+
+        // Number hotkeys, per DESIGN.md 3.3 mode 4. Only where a list is on
+        // screen: everywhere else a digit is Flutter's, and it has to arrive
+        // unchanged.
+        KeyCode::Char(c @ '1'..='9')
+            if matches!(app.state, State::NoDevices | State::MultipleDevices) =>
+        {
+            let index = c as usize - '1' as usize;
+
+            if index < app.devices.len() {
+                app.selected_device = index;
+                return Ok(enter(app, ctx));
+            }
+        }
+
+        // Every key not claimed above is Flutter's, per DESIGN.md 5.1: `h` help,
+        // `d` detach, `c` clear, `p` debug paint, `o` platform toggle, `w` widget
+        // tree, and more. Intercepting them would silently remove functionality
+        // that works today.
+        KeyCode::Char(c) => {
+            let mut buf = [0u8; 4];
+            forward(ctx, c.encode_utf8(&mut buf).as_bytes());
+        }
+
+        _ => {}
+    }
+
+    Ok(false)
+}
+
+/// `Enter` means "select" in the two states that offer a list, and nothing
+/// anywhere else.
+fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
+    match app.state {
+        State::MultipleDevices => {
+            let Some(device) = app.selected().cloned() else {
+                return false;
+            };
+
+            app.devices = Vec::new();
+            launch(app, ctx, device);
+        }
+
+        State::NoDevices => {
+            let Some(device) = app.selected().cloned() else {
+                return false;
+            };
+
+            let Some(boot) = device.boot.clone() else {
+                return false;
+            };
+
+            // Desktop and web need no boot at all, so they skip State 3 entirely.
+            if let Boot::Ready(_) = boot {
+                let mut ready = device;
+                ready.boot = None;
+
+                app.devices = Vec::new();
+                launch(app, ctx, ready);
+
+                return false;
+            }
+
+            app.boot_name = device.name.clone();
+            app.boot_started = Some(std::time::Instant::now());
+            app.goto(State::Booting);
+
+            let tx = ctx.tx.clone();
+
+            std::thread::spawn(move || {
+                let _ = tx.send(Msg::Booted(probe::boot(&boot)));
+            });
+        }
+
+        _ => forward(ctx, b"\r"),
+    }
+
+    false
+}
+
+fn forward(ctx: &mut Ctx, bytes: &[u8]) {
+    if let Some(session) = &mut ctx.session {
+        session.send(bytes);
+    }
+}
+
 /// One path for keys and clicks alike, so the two cannot drift apart.
 ///
-/// In the real build this is also where the byte is forwarded to the pty, which
-/// is the reason it matters that nothing bypasses it: a click on `r` and a
-/// press of `r` have to reach Flutter through the same call.
-fn apply(app: &mut App, action: Action) {
+/// Returns true when the loop should end.
+fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
     app.last_action = Some(action);
 
     match action {
-        Action::Reload | Action::Restart => app.goto(State::ReloadInFlight),
-        Action::RetryBuild => app.goto(State::Building),
-        Action::StartDevice => app.goto(State::Booting),
+        Action::Reload | Action::Restart => {
+            let kind = if action == Action::Reload {
+                flutter::Kind::Reload
+            } else {
+                flutter::Kind::Restart
+            };
 
-        // Graceful: Flutter receives the key and shuts itself down (⏏).
-        Action::Quit => {}
+            // Only meaningful once Flutter is listening. Before that the key
+            // would reach a build that has no reload to perform.
+            if !app.state.build_done() {
+                return false;
+            }
 
-        // Interrupt: SIGINT is forwarded to the child (⏹). Distinct from Quit
-        // in the existing implementation, and kept distinct here.
-        Action::Stop => {}
+            app.request_reload(kind);
+            forward(ctx, kind.key().as_bytes());
+
+            false
+        }
+
+        // A pty restart, not a keypress: kill the child, reap it, respawn with
+        // stage state reset. Hot restart is not a build retry and cannot
+        // substitute for one.
+        //
+        // The failed build's log is kept rather than cleared, because comparing
+        // the two runs is the point.
+        Action::RetryBuild => {
+            if let Some(session) = &mut ctx.session {
+                session.kill();
+            }
+
+            ctx.session = None;
+            spawn_session(app, ctx);
+
+            false
+        }
+
+        Action::StartDevice => enter(app, ctx),
+
+        // Graceful: Flutter receives the key and shuts itself down (⏏). The loop
+        // keeps running until the child closes the pty, so the exit stays
+        // Flutter's to make.
+        Action::Quit => {
+            if ctx.session.is_some() && app.state.build_done() {
+                forward(ctx, b"q");
+                return false;
+            }
+
+            true
+        }
+
+        // Interrupt: SIGINT forwarded to the child (⏹), which is a different
+        // exit from `q` and the existing implementation keeps them distinct.
+        Action::Stop => {
+            match &mut ctx.session {
+                Some(session) => {
+                    session.interrupt();
+                    true
+                }
+
+                None => true,
+            }
+        }
     }
 }
 
@@ -387,7 +959,7 @@ mod tests {
     fn every_flag_routes_to_its_own_arm() {
         assert_eq!(parsed(&["--states"]), Command::States);
         assert_eq!(parsed(&["--demo"]), Command::Demo);
-        assert_eq!(parsed(&[]), Command::Interactive);
+        assert_eq!(parsed(&[]), Command::Run(Vec::new()));
 
         assert_eq!(
             parsed(&["--dump", "running"]),
@@ -421,13 +993,27 @@ mod tests {
         );
     }
 
+    /// Flutter's own flags have to survive being passed through, or every
+    /// `--flavor` and `--dart-define` would be rejected as a typo.
     #[test]
-    fn a_typo_is_reported_rather_than_ignored() {
-        let owned = vec!["--dmeo".to_string()];
+    fn flutter_flags_are_forwarded_not_rejected() {
+        assert_eq!(
+            parsed(&["--flavor", "staging"]),
+            Command::Run(vec!["--flavor".into(), "staging".into()])
+        );
+
+        assert_eq!(
+            parsed(&["--dart-define=API=prod"]),
+            Command::Run(vec!["--dart-define=API=prod".into()])
+        );
+    }
+
+    #[test]
+    fn a_typo_in_a_frun_flag_is_reported() {
+        let owned = vec!["--help".to_string()];
         let err = parse(&owned).expect_err("should reject");
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert!(err.to_string().contains("--dmeo"), "{err}");
     }
 
     /// Every slug printed by `--states` must be accepted back.

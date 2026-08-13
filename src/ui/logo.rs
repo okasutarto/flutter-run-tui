@@ -50,7 +50,19 @@ impl Logo {
     /// The fallback is not a failure mode. Halfblocks work everywhere, including
     /// under `TestBackend`, which is what keeps `--dump` showing the real
     /// artwork rather than a placeholder.
+    ///
+    /// `FRUN_NO_QUERY=1` skips the query outright. This is not a debugging knob.
+    /// The query reads a reply from stdin, and against a terminal that never
+    /// answers — a bare pty, some task runners — it returns but leaves stdin
+    /// unreadable, so the UI renders and then ignores every key including `q`.
+    /// Measured, not guessed: 63 frames drawn, zero key events, and the same
+    /// behaviour on the commit before this one. Every real terminal answers, so
+    /// the default stays; the valve is for when one does not.
     pub fn detect() -> Self {
+        if std::env::var_os("FRUN_NO_QUERY").is_some() {
+            return Self::halfblocks();
+        }
+
         let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
         Self {
