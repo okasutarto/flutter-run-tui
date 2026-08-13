@@ -139,23 +139,26 @@ pub fn render_booting(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// State 5. Exactly one device, so no picker at all.
+///
+/// This used to repeat the detection result and the device name below the
+/// SelectedTargetCard, which said the same thing twice and said it in the wrong
+/// order: detection precedes selection, so a "1 device detected" line sitting
+/// under the target card inverts the causality. DESIGN.md 3.3 mode 5 is explicit
+/// that the flow goes straight to the card, and the card's banner already reads
+/// `✔ 1 device active: <name>`.
+///
+/// What belongs here is what comes next, which in the existing implementation is
+/// the launch itself.
 pub fn render_single(frame: &mut Frame, area: Rect, app: &App) {
     let lines = vec![
         Line::default(),
         Line::from(vec![
-            strong("✔ ", theme::EMERALD),
-            text("1 device detected, selected automatically", theme::TEXT),
-        ]),
-        Line::default(),
-        Line::from(vec![
-            text("  ", theme::MUTED),
-            strong(app.target_name, theme::TEXT),
-            text("   ", theme::MUTED),
-            text(app.target_platform_id, theme::MUTED),
+            strong(app.spinner(), theme::CYAN),
+            text("  Launching Flutter...", theme::TEXT),
         ]),
         Line::default(),
         Line::from(text(
-            "  Nothing to choose, so nothing is asked.",
+            "  Nothing to choose, so nothing was asked.",
             theme::MUTED,
         )),
     ];
