@@ -34,9 +34,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         format!("[{} entries] ", app.logs.len())
     };
 
-    let block = card("APP LOGS STREAM", theme::CYAN).title_top(
-        Line::from(vec![Span::raw(" "), text(count, theme::MUTED)]).right_aligned(),
-    );
+    let block = card("APP LOGS STREAM", theme::CYAN)
+        .title_top(Line::from(vec![Span::raw(" "), text(count, theme::MUTED)]).right_aligned());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -115,11 +114,7 @@ fn draw_stream(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let start = rows.len().saturating_sub(height + app.log_scroll);
 
-    let visible: Vec<Line> = rows
-        .into_iter()
-        .skip(start)
-        .take(height.max(1))
-        .collect();
+    let visible: Vec<Line> = rows.into_iter().skip(start).take(height.max(1)).collect();
 
     let target = if visible.len() < height {
         Rect {

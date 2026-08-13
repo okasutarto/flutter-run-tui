@@ -1307,9 +1307,14 @@ because nothing follows it, which is the honest answer rather than a zero.
 Both timestamps were already being recorded, so this added no measurement — only
 the arithmetic between two numbers that were sitting there unused.
 
-### 7.8 Pending: second round, from real runs
+### 7.8 Second round, from real runs — done
 
-**Device chip: `running` replaces `last used` when the device is up.** One slot,
+**Device chip: `active` replaces `last used` when the device is up.** `active`
+over `running`, matching the SelectedTargetCard banner. It also requires
+`needs_boot()`, so macOS and Chrome get no chip: they are always available, and
+`active` would describe a state they do not have.
+
+Originally worded as: One slot,
 mutually exclusive, so `last used` only appears where it earns its place — the
 device is down but it is the one you normally use. Two running devices both carry
 the chip; it is a state, not a rank. The action label is uniformly `▶ Run`, so the

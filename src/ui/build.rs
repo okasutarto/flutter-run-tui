@@ -112,10 +112,13 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         vec![
             text("Stage ", theme::MUTED),
-            // Clamped, because the estimate is an upper bound and a skipped
-            // stage must not produce `Stage 6/5`.
-            strong(format!("{}", (done + 1).min(total)), theme::AMBER),
-            text(format!("/{total}"), theme::MUTED),
+            // Completed stages, so it reads 0 until the first one turns green.
+            // No denominator: iOS showed `0/5` and then ran four, because
+            // CocoaPods is skipped when Podfile.lock is current. The estimate is
+            // an upper bound and printing it as a denominator states it as a
+            // fact. The bar still fills against that bound, where being an
+            // over-estimate is harmless.
+            strong(format!("{done}"), theme::AMBER),
         ]
     };
 
@@ -143,6 +146,7 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
 fn stages(frame: &mut Frame, area: Rect, app: &App) {
     // Full width, so durations right-align to the card border.
     let w = area.width;
+    let finished = app.state.build_done();
 
     let lines: Vec<Line> = app
         .stages
@@ -167,7 +171,19 @@ fn stages(frame: &mut Frame, area: Rect, app: &App) {
             //
             // Withheld for the first few seconds so a normal fast stage does not
             // flash a number on its way past.
-            let right = if stage.done || failed {
+            // Between stages there is no pending row at all: `Flutter started`
+            // gets its tick and the next stage has not been announced yet, so
+            // the clock had nothing to hang on and the gap passed unmarked. On
+            // iOS that gap is the Xcode build and it is long.
+            //
+            // So the last completed row keeps counting until the next stage
+            // opens, then freezes at the gap it measured. That is the same rule
+            // 7.7 sets for marker stages, applied while it is still running.
+            let waiting = stage.done && last && !finished;
+
+            let right = if waiting && stage.started.elapsed() >= ELAPSED_AFTER {
+                crate::flutter::clock(stage.started.elapsed())
+            } else if stage.done || failed {
                 stage.duration.clone()
             } else if stage.started.elapsed() >= ELAPSED_AFTER {
                 crate::flutter::clock(stage.started.elapsed())

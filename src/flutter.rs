@@ -751,11 +751,8 @@ fn classify(text: &str) -> Level {
     ];
 
     // A Dart stack frame: `#0      _AssertionError._doThrowNew (...)`.
-    let is_frame = text.starts_with('#')
-        && text[1..]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_digit());
+    let is_frame =
+        text.starts_with('#') && text[1..].chars().next().is_some_and(|c| c.is_ascii_digit());
 
     if is_frame || ERRORS.iter().any(|needle| text.contains(needle)) {
         return Level::Err;
@@ -998,7 +995,10 @@ mod tests {
         // `847ms`, because Flutter formats through NumberFormat.
         assert_eq!(duration("Restarted application in 1,847ms."), "1,847ms");
         assert_eq!(duration("Xcode build done.                 11.1s"), "11.1s");
-        assert_eq!(duration("Reloaded 125 of 1824 libraries in 148ms."), "148ms");
+        assert_eq!(
+            duration("Reloaded 125 of 1824 libraries in 148ms."),
+            "148ms"
+        );
         assert_eq!(duration("Running Gradle task 'assembleDebug'..."), "");
     }
 
@@ -1120,7 +1120,9 @@ mod tests {
 
     #[test]
     fn a_paused_isolate_notice_is_recognised() {
-        assert!(is_paused_notice("The application is paused in the debugger"));
+        assert!(is_paused_notice(
+            "The application is paused in the debugger"
+        ));
         assert!(is_paused_notice("2 isolates are paused"));
         assert!(!is_paused_notice("Reloaded 1 of 2 libraries"));
     }

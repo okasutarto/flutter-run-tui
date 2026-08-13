@@ -206,7 +206,10 @@ fn probe_report() {
 
     println!("project   {}  {}", project.name, project.version);
     println!("branch    {}  ({} changed)", project.branch, project.dirty);
-    println!("sdk       flutter {}  dart {}", project.flutter, project.dart);
+    println!(
+        "sdk       flutter {}  dart {}",
+        project.flutter, project.dart
+    );
     println!("versions  {source}");
     println!("cwd       {}", project.cwd);
 
@@ -219,7 +222,10 @@ fn probe_report() {
         Err(reason) => println!("devices   FATAL  {reason}"),
 
         Ok(reported) => {
-            println!("reported  {} from flutter devices --machine", reported.len());
+            println!(
+                "reported  {} from flutter devices --machine",
+                reported.len()
+            );
 
             for d in &reported {
                 println!(
@@ -611,10 +617,7 @@ fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
 
     // `targets` is already ordered running-first, so this is the top row unless
     // the remembered device is further down.
-    app.selected_device = targets
-        .iter()
-        .position(|d| d.last_used)
-        .unwrap_or(0);
+    app.selected_device = targets.iter().position(|d| d.last_used).unwrap_or(0);
 
     app.devices = targets;
     app.scroll = 0;
@@ -778,7 +781,7 @@ fn key_press(
         // static once a run is under way, so on a short terminal they are 26 rows
         // describing things that are not changing while the only region that is
         // gets twelve.
-        KeyCode::Char('z') => app.zoom = !app.zoom,
+        KeyCode::Char('e') => app.expanded = !app.expanded,
 
         KeyCode::Enter => return Ok(enter(app, ctx)),
 
@@ -912,16 +915,14 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
 
         // Interrupt: SIGINT forwarded to the child (⏹), which is a different
         // exit from `q` and the existing implementation keeps them distinct.
-        Action::Stop => {
-            match &mut ctx.session {
-                Some(session) => {
-                    session.interrupt();
-                    true
-                }
-
-                None => true,
+        Action::Stop => match &mut ctx.session {
+            Some(session) => {
+                session.interrupt();
+                true
             }
-        }
+
+            None => true,
+        },
     }
 }
 

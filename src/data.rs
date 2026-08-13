@@ -121,11 +121,12 @@ impl State {
     pub fn has_logs(self) -> bool {
         matches!(
             self,
-            State::Building
-                | State::Running
-                | State::ReloadInFlight
-                | State::ReloadFailed
-                | State::ReloadDropped
+            // Not during BUILDING. The card was showing there to fill the
+            // startup gap, but it arrives empty and stays nearly empty while the
+            // rows would be better spent on the stage list. The elapsed clock on
+            // the pending stage now marks that gap instead, which makes it
+            // load-bearing rather than a nicety.
+            State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped
         )
     }
 
@@ -144,7 +145,6 @@ impl State {
             State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped
         )
     }
-
 }
 
 // ============================================================
@@ -490,7 +490,7 @@ pub struct App {
     /// font size — one font at one size covers the grid — so the app-side answer
     /// is to stop spending rows on information that is not changing. At 62 rows
     /// this takes the log window from 19 rows to 58.
-    pub zoom: bool,
+    pub expanded: bool,
 
     /// Whether this app is talking to a real device. False for the dump and demo
     /// paths, which is what gates the prototype affordances: `Tab` must not move
@@ -565,7 +565,7 @@ impl App {
             mouse_on: false,
             last_action: None,
 
-            zoom: false,
+            expanded: false,
             live: false,
             demo: false,
 
@@ -1000,7 +1000,14 @@ fn mock_devices(state: State) -> Vec<Device> {
             ),
             // No boot step: already available, so picking one launches it.
             mock_device("macos", "macOS", Platform::Desktop, "darwin", "", false),
-            mock_device("chrome", "Chrome", Platform::Web, "web-javascript", "", false),
+            mock_device(
+                "chrome",
+                "Chrome",
+                Platform::Web,
+                "web-javascript",
+                "",
+                false,
+            ),
         ],
 
         // One merged list, ordered the way `probe::targets` orders it: running

@@ -319,12 +319,12 @@ mod tests {
         assert_ne!(at_bottom, scrolled, "scrolling back changed no rows");
     }
 
-    /// Zoom hands the whole frame to the log window, so it must still fill the
+    /// Expanding hands the whole frame to the log window, so it must still fill the
     /// height exactly and stay inside its width.
     #[test]
-    fn zoom_fills_the_frame() {
+    fn expanding_fills_the_frame() {
         let mut app = App::new(State::Running);
-        app.zoom = true;
+        app.expanded = true;
 
         let frame = dump(&mut app, 106, 45);
 

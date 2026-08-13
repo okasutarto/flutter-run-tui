@@ -251,13 +251,7 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     }
 }
 
-fn draw_row(
-    frame: &mut Frame,
-    area: Rect,
-    device: &Device,
-    selected: bool,
-    hits: &mut Vec<Hit>,
-) {
+fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits: &mut Vec<Hit>) {
     let mut left = vec![
         if selected {
             strong("❯ ", theme::CYAN)
@@ -274,7 +268,17 @@ fn draw_row(
         },
     ];
 
-    if device.last_used {
+    // One slot, mutually exclusive. `active` wins because it decides what Enter
+    // costs: launch now, or boot first and wait. `last used` only surfaces where
+    // it carries information, which is a device that is down but is the one you
+    // normally reach for.
+    // `active` means a simulator or phone that is up, not merely a target that
+    // needs no booting. macOS and Chrome are always available, so `active` would
+    // be describing a state they do not have; `▶ Run` already says enough.
+    if device.boot.is_none() && device.platform.needs_boot() {
+        left.push(Span::raw("  "));
+        left.extend(pill(" active ", theme::EMERALD));
+    } else if device.last_used {
         left.push(Span::raw("  "));
         left.extend(pill(" last used ", theme::PURPLE));
     }
@@ -298,11 +302,10 @@ fn draw_row(
     // because a phone happened to be plugged in.
     right.push(Span::raw("  "));
 
-    let label = if device.boot.is_some() {
-        " ▶ Start "
-    } else {
-        " ▶ Run "
-    };
+    // Uniformly `Run`. The Start/Run split existed to imply whether a boot was
+    // coming, which the `active` chip now states outright, and two words for one
+    // consequence read as two different consequences.
+    let label = " ▶ Run ";
 
     right.extend(pill(
         label,

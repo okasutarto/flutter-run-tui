@@ -6,15 +6,15 @@
 //! would have sent `q` and quit on the first character. Every key it might have
 //! carried is on the footer row below, which costs one row and never scrolls.
 
-use ratatui::layout::Rect;
-use ratatui::text::Span;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
 use crate::data::{Action, App, Hit, State};
 use crate::theme;
-use crate::widgets::{keycap, spread, strong, text};
+use crate::widgets::{keycap, strong, text};
 
 /// Hotkey cheatsheet. One row, always last, never scrolls.
 ///
@@ -24,127 +24,61 @@ use crate::widgets::{keycap, spread, strong, text};
 ///
 /// Contents follow the active state, because advertising a key that does
 /// nothing here is worse than not advertising it.
-/// `[key] Label`, derived from the action rather than spelled out again.
-///
-/// Keeps the cheatsheet from disagreeing with what the key actually does, which
-/// is the whole reason `Action` owns both strings.
-fn action_hint(action: Action, color: ratatui::style::Color) -> Vec<Span<'static>> {
-    let mut spans = keycap(action.key(), color);
-    spans.push(text(" ", theme::MUTED));
-    spans.push(text(action.label(), theme::MUTED));
-    spans.push(text("  ", theme::MUTED));
-    spans
-}
-
 pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
-    let mut left: Vec<Span> = Vec::new();
+    // Hints as groups, so they can be spaced across the row rather than run
+    // together at the left edge. A group carries its Action when frun owns the
+    // key, which is what earns it a clickable region.
+    let expand = if app.expanded { "Collapse" } else { "Expand" };
 
-    match app.state {
-        State::Detecting | State::Booting => {
-            left.extend(keycap("^C", theme::ROSE));
-            left.push(text(" Cancel", theme::MUTED));
-        }
+    // A hint is either an Action frun owns, whose key and label come from the
+    // Action itself so the cheatsheet cannot disagree with what the key does, or a
+    // literal for the keys forwarded to Flutter and the ones the terminal owns.
+    let hint = |action: Action, color| (action.key(), action.label(), color, Some(action));
 
-        State::NoDevices | State::MultipleDevices => {
-            left.extend(keycap("↑↓", theme::CYAN));
-            left.push(text(" Move  ", theme::MUTED));
-            left.extend(keycap("⏎", theme::EMERALD));
-            left.push(text(" Launch  ", theme::MUTED));
-            left.extend(keycap("Esc", theme::ROSE));
-            left.push(text(" Cancel", theme::MUTED));
-        }
+    let hints: Vec<(&str, &str, ratatui::style::Color, Option<Action>)> = match app.state {
+        State::Detecting | State::Booting => vec![("^C", "Cancel", theme::ROSE, None)],
 
-        State::SingleDevice => {
-            left.extend(keycap("^C", theme::ROSE));
-            left.push(text(" Stop", theme::MUTED));
-        }
+        State::NoDevices | State::MultipleDevices => vec![
+            ("↑↓", "Move", theme::CYAN, None),
+            ("⏎", "Launch", theme::EMERALD, None),
+            ("Esc", "Cancel", theme::ROSE, None),
+        ],
 
-        // The log window is on screen during a build now, so the keys that drive
-        // it belong here too.
-        State::Building => {
-            left.extend(keycap("↑↓", theme::CYAN));
-            left.push(text(" Scroll  ", theme::MUTED));
-            left.extend(keycap("z", theme::CYAN));
-            left.push(text(" Zoom  ", theme::MUTED));
-            left.extend(keycap("^C", theme::ROSE));
-            left.push(text(" Stop", theme::MUTED));
-        }
+        // No scroll and no expand: there is no log card during a build, so both
+        // keys would be advertised while doing nothing.
+        State::SingleDevice | State::Building => vec![("^C", "Stop", theme::ROSE, None)],
 
-        State::BuildFailed => {
-            left.extend(keycap("r", theme::ROSE));
-            left.push(text(" Retry Build  ", theme::MUTED));
-            left.extend(keycap("q", theme::MUTED));
-            left.push(text(" Quit", theme::MUTED));
-        }
+        State::BuildFailed => vec![
+            hint(Action::RetryBuild, theme::ROSE),
+            ("q", "Quit", theme::MUTED, None),
+            ("^C", "Stop", theme::MUTED, None),
+        ],
 
         State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped => {
-            // Hit rectangles are measured from the spans as they are built,
-            // not guessed. Hardcoding widths here meant the clickable region
-            // and the drawn label were two independent numbers that happened
-            // to agree.
-            let mut x = area.x;
-
-            for (action, color) in [
-                (Action::Reload, theme::AMBER),
-                (Action::Restart, theme::PURPLE),
-            ] {
-                let spans = action_hint(action, color);
-                let w: usize = spans.iter().map(Span::width).sum();
-
-                app.hits.push(Hit {
-                    area: Rect {
-                        x,
-                        y: area.y,
-                        width: w as u16,
-                        height: 1,
-                    },
-                    action,
-                });
-
-                x += w as u16;
-                left.extend(spans);
-            }
-
-            // frun's own keys for the log window.
-            left.extend(keycap("↑↓", theme::CYAN));
-            left.push(text(" Scroll  ", theme::MUTED));
-
-            left.extend(keycap("z", theme::CYAN));
-            left.push(text(
-                if app.zoom { " Cards  " } else { " Zoom  " },
-                theme::MUTED,
-            ));
-
-            // Forwarded to Flutter rather than handled here, so they get no hit
-            // region: there is nothing for frun to click on its own behalf.
-            left.extend(keycap("h", theme::CYAN));
-            left.push(text(" Help  ", theme::MUTED));
-
-            left.extend(action_hint(Action::Quit, theme::ROSE));
+            vec![
+                hint(Action::Reload, theme::AMBER),
+                hint(Action::Restart, theme::PURPLE),
+                ("↑↓", "Scroll", theme::CYAN, None),
+                ("e", expand, theme::CYAN, None),
+                // Forwarded to Flutter, so no hit region: there is nothing for
+                // frun to click on its own behalf.
+                ("h", "Help", theme::CYAN, None),
+                ("q", "Quit", theme::ROSE, None),
+                ("^C", "Stop", theme::MUTED, None),
+            ]
         }
-    }
+    };
 
-    // The right side is optional, in priority order, and gets dropped from the
-    // bottom up until it fits.
-    //
-    // `spread` only clips when it overflows, which on the running state meant
-    // the tail of the footer silently disappeared. A cheatsheet that truncates
-    // is worse than a shorter one, because you cannot tell whether the key you
-    // are looking for is missing or just cut off.
+    // Diagnostics keep their slot at the right edge, and the hints are spaced
+    // across whatever is left. Ordered lowest priority first; the tail survives a
+    // narrow window.
     let (index, total) = app.position();
-
-    // Ordered lowest priority first; the tail is what survives a narrow window.
-    //
-    // `Flutter <version> CLI` used to sit here and is now gone entirely. The
-    // version is already on the ProjectCard, it changes no decision taken from
-    // the footer, and it was costing 18 columns on the one row that must never
-    // truncate.
     let mut optional: Vec<Vec<Span>> = Vec::new();
 
-    // Prototype-only affordance, and only when the data is mock. DESIGN.md
-    // removed the frame switcher because state is decided by what Flutter is
-    // doing; advertising `⇥ next` during a real run would advertise a key that
-    // now belongs to Flutter.
+    // Prototype-only, and only while the data is mock. DESIGN.md removed the
+    // frame switcher because state is decided by what Flutter is doing;
+    // advertising `⇥ next` during a real run would advertise a key that now
+    // belongs to Flutter.
     if !app.live {
         optional.push(vec![
             text(
@@ -161,40 +95,31 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         optional.push(vec![text(format!("[{}]", plan.describe()), theme::BORDER)]);
     }
 
-    // Highest priority: only shown when the mouse is captured, which is not the
-    // default. Printing `mouse off` while off is the default spends a permanent
-    // slot on a non-event; capture is worth announcing because it takes text
-    // selection away from the terminal, and the only other symptom is that
-    // copying a stack trace quietly stops working.
+    // Only when capture is on, which is not the default. Printing `mouse off`
+    // while off is the default spends a permanent slot on a non-event.
     if app.mouse_on {
         optional.push(vec![strong("mouse on", theme::EMERALD)]);
     }
 
-    let left_w: usize = left.iter().map(Span::width).sum();
+    let hint_w: usize = hints.iter().map(|(k, l, _, _)| k.len() + l.len() + 4).sum();
 
-    // Highest priority first, and stop at the first group that will not fit.
-    //
-    // `continue` here would be a bin-packing search: it kept a low-priority
-    // group merely because it was smaller than the important one that had just
-    // been rejected. If the thing that matters more cannot be shown, showing
-    // something else in its place is not a saving.
+    // Highest priority first, stopping at the first group that will not fit.
+    // `continue` here would be a bin-packing search, keeping a low-priority group
+    // merely because it was smaller than the important one just rejected.
     let mut kept: Vec<Vec<Span>> = Vec::new();
     let mut used = 0usize;
 
     for group in optional.into_iter().rev() {
         let group_w: usize = group.iter().map(Span::width).sum();
-        let gap = if kept.is_empty() { 4 } else { 2 };
 
-        if left_w + used + group_w + gap > area.width as usize {
+        if hint_w + used + group_w + 4 > area.width as usize {
             break;
         }
 
-        used += group_w + gap;
+        used += group_w + 2;
         kept.push(group);
     }
 
-    // Reversed for display so the highest priority ends up nearest the right
-    // edge, where the eye lands first on a right-aligned group.
     let mut right: Vec<Span> = Vec::new();
 
     for (i, group) in kept.into_iter().rev().enumerate() {
@@ -205,5 +130,65 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         right.extend(group);
     }
 
-    frame.render_widget(Paragraph::new(spread(area.width, left, right)), area);
+    let right_w: usize = right.iter().map(Span::width).sum();
+
+    let cols =
+        // Spaced, so the last hint cannot butt against the diagnostics:
+        // `[Esc] Cancelproto 4/11` was the result of them being adjacent.
+        Layout::horizontal([Constraint::Min(10), Constraint::Length(right_w as u16)])
+            .spacing(2)
+            .split(area);
+
+    // True space-between: each hint keeps its natural width and the leftover is
+    // split into equal gaps between them.
+    //
+    // Equal-ratio columns were the first attempt and they clip: seven hints
+    // across ninety columns gives thirteen each, and `[r] Hot reload` needs
+    // fourteen. Forcing equal widths on unequal content truncates the longest,
+    // which on a cheatsheet is the worst thing it can do.
+    let rendered: Vec<Vec<Span>> = hints
+        .iter()
+        .map(|(key, label, color, _)| {
+            let mut spans = keycap(key, *color);
+            spans.push(text(" ", theme::MUTED));
+            spans.push(text(*label, theme::MUTED));
+            spans
+        })
+        .collect();
+
+    let natural: Vec<usize> = rendered
+        .iter()
+        .map(|s| s.iter().map(Span::width).sum())
+        .collect();
+
+    let content: usize = natural.iter().sum();
+    let gaps = hints.len().saturating_sub(1).max(1);
+    let slack = (cols[0].width as usize).saturating_sub(content);
+    let gap = slack / gaps;
+
+    let mut x = cols[0].x;
+
+    for ((spans, width), (_, _, _, action)) in rendered.into_iter().zip(&natural).zip(&hints) {
+        let slot = Rect {
+            x,
+            y: cols[0].y,
+            width: *width as u16,
+            height: 1,
+        };
+
+        if let Some(action) = action {
+            app.hits.push(Hit {
+                area: slot,
+                action: *action,
+            });
+        }
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), slot);
+
+        x += (*width + gap) as u16;
+    }
+
+    if !right.is_empty() {
+        frame.render_widget(Paragraph::new(Line::from(right).right_aligned()), cols[1]);
+    }
 }

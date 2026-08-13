@@ -122,12 +122,7 @@ impl Clock {
 
         let day = (epoch + self.offset).rem_euclid(86_400);
 
-        format!(
-            "{:02}:{:02}:{:02}",
-            day / 3600,
-            (day % 3600) / 60,
-            day % 60
-        )
+        format!("{:02}:{:02}:{:02}", day / 3600, (day % 3600) / 60, day % 60)
     }
 }
 
@@ -212,7 +207,9 @@ fn pretty_cwd() -> String {
 }
 
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
 }
 
 // ============================================================
@@ -672,9 +669,8 @@ fn boot_avd(name: &str) -> Result<String, String> {
             .unwrap_or(false);
 
         if ready {
-            return avd_serial(name).ok_or_else(|| {
-                "booted, but adb never reported a serial for it".to_string()
-            });
+            return avd_serial(name)
+                .ok_or_else(|| "booted, but adb never reported a serial for it".to_string());
         }
 
         std::thread::sleep(Duration::from_secs(1));
@@ -811,6 +807,10 @@ mod tests {
             Platform::from_target(&str_field(macos, "targetPlatform")),
             Platform::Desktop
         );
-        assert!(macos.get("sdk").and_then(Value::as_str).unwrap().contains("arm64"));
+        assert!(macos
+            .get("sdk")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("arm64"));
     }
 }
