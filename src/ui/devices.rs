@@ -116,7 +116,6 @@ pub fn render_booting(frame: &mut Frame, area: Rect, app: &App) {
         .unwrap_or("device");
 
     let lines = vec![
-        Line::default(),
         Line::from(vec![
             strong(app.spinner(), theme::AMBER),
             text("  Booting ", theme::TEXT),

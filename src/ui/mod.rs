@@ -112,7 +112,6 @@ fn too_small(frame: &mut Frame, area: Rect) {
 /// fill the space would be inventing content.
 fn detecting(frame: &mut Frame, area: Rect, app: &App) {
     let lines = vec![
-        Line::default(),
         Line::from(vec![
             strong(app.spinner(), theme::CYAN),
             text("  Detecting Flutter devices...", theme::TEXT),

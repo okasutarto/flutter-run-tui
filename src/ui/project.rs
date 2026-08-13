@@ -206,8 +206,6 @@ fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
         Constraint::Length(5), // artwork
         Constraint::Length(1), // blank
         Constraint::Length(1), // Flutter Engine
-        Constraint::Length(1), // blank
-        Constraint::Length(1), // Cross-Platform CLI
     ])
     .split(area);
 
@@ -228,10 +226,5 @@ fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
     frame.render_widget(
         Paragraph::new(Line::from(strong("Flutter Engine", theme::CYAN))),
         rows[2],
-    );
-
-    frame.render_widget(
-        Paragraph::new(Line::from(text("Cross-Platform CLI", theme::MUTED))),
-        rows[4],
     );
 }
