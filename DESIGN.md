@@ -1111,12 +1111,6 @@ ladder, which is the design admitting it carries no load. It is also the only
 reason input has to be modal. If a log filter is ever wanted, `/` can open one
 row on demand rather than renting a box permanently.
 
-**`Build time` does not sum to its stages.** A measured run reported 12.1s over
-five stages totalling 4.1s: two thirds of it is the unannounced startup above.
-The number is correct — it is wall clock from the pty spawn — but placing it above
-stages that do not add up to it invites the question. Either add the remainder as
-its own row, which is informative, or rename the label to `Elapsed`.
-
 **Marker stages show `0ms`.** `Flutter started` and `Interactive session ready`
 are markers, not durations; nothing takes zero milliseconds. The column should be
 empty for them.
