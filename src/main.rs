@@ -84,7 +84,19 @@ fn main() -> io::Result<()> {
             format!("unknown flag {other}"),
         )),
 
-        _ => run(App::new(State::Detecting)),
+        Some("--demo") => {
+            let mut app = App::new(State::Detecting);
+            app.demo = true;
+            run(app)
+        }
+
+        // Opens on Running rather than Detecting.
+        //
+        // Detecting is a state that waits for a process to finish, and in a
+        // prototype no process ever does, so it sat there forever and read as a
+        // hang. Running is the state with the most on screen and nothing
+        // pending, which is the honest place to start when the data is static.
+        _ => run(App::new(State::Running)),
     }
 }
 
@@ -168,6 +180,13 @@ fn event_loop(app: &mut App) -> io::Result<()> {
         // anything shorter is redraw for its own sake.
         if !event::poll(std::time::Duration::from_millis(80))? {
             app.tick += 1;
+
+            // ~2.4s per frame in demo mode, which is long enough to read a
+            // screen and short enough not to feel stalled.
+            if app.demo && app.tick.is_multiple_of(30) {
+                app.next_state();
+            }
+
             continue;
         }
 

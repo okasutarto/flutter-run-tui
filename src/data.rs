@@ -355,6 +355,9 @@ pub struct App {
     /// one that missed.
     pub last_action: Option<Action>,
 
+    /// Walk the states on a timer, for reviewing the flow without driving it.
+    pub demo: bool,
+
     /// True while the command line has focus. In NORMAL mode every unbound
     /// key is forwarded to Flutter, which has its own interactive commands
     /// (`h`, `d`, `c`, `p`, `o`, `w`); a prompt that captures keys at all
@@ -403,10 +406,20 @@ impl App {
             hover: None,
             mouse_on: false,
             last_action: None,
+            demo: false,
 
             command_mode: false,
             command_input: String::new(),
         }
+    }
+
+    /// Index of the current state in the flow, for the prototype hint.
+    pub fn position(&self) -> (usize, usize) {
+        let i = State::ALL
+            .iter()
+            .position(|s| *s == self.state)
+            .unwrap_or(0);
+        (i + 1, State::ALL.len())
     }
 
     pub fn spinner(&self) -> &'static str {

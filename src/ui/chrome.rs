@@ -159,6 +159,19 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         right.push(text(format!("[{}]  ", plan.describe()), theme::BORDER));
     }
 
+    // Prototype-only affordance, deliberately styled as chrome rather than as
+    // content. DESIGN.md removed the frame switcher because state is decided by
+    // what Flutter is doing, so this must not read as a feature. It exists
+    // because without it a static frame that never advances looks like a hang.
+    let (index, total) = app.position();
+
+    right.push(text(
+        format!("proto {index}/{total} {}  ", app.state.slug()),
+        theme::BORDER,
+    ));
+
+    right.push(text("⇥ next  ", theme::BORDER));
+
     right.push(text("Flutter ", theme::MUTED));
     right.push(text(app.flutter, theme::MUTED));
     right.push(text(" CLI", theme::MUTED));
