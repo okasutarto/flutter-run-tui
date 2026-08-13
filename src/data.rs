@@ -216,22 +216,7 @@ pub enum StageKey {
     Ready,
 }
 
-impl StageKey {
-    /// Whether this stage is an announcement rather than work.
-    ///
-    /// Flutter prints `Launching lib/main.dart` and `Flutter run key commands`
-    /// and moves straight on, so timing the row itself yields `0ms` — which is
-    /// both meaningless and, on `Launch`, actively misleading: the eight seconds
-    /// of `fvm`, Dart VM boot, flutter_tools startup, pub and Gradle daemon
-    /// warmup all happen immediately afterwards and belong to nothing else.
-    ///
-    /// A marker therefore carries the gap from itself to the next stage. Both
-    /// timestamps are already recorded, so the figure is measured rather than
-    /// invented, and the emptiest number on the card becomes the most useful one.
-    pub fn is_marker(self) -> bool {
-        matches!(self, StageKey::Launch | StageKey::Ready)
-    }
-}
+impl StageKey {}
 
 /// The set is platform-dependent by construction: a stage Flutter never
 /// mentions is never created, so iOS gets CocoaPods and Xcode while Android gets

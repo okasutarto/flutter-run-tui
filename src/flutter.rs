@@ -951,10 +951,17 @@ impl App {
         // read better naming what Flutter said, even where we do not use it.
         let _ = duration;
 
-        if stage.duration.is_empty() && !stage.key.is_marker() {
-            // Markers are left empty here on purpose: `start_stage` fills them
-            // with the gap to whatever comes next, and the last row keeps a blank
-            // because nothing follows it.
+        // Every stage that completes without a figure gets the time from when it
+        // opened until now, markers included. The comment that used to sit here
+        // said markers are left empty on purpose because start_stage fills them
+        // with the gap to the next stage, and the last row keeps a blank because
+        // nothing follows it.
+        //
+        // That was the defect. The last row is `Interactive session ready`, and
+        // leaving it blank lost the time from that announcement until the build is
+        // declared done. A measured run showed 11.3s + 7.1s + 0ms + blank = 18.4s
+        // against a 21.6s total, 3.2s unaccounted for.
+        if stage.duration.is_empty() {
             stage.duration = elapsed(stage.started.elapsed());
         }
 
@@ -1121,12 +1128,17 @@ mod tests {
             "the gap to the next stage should have filled it"
         );
 
-        // The last row has nothing after it, so it stays blank rather than
-        // inventing a figure.
+        // The last row has nothing after it, but leaving it blank loses the time
+        // from its announcement until the build finishes. A measured run showed
+        // 11.3s + 7.1s + 0ms + blank = 18.4s against 21.6s, 3.2s unaccounted for.
         app.start_stage(StageKey::Ready, "Interactive session ready".into());
+        std::thread::sleep(Duration::from_millis(20));
         app.finish_stage(StageKey::Ready, String::new());
 
-        assert!(app.stages.last().expect("a stage").duration.is_empty());
+        assert!(
+            !app.stages.last().expect("a stage").duration.is_empty(),
+            "the last stage must account for the gap to build completion"
+        );
     }
 
     #[test]
