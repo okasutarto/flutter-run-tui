@@ -1,3 +1,13 @@
 /target
 .DS_Store
-/assets
+
+# Design reference screenshots stay local: ten frames at ~90KB each is a lot of
+# history for files whose usefulness ends when the decision is made.
+#
+# The logo is different. `include_bytes!` pulls it in at compile time, so it is a
+# build input, not a reference: without it a fresh clone does not compile. The
+# directory has to be excluded with a wildcard rather than by name, because git
+# will not re-include a file inside an excluded directory.
+/assets/*
+!/assets/flutter-trim.png
+!/assets/flutter.png

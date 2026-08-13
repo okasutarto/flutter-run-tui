@@ -31,6 +31,7 @@ use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 
 use data::{Action, App, State};
+use ui::logo::Logo;
 
 /// What the command line asked for.
 ///
@@ -177,6 +178,11 @@ fn size(arg: Option<&String>, dw: u16, dh: u16) -> (u16, u16) {
 }
 
 fn run(mut app: App) -> io::Result<()> {
+    // Before raw mode and before the alternate screen: the capability query
+    // writes control sequences to stdout and reads the reply, which needs an
+    // uncontended terminal.
+    let mut art = Logo::detect();
+
     enable_raw_mode()?;
 
     // Mouse capture is NOT enabled here. Capturing takes text selection away
@@ -185,7 +191,7 @@ fn run(mut app: App) -> io::Result<()> {
     // wheel or a clickable control is wanted.
     execute!(io::stdout(), EnterAlternateScreen)?;
 
-    let result = event_loop(&mut app);
+    let result = event_loop(&mut app, &mut art);
 
     // Restore before propagating any error, so a failure inside the loop cannot
     // leave the terminal in raw mode or holding the mouse.
@@ -216,11 +222,11 @@ fn run(mut app: App) -> io::Result<()> {
     Ok(())
 }
 
-fn event_loop(app: &mut App) -> io::Result<()> {
+fn event_loop(app: &mut App, art: &mut Logo) -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
     loop {
-        terminal.draw(|frame| ui::render(frame, app))?;
+        terminal.draw(|frame| ui::render(frame, app, art))?;
 
         // Timeout drives the spinner. Anything longer reads as a stutter,
         // anything shorter is redraw for its own sake.

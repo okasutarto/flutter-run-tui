@@ -12,13 +12,19 @@ use ratatui::Terminal;
 use crate::budget::Budget;
 use crate::data::App;
 use crate::ui;
+use crate::ui::logo::Logo;
 
 fn draw(app: &mut App, width: u16, height: u16) -> Terminal<TestBackend> {
     let mut terminal = Terminal::new(TestBackend::new(width, height))
         .expect("test backend never fails to construct");
 
+    // Halfblocks rather than a terminal query: there is no terminal here, and
+    // halfblocks still render the real artwork, so a dump shows what the design
+    // actually looks like.
+    let mut art = Logo::halfblocks();
+
     terminal
-        .draw(|frame| ui::render(frame, app))
+        .draw(|frame| ui::render(frame, app, &mut art))
         .expect("draw into an in-memory buffer");
 
     terminal

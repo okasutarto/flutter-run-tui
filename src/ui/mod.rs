@@ -1,6 +1,7 @@
 //! Frame assembly. One module per component, this file decides what appears.
 
 mod build;
+pub mod logo;
 mod chrome;
 mod devices;
 mod logs;
@@ -17,7 +18,7 @@ use crate::data::{App, State};
 use crate::theme;
 use crate::widgets::{strong, text};
 
-pub fn render(frame: &mut Frame, app: &mut App) {
+pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     let full = frame.area();
 
     // Rebuilt every frame. A stale hit list leaves invisible buttons behind at
@@ -57,7 +58,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::vertical(rows).spacing(1).split(area);
     let mut i = 0;
 
-    project::render(frame, chunks[i], app, &plan);
+    project::render(frame, chunks[i], app, &plan, art);
     i += 1;
 
     if app.state.has_target() {

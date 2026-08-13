@@ -26,6 +26,19 @@ textwrap = "0.16.2"
 # would be wrong for every non-ASCII glyph in the palette.
 unicode-width = "0.2.2"
 
+# The Flutter logo, rendered through whichever graphics protocol the terminal
+# actually supports, with a halfblocks fallback.
+#
+# default-features is off deliberately: the default set includes `chafa-dyn`,
+# which dynamically links libchafa and would make the binary depend on that
+# library being present at runtime.
+ratatui-image = { version = "11.0.6", default-features = false, features = ["crossterm"] }
+
+# Depended on directly with only PNG enabled, rather than through
+# ratatui-image's `image-defaults`. That feature pulls decoders for JPEG, GIF,
+# WebP, TIFF and more, none of which are needed for one embedded PNG.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
 [profile.release]
 strip = true
 lto = true

@@ -7,6 +7,7 @@ use ratatui::Frame;
 
 use crate::budget::Budget;
 use crate::data::App;
+use crate::ui::logo::Logo;
 use crate::theme;
 use crate::widgets::{card, elide, field, pill, separator, spread, strong, text};
 
@@ -19,7 +20,7 @@ use crate::widgets::{card, elide, field, pill, separator, spread, strong, text};
 /// card border, which is also what the design frames show.
 const BRANCH_MAX: usize = 30;
 
-pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
+pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut Logo) {
     if !plan.full_cards {
         collapsed(frame, area, app);
         return;
@@ -42,7 +43,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     let body = if plan.logo {
         let split = Layout::horizontal([Constraint::Length(22), Constraint::Min(30)]).split(inner);
 
-        logo(frame, split[0]);
+        logo(frame, split[0], art);
         split[1]
     } else {
         inner
@@ -142,30 +143,30 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// Placeholder mark, not the Flutter logo.
+/// The Flutter mark, drawn by `logo::Logo` through a real graphics protocol.
 ///
-/// An earlier attempt drew the real logo in half-blocks and came out as an
-/// unreadable blob, which is worse than not trying because it looks like a
-/// rendering fault. The actual fix is `ratatui-image` pointed at
-/// `assets/flutter-trim.png` through the kitty graphics protocol, which needs
-/// the `image` crate and a terminal capability query.
-fn logo(frame: &mut Frame, area: Rect) {
-    // Exactly nine rows, which is what `Budget::LOGO_H` charges for. The
-    // leading blank the earlier version had is now supplied by the card's title
-    // gap, and keeping both pushed the two label lines off the bottom.
-    let art = vec![
-        Line::from(text("      ▄▄██", theme::CYAN)),
-        Line::from(text("    ▄▄██▀", theme::CYAN)),
-        Line::from(text("  ▄▄██▀", theme::CYAN)),
-        Line::from(text(" ▄██▀", theme::CYAN)),
-        Line::from(text(" ▀██▄", theme::CYAN)),
-        Line::from(text("   ▀▀██▄▄", theme::CYAN)),
-        Line::from(text("      ▀▀██", theme::CYAN)),
-        Line::default(),
-        Line::from(strong("  Flutter Engine", theme::CYAN)),
-        Line::default(),
-        Line::from(text("      ▀▀██", theme::CYAN)),
-    ];
+/// Nine rows, which is what `Budget::LOGO_H` charges for: seven for the artwork,
+/// a blank, and the wordmark. The two label lines the design shows cost a row
+/// each and have to be paid for in the budget, or the card clips them in
+/// silence.
+fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
+    let rows = Layout::vertical([
+        Constraint::Length(7),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
 
-    frame.render_widget(Paragraph::new(art), area);
+    art.render(frame, rows[0]);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(strong("Flutter Engine", theme::CYAN))),
+        rows[2],
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(text("Cross-Platform CLI", theme::MUTED))),
+        rows[3],
+    );
 }
