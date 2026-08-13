@@ -1,54 +1,91 @@
-//! Palette, taken verbatim from DESIGN.md.
-//!
-//! Kept unmodified on purpose so the spec can be judged as written. The
-//! audit notes live in comments next to the colours they concern rather
-//! than being silently applied.
+//! Palette and glyph vocabulary, from DESIGN.md v1.3.0 section 2.
 
 use ratatui::style::Color;
 
-/// Card borders.
+// ============================================================
+// Surfaces
+// ============================================================
+
+/// Card borders. `border-zinc-700` #3F3F46.
 ///
-/// DESIGN.md specifies #2A2A2C. Rendered in Ghostty that turned out to be
-/// effectively invisible: the cards stopped reading as containers and the
-/// screen became floating text with coloured headings. The spec value
-/// assumes a CSS border on an opaque #0A0A0B panel, but a terminal draws
-/// box glyphs against the user's own background, which is rarely that dark
-/// and is often translucent.
+/// DESIGN.md v1 specified #2A2A2C, which rendered as effectively invisible in
+/// Ghostty: the cards stopped reading as containers and the screen became
+/// floating text with coloured headings. The v1 value assumes a CSS border on
+/// an opaque panel, but a terminal draws box glyphs against the user's own
+/// background, which is rarely that dark and is often translucent. v1.3
+/// moved to zinc-700, which is the same conclusion.
+pub const BORDER: Color = Color::Rgb(63, 63, 70);
+
+/// Selected-row background. One step up from the canvas, nothing more.
+pub const SURFACE: Color = Color::Rgb(24, 24, 27);
+
+/// Ink for text drawn on top of a filled badge.
 ///
-/// Raised to #3E3E44. First deliberate deviation from the spec, and the
-/// reason is contrast rather than taste.
-pub const BORDER: Color = Color::Rgb(62, 62, 68);
+/// The specified canvas colour is never used to paint the background: filling
+/// cells would destroy terminal transparency and blur. It exists only here,
+/// where a real background does exist.
+pub const INK: Color = Color::Rgb(12, 14, 20);
 
-/// Primary accent. #8A63D2
-pub const VIOLET: Color = Color::Rgb(138, 99, 210);
+// ============================================================
+// Text
+// ============================================================
 
-/// Success / status. #27C93F
-pub const EMERALD: Color = Color::Rgb(39, 201, 63);
+/// `text-zinc-200` #E4E4E7.
+pub const TEXT: Color = Color::Rgb(228, 228, 231);
 
-/// Warning / hot reload. #FFBD2E  (saturation 100%)
-pub const AMBER: Color = Color::Rgb(255, 189, 46);
+/// `text-zinc-500` #71717A. Labels, key hints, timestamps.
+pub const MUTED: Color = Color::Rgb(113, 113, 122);
 
-/// Error / danger. #FF5F56  (saturation 100%)
-pub const ROSE: Color = Color::Rgb(255, 95, 86);
+// ============================================================
+// Functional
+// ============================================================
 
-/// Info. #50A1FF  (saturation 100%)
-pub const CYAN: Color = Color::Rgb(80, 161, 255);
+/// `text-cyan-400` #38BDF8. Section headers, selection, active focus.
+pub const CYAN: Color = Color::Rgb(56, 189, 248);
 
-/// Text primary. #E1E1E1
-pub const TEXT: Color = Color::Rgb(225, 225, 225);
+/// `text-emerald-400` #34D399. Success, completed stages, clean git.
+pub const EMERALD: Color = Color::Rgb(52, 211, 153);
 
-/// Text secondary. #666666
-pub const MUTED: Color = Color::Rgb(102, 102, 102);
+/// `text-amber-300` #FBBF24. Branch tags, pending stages, warnings.
+pub const AMBER: Color = Color::Rgb(251, 191, 36);
 
-/// Text drawn on top of a filled badge.
+/// `text-rose-400` #F87171. Failures, stack traces.
+pub const ROSE: Color = Color::Rgb(248, 113, 113);
+
+/// `text-purple-300` #C084FC. Simulator and emulator badges only.
+pub const PURPLE: Color = Color::Rgb(192, 132, 252);
+
+// ============================================================
+// Glyphs
+// ============================================================
+// Nerd Font, not emoji. 🍎 and 🤖 are East Asian Width Wide, so they occupy
+// two cells and break the column grid, and terminal emoji rendering is
+// inconsistent between fonts. frun.zsh already ships U+F179 today.
+
+/// Apple. `U+F179`.
+pub const GLYPH_APPLE: &str = "\u{f179}";
+
+/// Android. `U+F17B`.
+pub const GLYPH_ANDROID: &str = "\u{f17b}";
+
+/// Desktop / display. `U+F108`.
+pub const GLYPH_DESKTOP: &str = "\u{f108}";
+
+/// Web / globe. `U+F0AC`.
+pub const GLYPH_WEB: &str = "\u{f0ac}";
+
+/// Bolt, for hot reload. `U+F0E7`.
 ///
-/// DESIGN.md specifies a #0A0A0B background. That colour is deliberately
-/// never used to paint the app background: filling cells would destroy
-/// terminal transparency and blur. It is only used as ink on filled
-/// pills, where a real background does exist.
-pub const INK: Color = Color::Rgb(10, 10, 11);
+/// Not `⚡` U+26A1, which the design frames used: that is East Asian Width Wide,
+/// so it occupies two cells and pushed every line containing it one column past
+/// the border. `frun.zsh` already carries a scar from this class of bug — see
+/// its note about `×` being Ambiguous width and shifting the HOT CONTROLS rows.
+pub const GLYPH_BOLT: &str = "\u{f0e7}";
 
-/// Nerd Font half-circle caps, used to fake `border-radius` on a filled
-/// badge. Confirmed safe: frun already ships U+F179 in its device list.
+/// Filled-badge caps, giving a pill the closest thing a cell grid has to
+/// `border-radius`. Half-circles drawn to bleed to the cell edge.
 pub const PILL_L: &str = "\u{e0b6}";
 pub const PILL_R: &str = "\u{e0b4}";
+
+/// Braille spinner, matching the frames `frun-runner` already animates.
+pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];

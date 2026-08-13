@@ -3,20 +3,28 @@ name = "frun-tui"
 version = "0.1.0"
 edition = "2021"
 
-# Design prototype for the frun rewrite. Renders the "Sophisticated
-# Dark" spec from DESIGN.md as a real ratatui application so the layout
-# can be judged in a terminal instead of a browser mockup.
+# Design prototype for the frun rewrite. Renders every state frame from
+# DESIGN.md so the spec can be judged in a terminal instead of a browser.
 #
-# No pty, no Flutter, no device discovery yet. Static data on purpose:
-# the question this answers is whether the design works, not whether the
-# parser works.
+# Data is static on purpose. The pty, the Flutter output parser and device
+# discovery are the next stage; the question answered here is whether the
+# design survives all eleven states and every terminal size.
 
 [dependencies]
-# crossterm is used via ratatui::crossterm rather than as a direct
-# dependency. ratatui re-exports the exact version it was built against,
-# which is the documented way to avoid two incompatible crossterms
-# ending up in the tree.
+# crossterm is used via ratatui::crossterm rather than as a direct dependency.
+# ratatui re-exports the exact version it was built against, which is the
+# documented way to keep two incompatible crossterms out of the tree.
 ratatui = "=0.30.2"
+
+# Log line wrapping, per DESIGN.md 6.1. Word-boundary aware, display-width
+# aware, and `subsequent_indent` is exactly the rule that continuation rows
+# indent to the message column with the gutter left empty. Hand-rolling this
+# would have meant reimplementing word breaking badly.
+textwrap = "0.16.2"
+
+# Column arithmetic for the 18-column gutter. `str::len()` counts bytes and
+# would be wrong for every non-ASCII glyph in the palette.
+unicode-width = "0.2.2"
 
 [profile.release]
 strip = true

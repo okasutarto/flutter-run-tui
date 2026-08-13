@@ -1,13 +1,16 @@
 //! frun-tui — design prototype for the frun rewrite.
 //!
-//!   frun-tui                    interactive, alternate screen
-//!   frun-tui --dump 100x46      render the dashboard to stdout
-//!   frun-tui --dump-stream 100x24
-//!   frun-tui --rows             row budget report
+//!   frun-tui                        interactive
+//!   frun-tui --dump <state> [WxH]   render one frame to stdout
+//!   frun-tui --all [WxH]            every state, in flow order
+//!   frun-tui --hits <state> [WxH]   probe the clickable regions
+//!   frun-tui --rows <state> [W]     degradation ladder across heights
+//!   frun-tui --states               list the state slugs
 //!
-//! Static data. The pty, the Flutter parser and device discovery are not
-//! part of this prototype.
+//! Data is static. The pty, the Flutter output parser and device discovery are
+//! the next stage.
 
+mod budget;
 mod data;
 mod dump;
 mod theme;
@@ -17,8 +20,8 @@ mod widgets;
 use std::io::{self, Write};
 
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
-    MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
@@ -27,57 +30,80 @@ use ratatui::crossterm::terminal::{
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 
-use data::{Action, App, Phase};
+use data::{Action, App, State};
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut app = App::mock();
 
     match args.first().map(String::as_str) {
-        Some("--rows") => {
-            report_rows();
+        Some("--states") => {
+            for state in State::ALL {
+                println!("{}", state.slug());
+            }
             Ok(())
         }
 
         Some("--dump") => {
-            let (w, h) = size(args.get(1), 100, 46);
-            print!("{}", dump::dump(&mut app, w, h));
+            let state = state_arg(args.get(1))?;
+            let (w, h) = size(args.get(2), 106, 45);
+            print!("{}", dump::dump(&mut App::new(state), w, h));
             Ok(())
         }
 
-        Some("--dump-stream") => {
-            let (w, h) = size(args.get(1), 100, 24);
-            app.phase = Phase::Streaming;
-            print!("{}", dump::dump(&mut app, w, h));
+        Some("--all") => {
+            let (w, h) = size(args.get(1), 106, 45);
+
+            for state in State::ALL {
+                println!(
+                    "\x1b[2m── {} ─────────────────────────\x1b[0m",
+                    state.slug()
+                );
+                print!("{}", dump::dump(&mut App::new(state), w, h));
+                println!();
+            }
+
             Ok(())
         }
 
         Some("--hits") => {
-            let (w, h) = size(args.get(1), 100, 46);
-            print!("{}", dump::hits(&mut app, w, h));
+            let state = state_arg(args.get(1))?;
+            let (w, h) = size(args.get(2), 106, 45);
+            print!("{}", dump::hits(&mut App::new(state), w, h));
             Ok(())
         }
 
-        // Same layout, data shaped like the real tools emit. This is the
-        // difference between a design that works and a design that
-        // photographs well.
-        Some("--stress") => {
-            let (w, h) = size(args.get(1), 100, 46);
-            let mut app = App::stress();
-            print!("{}", dump::dump(&mut app, w, h));
+        Some("--rows") => {
+            let state = state_arg(args.get(1))?;
+            let w = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(106);
+            print!("{}", dump::rows(&App::new(state), w));
             Ok(())
         }
 
-        Some("--stress-stream") => {
-            let (w, h) = size(args.get(1), 100, 24);
-            let mut app = App::stress();
-            app.phase = Phase::Streaming;
-            print!("{}", dump::dump(&mut app, w, h));
-            Ok(())
-        }
+        Some(other) if other.starts_with("--") => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown flag {other}"),
+        )),
 
-        _ => run(app),
+        _ => run(App::new(State::Detecting)),
     }
+}
+
+fn state_arg(arg: Option<&String>) -> io::Result<State> {
+    let Some(slug) = arg else {
+        return Ok(State::Running);
+    };
+
+    State::from_slug(slug).ok_or_else(|| {
+        let known: Vec<&str> = State::ALL.iter().map(|s| s.slug()).collect();
+
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "unknown state {slug:?}, expected one of: {}",
+                known.join(", ")
+            ),
+        )
+    })
 }
 
 fn size(arg: Option<&String>, dw: u16, dh: u16) -> (u16, u16) {
@@ -92,71 +118,41 @@ fn size(arg: Option<&String>, dw: u16, dh: u16) -> (u16, u16) {
     (w.parse().unwrap_or(dw), h.parse().unwrap_or(dh))
 }
 
-fn report_rows() {
-    println!(
-        "dashboard, full          {} rows of chrome",
-        ui::DASHBOARD_CHROME
-    );
-    println!("  project card             9   (logo)");
-    println!("  target + controls        9");
-    println!("  build phase              7");
-    println!("  prompt bar               3");
-    println!("  footer                   1");
-    println!("  gaps                     5");
-    println!();
-    println!("degradation, cheapest first");
-    println!("  below 40 rows            logo dropped        -4");
-    println!("  below 33 rows            prompt bar dropped  -4");
-    println!("  below 29 rows            falls back to the streaming view");
-    println!();
-    println!("resulting log window");
-
-    for h in [20u16, 24, 29, 33, 40, 46, 52] {
-        let (logs, note) = if h < 29 {
-            (h - 5, "streaming fallback")
-        } else if h < 33 {
-            (h - 26, "no logo, no prompt")
-        } else if h < 40 {
-            (h - 30, "no logo")
-        } else {
-            (h - ui::DASHBOARD_CHROME, "full")
-        };
-
-        println!("  at {h:>2} rows -> {logs:>2} rows   {note}");
-    }
-
-    println!();
-    println!("streaming chrome         5 rows (meta, 2 rules, status, footer)");
-    println!("  at 46 rows -> 41 rows   8.2x the full dashboard");
-}
-
 fn run(mut app: App) -> io::Result<()> {
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+
+    // Mouse capture is NOT enabled here. Capturing takes text selection away
+    // from the terminal, and copying a stack trace out of the log window is a
+    // large part of what that window is for. `m` turns it on when the scroll
+    // wheel or a clickable control is wanted.
+    execute!(io::stdout(), EnterAlternateScreen)?;
 
     let result = event_loop(&mut app);
 
-    // Restore before propagating any error, so a failure inside the loop
-    // cannot leave the terminal in raw mode or holding the mouse.
+    // Restore before propagating any error, so a failure inside the loop cannot
+    // leave the terminal in raw mode or holding the mouse.
     disable_raw_mode()?;
-    execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
+
+    if app.mouse_on {
+        execute!(io::stdout(), DisableMouseCapture)?;
+    }
+
+    execute!(io::stdout(), LeaveAlternateScreen)?;
 
     result?;
 
-    // Leaving the alternate screen normally discards everything the app
-    // drew. Replaying the log buffer here is the mitigation discussed for
-    // the real build: filtering and scrolling while running, and a plain
-    // transcript in scrollback afterwards.
-    let mut out = io::stdout();
+    // Leaving the alternate screen discards everything the app drew. Replaying
+    // the log buffer here is the mitigation for that: filtering and scrolling
+    // while running, a plain transcript in scrollback afterwards.
+    if !app.logs.is_empty() {
+        let mut out = io::stdout();
 
-    writeln!(out)?;
-    writeln!(
-        out,
-        "\x1b[2m── transcript ─────────────────────────────\x1b[0m"
-    )?;
+        writeln!(out)?;
+        writeln!(out, "\x1b[2m── transcript ──────────────────────\x1b[0m")?;
 
-    for log in &app.logs {
-        writeln!(out, "{}  {:<10}{}", log.time, log.source, log.message)?;
+        for log in &app.logs {
+            writeln!(out, "{}  {}  {}", log.time, log.level.badge(), log.message)?;
+        }
     }
 
     Ok(())
@@ -168,57 +164,100 @@ fn event_loop(app: &mut App) -> io::Result<()> {
     loop {
         terminal.draw(|frame| ui::render(frame, app))?;
 
-        if !event::poll(std::time::Duration::from_millis(120))? {
+        // Timeout drives the spinner. Anything longer reads as a stutter,
+        // anything shorter is redraw for its own sake.
+        if !event::poll(std::time::Duration::from_millis(80))? {
+            app.tick += 1;
             continue;
         }
 
         match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                KeyCode::Tab => app.toggle_phase(),
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                if app.command_mode {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.command_mode = false;
+                            app.command_input.clear();
+                        }
+                        KeyCode::Enter => {
+                            app.command_mode = false;
+                            app.command_input.clear();
+                        }
+                        KeyCode::Backspace => {
+                            app.command_input.pop();
+                        }
+                        KeyCode::Char(c) => app.command_input.push(c),
+                        _ => {}
+                    }
 
-                KeyCode::Char('r') => {
-                    if app.apply(Action::Reload) {
+                    continue;
+                }
+
+                match key.code {
+                    // Routed through `apply` like everything else rather than
+                    // returning here directly. `q` and `^C` are genuinely
+                    // different exits — one is graceful and lets Flutter shut
+                    // itself down, the other forwards SIGINT — and the single
+                    // dispatch point is where that distinction will live.
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        apply(app, Action::Quit);
                         return Ok(());
                     }
-                }
 
-                KeyCode::Char('R') => {
-                    if app.apply(Action::Restart) {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        apply(app, Action::Stop);
                         return Ok(());
                     }
-                }
 
-                // Hand the mouse back to the terminal.
-                //
-                // Capturing the mouse takes native text selection away: the
-                // terminal forwards drags to the app instead of painting a
-                // selection, so copying a stack trace out of the log stops
-                // working. That matters more for frun than for most TUIs,
-                // because copying error text is a large part of what the log
-                // window is for. So it is a toggle, not a setting.
-                KeyCode::Char('m') => {
-                    app.mouse_on = !app.mouse_on;
-                    app.hover = None;
+                    // State navigation, prototype only. In the real build the
+                    // state is decided by what Flutter is doing.
+                    KeyCode::Tab | KeyCode::Right => app.next_state(),
+                    KeyCode::BackTab | KeyCode::Left => app.prev_state(),
 
-                    if app.mouse_on {
-                        execute!(io::stdout(), EnableMouseCapture)?;
-                    } else {
-                        execute!(io::stdout(), DisableMouseCapture)?;
+                    KeyCode::Char(':') => app.command_mode = true,
+
+                    KeyCode::Char('r') => {
+                        let action = if app.state == State::BuildFailed {
+                            Action::RetryBuild
+                        } else {
+                            Action::Reload
+                        };
+
+                        apply(app, action);
                     }
-                }
 
-                KeyCode::Char('j') | KeyCode::Down => app.scroll_down(),
-                KeyCode::Char('k') | KeyCode::Up => app.scroll_up(),
-                _ => {}
-            },
+                    KeyCode::Char('R') => apply(app, Action::Restart),
+
+                    KeyCode::Char('m') => {
+                        app.mouse_on = !app.mouse_on;
+                        app.hover = None;
+
+                        if app.mouse_on {
+                            execute!(io::stdout(), EnableMouseCapture)?;
+                        } else {
+                            execute!(io::stdout(), DisableMouseCapture)?;
+                        }
+                    }
+
+                    KeyCode::Down | KeyCode::Char('j') => app.select_next(),
+                    KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
+
+                    KeyCode::Enter => {
+                        if app.state == State::NoDevices {
+                            app.goto(State::Booting);
+                        } else if app.state == State::MultipleDevices {
+                            app.goto(State::Building);
+                        }
+                    }
+
+                    _ => {}
+                }
+            }
 
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(action) = app.hit_test(mouse.column, mouse.row) {
-                        if app.apply(action) {
-                            return Ok(());
-                        }
+                        apply(app, action);
                     }
                 }
 
@@ -226,16 +265,35 @@ fn event_loop(app: &mut App) -> io::Result<()> {
                     app.hover = app.hit_test(mouse.column, mouse.row);
                 }
 
-                // The most useful thing the mouse buys us, and the one the
-                // design did not ask for: a log window you can wheel
-                // through without leaving the keyboard home row behind.
-                MouseEventKind::ScrollDown => app.scroll_down(),
-                MouseEventKind::ScrollUp => app.scroll_up(),
+                MouseEventKind::ScrollDown => app.select_next(),
+                MouseEventKind::ScrollUp => app.select_prev(),
 
                 _ => {}
             },
 
             _ => {}
         }
+    }
+}
+
+/// One path for keys and clicks alike, so the two cannot drift apart.
+///
+/// In the real build this is also where the byte is forwarded to the pty, which
+/// is the reason it matters that nothing bypasses it: a click on `r` and a
+/// press of `r` have to reach Flutter through the same call.
+fn apply(app: &mut App, action: Action) {
+    app.last_action = Some(action);
+
+    match action {
+        Action::Reload | Action::Restart => app.goto(State::ReloadInFlight),
+        Action::RetryBuild => app.goto(State::Building),
+        Action::StartDevice => app.goto(State::Booting),
+
+        // Graceful: Flutter receives the key and shuts itself down (⏏).
+        Action::Quit => {}
+
+        // Interrupt: SIGINT is forwarded to the child (⏹). Distinct from Quit
+        // in the existing implementation, and kept distinct here.
+        Action::Stop => {}
     }
 }
