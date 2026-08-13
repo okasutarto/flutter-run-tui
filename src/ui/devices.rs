@@ -268,17 +268,23 @@ fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits
         },
     ];
 
-    // One slot, mutually exclusive. `active` wins because it decides what Enter
-    // costs: launch now, or boot first and wait. `last used` only surfaces where
-    // it carries information, which is a device that is down but is the one you
-    // normally reach for.
-    // `active` means a simulator or phone that is up, not merely a target that
-    // needs no booting. macOS and Chrome are always available, so `active` would
-    // be describing a state they do not have; `▶ Run` already says enough.
+    // Both chips, independently, because they are independent facts.
+    //
+    // `active` says what Enter costs: launch now, or boot first and wait.
+    // `last used` says which device you normally reach for. A device can be both,
+    // and suppressing the second then hid the answer to "is the one I usually use
+    // the one that is up?" — which is the question the pair exists to answer.
+    //
+    // `active` first, since it is the one that changes the consequence.
+    //
+    // It also requires `needs_boot()`: macOS and Chrome are always available, so
+    // `active` would describe a state they do not have, and `▶ Run` says enough.
     if device.boot.is_none() && device.platform.needs_boot() {
         left.push(Span::raw("  "));
         left.extend(pill(" active ", theme::EMERALD));
-    } else if device.last_used {
+    }
+
+    if device.last_used {
         left.push(Span::raw("  "));
         left.extend(pill(" last used ", theme::PURPLE));
     }
