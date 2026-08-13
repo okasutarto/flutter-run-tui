@@ -1,6 +1,6 @@
 # 🖥️ Flutter CLI Terminal UI (TUI) - Architecture & Design Specification (`design.md`)
 
-Document Version: `1.2.2`  
+Document Version: `1.3.0`  
 Last Updated: `2026-08-13`  
 Design System: **Monospace Character Grid TUI (Terminal User Interface)**  
 Target Font: `JetBrains Mono`, `Fira Code`, or `ui-monospace` (12px base)  
@@ -87,6 +87,8 @@ already the component describing what is being run and where.
   * `Branch`: `main`
   * `Git Status`: `✔ clean`
   * **3-Column Technical Stats Row**: `Flutter` (`3.27.1`), `Dart` (`3.7.2`), `Runtime` (`(FVM)`).
+* **Row Separators**: a hairline rule between metadata rows, in the border
+  colour. Costs 3 rows; see 6.2 for what that displaces.
 * **Header Bar**: Includes path tag `~/cwclub` and a metadata `[COPY]` button.
 
 ### 3.2 `SelectedTargetCard`
@@ -116,11 +118,32 @@ devices answered.
 2. **`NO_DEVICES`** (State 2): zero devices answered.
    * Header banner: `◆ NO DEVICE RUNNING` with subtitle
      `Nothing is attached. These can be started:`.
-   * Title section: `Start a Device`, no category filter tabs, listing every
-     launchable target: Android AVDs from `emulator -list-avds`, shut-down
-     iOS simulators from `xcrun simctl list devices available -j`, plus the
-     desktop and web targets Flutter reports.
+   * Title section: `Start a Device`, no category filter tabs.
    * Action trigger: `▶ Start` per row, transitioning to State 3.
+
+   **Every target, not just mobile.** The existing implementation deliberately
+   drops macOS, "Mac Designed for iPad" and Chrome, with the stated reason
+   that frun exists to run on phones. That restriction is lifted:
+
+   | Source | Targets |
+   | :--- | :--- |
+   | `emulator -list-avds` | Android AVDs |
+   | `xcrun simctl list devices available -j` | shut-down iOS/iPadOS simulators |
+   | `flutter devices --machine` | macOS desktop, Chrome, and any other platform Flutter reports |
+
+   Note the asymmetry: emulators and simulators need booting, whereas desktop
+   and web are always available and need no `▶ Start` at all. Those rows go
+   straight to launch, skipping State 3.
+
+   **Row height: roomy.** Two cell-rows per target plus a separator. At that
+   density about 7 targets are visible at once, so the list scrolls and needs
+   a scrollbar. Dense single-row would fit ~15, and is the first thing to give
+   up if rows get scarce (see 6.2).
+
+   **Platform glyphs are Nerd Font, not emoji.** `U+F179` () for Apple and
+   `U+F17B` () for Android. Emoji (🍎, 🤖) are East Asian Width Wide, so they
+   occupy two cells and break the column grid, and terminal emoji rendering is
+   inconsistent. `frun.zsh` already ships `U+F179` today.
 
 3. **`BOOTING`** (State 3): `⠋ Booting <name>...`.
    * Android waits on `sys.boot_completed` and can legitimately take
@@ -171,11 +194,43 @@ devices answered.
   the Dart VM, Gradle daemon, Xcode and simulator process tree for a number
   that is rarely acted on.
 
-* **Failure State**: error summary, stack trace, elapsed total, and which
-  stage broke. Single action: `[Retry Build]`, which kills the pty and
-  respawns `fvm flutter run` — hot restart is not a build retry.
+* **Progress Bar**: filled bar with a step counter, but **no denominator**.
+  `Step 4`, not `Step 4/4`, and no percentage.
 
-  `[Fix with AI]` is removed. There is no such capability in the project.
+  The total is not knowable in advance. Stage count depends on platform, and
+  Flutter skips stages: `pod install` is skipped when `Podfile.lock` is
+  current, APK install is skipped when attaching to an already-installed app.
+  Any denominator shown before the build finishes is a guess, and a progress
+  bar that reaches 100% and then keeps working is worse than no bar.
+
+  Once the build completes the count is known and can be stated
+  (`4 stages · 3.4s`).
+
+* **Failure State**: error summary, exit code, elapsed total, and which stage
+  broke.
+
+  **Code frame.** The error carries `lib/main.dart:42:18`, and Dart already
+  emits the offending source line plus a caret, so that much is free
+  passthrough. Showing the lines *around* it (41 and 43) means reading the
+  file from disk at the reported line number. Worth it: one line of context
+  either side is usually the difference between recognising the mistake and
+  opening the editor.
+
+  **Single action: `[r] Retry Build`.** This is not a keypress forwarded to
+  Flutter. It kills the child in the pty, waits for it to be reaped, and
+  spawns a fresh `fvm flutter run -d <id>` with all stage state reset. Hot
+  restart is not a build retry and cannot substitute for one.
+
+  Two notes. The Gradle daemon survives the kill, so a retry is usually much
+  faster than the first build. And the failed build's log is kept rather than
+  cleared, because comparing the two runs is the point.
+
+  `r` is free in this state: there is no live Flutter session to hot reload,
+  so the key carries no conflicting meaning.
+
+  `[Fix with AI]` / `[f] Fix Code with AI Assistant` is removed. There is no
+  such capability in this project, and a button that cannot act is worse than
+  an absent one.
 
 ### 3.5 `TerminalLogsView`
 * **18-Column Strict Gutter System**:
@@ -194,6 +249,28 @@ devices answered.
   Dropping the filters also resolves a data problem: `FLUTTER` is detectable
   from the `I/flutter (12345):` prefix, but `SYSTEM` and `NET` have no source
   in Flutter's output and would have to be guessed.
+
+* **Application output only.** Build progress does not belong here. The design
+  frames showed `[BLD] Running Xcode build...` and `[OK] Xcode build complete
+  11.1s` in the log stream while `BuildPhaseTracker` was displaying the same
+  two facts as steps, one screen, twice. The tracker owns build progress; this
+  view owns what the application printed.
+
+  Consequently the only levels are the ones the app itself produces:
+
+  | Badge | Source |
+  | :--- | :--- |
+  | `INF` | `I/flutter (nnnn):` and plain application prints |
+  | `WRN` | `W/` android log level, Flutter warnings, `printBox` notices |
+  | `ERR` | `E/`, Dart exceptions, stack traces |
+
+  `SYS`, `BLD` and `OK` are removed. Everything they carried is a build stage
+  and already has a home.
+
+  One deliberate exception: hot reload results (`⚡ Reloaded 125 of 1824
+  libraries in 148ms`) stay in the stream. They happen while the app is
+  running, they interleave with app output, and their position relative to
+  surrounding log lines is the information.
 
 ### 3.6 `InteractivePrompt`
 * **CLI Input Box**: `➜ ~/cwclub ❯` interactive text input with `[Enter]` submit button and popup autocomplete command suggestions.
@@ -432,14 +509,52 @@ Two consequences to design around:
 
 ### 6.2 Responsive degradation
 
-The `100x45` canvas is a target, not a hard floor. Below it the layout
-shrinks progressively rather than refusing to draw, cheapest element first:
+The layout adapts to the actual terminal size. `106x45` is a target, not a
+floor and not a cap.
 
-| Below | Dropped | Reclaimed |
+**The problem this has to solve.** Row separators (3.1) and roomy device rows
+(3.3) are worth having, but they are not free. Full chrome now measures:
+
+```
+  PROJECT INFO           11 rows   2 border + 5 content + 3 separator + 1 stats
+  SELECTED TARGET        10 rows   2 border + 4 content + 3 separator + 1 banner
+  BUILD PHASE            10 rows   2 border + 6 content + title + bar
+  prompt + footer + gaps  9 rows
+  ─────────────────────────────
+  TOTAL                  40 rows
+```
+
+At the 106x45 target that leaves the log window **5 rows**. A five-line Dart
+exception, wrapped at 84 columns of message space, occupies **8 rows**. So a
+single error would not fit on screen at the design's own target size.
+
+**Therefore the priority is inverted.** The log window is not what is left
+over; it is a floor that the cards must yield to.
+
+```
+  LOG_MIN = 12 rows      enough for one wrapped exception plus context
+```
+
+Elements are given up in this order until the floor is met, cheapest first:
+
+| Order | Given up | Reclaimed |
 | :--- | :--- | :--- |
-| 40 rows | Flutter logo in ProjectCard | 4 rows |
-| 33 rows | interactive prompt bar (keys stay in the footer) | 4 rows |
-| 29 rows | ProjectCard and SelectedTargetCard collapse to one metadata row each | ~16 rows |
+| 1 | Flutter logo in ProjectCard | 4 rows |
+| 2 | Row separators in both cards | 6 rows |
+| 3 | Interactive prompt bar (keys remain in the footer) | 4 rows |
+| 4 | Device rows go dense, one line each | ~7 rows in States 2 and 4 |
+| 5 | BuildPhaseTracker collapses to one summary line once the build finished | 9 rows |
+| 6 | ProjectCard and SelectedTargetCard collapse to one metadata row each | ~19 rows |
 
-The log window is always the last thing to give up space, because it is the
-only region whose contents are still changing.
+Step 5 is the important one, and it is state-dependent rather than
+size-dependent: after the build succeeds, every row the tracker occupies is
+static. It has no reason to hold nine rows while the only region still
+changing is starved.
+
+Nothing below `60x14` is drawable. At that point the app says so rather than
+rendering a broken grid.
+
+**Width.** Cards stop widening at 142 columns so a very wide window does not
+stretch a label to one edge and its value to the other. The log window is
+exempt and takes every column available, because more columns means fewer
+wrapped rows per entry.
