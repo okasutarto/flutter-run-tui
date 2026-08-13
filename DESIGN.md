@@ -754,6 +754,35 @@ machine, `printBox` passthrough, startup log buffering.
 build-failure detection at all: if Gradle dies the output falls through to raw
 passthrough and the spinner simply stops.
 
+**On reusing `frun-runner` rather than porting it.** Considered and declined.
+
+Measured, `frun-runner` is 1,749 lines that are 1,012 lines of code, and those
+divide roughly into 166 lines of rules worth keeping, 187 lines of
+infrastructure that crates replace, and the rest Python boilerplate.
+
+So the valuable part is 166 lines of *rules*, not 1,748 lines of code. Those get
+ported line for line, not redesigned: which trigger string marks which stage,
+that Flutter formats elapsed time with a group separator so `[0-9]+` clips
+`1,847ms`, that `Built build/` is the unambiguous Gradle-finished signal while
+the Gradle line itself re-emits partial durations. None of that is derivable from
+Flutter's documentation.
+
+The infrastructure is where crates win outright. `portable-pty` replaces
+`pty.fork()` and the termios juggling, and brings window-resize forwarding
+(`TIOCSWINSZ`) which `frun-runner` does not do at all today. `vte` replaces the
+18 lines of ANSI cleanup and is strictly more correct, since those six braille
+regexes exist precisely because regexes do not emulate a terminal.
+
+The third option was keeping `frun-runner` alive behind a JSON event stream, with
+frun-tui only rendering. Its appeal is real: zero risk of regressing the ack
+machine, the subtlest logic here. It was declined because parsing in that file is
+entangled with rendering — `process_line` does not return events, it calls
+`complete_spinner()` and `line()` directly. Reusing it as a process means first
+extracting 141 lines of rendering, then designing an event protocol, then
+maintaining an IPC boundary where every new field is a change in two languages,
+and Python stays in the chain. Against that: the ack machine is 26 lines. Porting
+26 lines faithfully is a smaller risk than designing a protocol.
+
 **4. Boot.** `emulator -avd` with `sys.boot_completed` polling capped at 180
 seconds, and `xcrun simctl bootstatus -b`. Depends on 2.
 
