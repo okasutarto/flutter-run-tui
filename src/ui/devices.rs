@@ -165,9 +165,13 @@ pub fn render_single(frame: &mut Frame, area: Rect, app: &App) {
 
 /// The scrolling target list, shared by states 2 and 4.
 fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget, show_start: bool) {
-    // Roomy: two cell-rows per target plus a separator. Dense is the fourth
-    // concession in the degradation ladder.
-    let step = if plan.roomy_devices { 3 } else { 1 };
+    // Roomy: one row per target plus a separator, and no blank between them.
+    //
+    // The separator already divides one target from the next; adding a blank on
+    // top of it spent a row per device to say the same thing twice, and pushed
+    // a third of the list off screen. Dense drops the separator too, and is the
+    // fourth concession in the degradation ladder.
+    let step = if plan.roomy_devices { 2 } else { 1 };
     let visible = (area.height / step).max(1) as usize;
 
     // Keep the selection on screen without letting the window jump around.
@@ -209,8 +213,12 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget, show_start:
             &mut pending,
         );
 
-        // Separator under each roomy row, except the last visible one.
-        if plan.roomy_devices && y + 2 < area.y + area.height {
+        // Separator between rows, so the last one gets none: a rule sitting
+        // directly above the card's bottom border reads as a stray line rather
+        // than as a division between two things.
+        let is_last = index + 1 == app.devices.len() || slot + 1 == visible;
+
+        if plan.roomy_devices && !is_last && y + 1 < area.y + area.height {
             frame.render_widget(
                 Paragraph::new(crate::widgets::separator(row.width)),
                 Rect {

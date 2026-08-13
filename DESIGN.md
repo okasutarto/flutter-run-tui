@@ -135,10 +135,15 @@ devices answered.
    and web are always available and need no `▶ Start` at all. Those rows go
    straight to launch, skipping State 3.
 
-   **Row height: roomy.** Two cell-rows per target plus a separator. At that
-   density about 7 targets are visible at once, so the list scrolls and needs
-   a scrollbar. Dense single-row would fit ~15, and is the first thing to give
-   up if rows get scarce (see 6.2).
+   **Row height: roomy.** One row per target plus a separator, and no blank
+   between them: the separator already divides one target from the next, so a
+   blank on top of it spends a row per device saying the same thing twice. The
+   last row gets no separator, since a rule directly above the card border
+   reads as a stray line rather than a division.
+
+   At that density around 12 targets are visible at once, so the list scrolls
+   and carries a scrollbar. Dense drops the separators as well and is the
+   fourth concession in the ladder (see 6.2).
 
    **Platform glyphs are Nerd Font, not emoji.** `U+F179` () for Apple and
    `U+F17B` () for Android. Emoji (🍎, 🤖) are East Asian Width Wide, so they
