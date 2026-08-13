@@ -1306,3 +1306,37 @@ because nothing follows it, which is the honest answer rather than a zero.
 
 Both timestamps were already being recorded, so this added no measurement — only
 the arithmetic between two numbers that were sitting there unused.
+
+### 7.8 Pending: second round, from real runs
+
+**Device chip: `running` replaces `last used` when the device is up.** One slot,
+mutually exclusive, so `last used` only appears where it earns its place — the
+device is down but it is the one you normally use. Two running devices both carry
+the chip; it is a state, not a rank. The action label is uniformly `▶ Run`, so the
+`Start`/`Run` split goes away.
+
+Wording is open. `active` would match the SelectedTargetCard banner
+(`1 device active`); `up` is shorter; `attached` is Flutter's own term.
+
+**Stage counter starts at 1 before anything has happened.** It should read 0 and
+become 1 when `Flutter started` turns green.
+
+**iOS shows `0/5` when iOS has four stages.** The denominator is both wrong and
+hardcoded, which is the same defect as the bar dividing by a growing total.
+
+**The gap after `Flutter started` has no timer at all.** Not just no indicator:
+the elapsed clock does not run, and the total for that stage only appears once the
+next one begins. Worst on iOS, where the Xcode build is long.
+
+**Footer: space-between, and add `^C`.**
+
+**`z` for zoom is misleading.** Expand and collapse, and name it that way.
+
+**Scroll and zoom hotkeys show during the build phase**, where neither does
+anything. The footer already adapts per state; these were missed.
+
+**Hide the app logs card until the build finishes.**
+
+Note this replaces the earlier plan of showing logs during `BUILDING` to fill the
+startup gap (7.6). With the card hidden, that gap has nothing to fill it except
+the elapsed clock above, which makes that clock load-bearing rather than a nicety.
