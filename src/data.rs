@@ -109,13 +109,31 @@ impl State {
 
     /// Whether the log stream is on screen.
     ///
-    /// Not during a build: nothing has printed yet. Not on build failure
-    /// either, where the failure card takes the space and the compiler output is
-    /// the only output that matters.
+    /// Includes `Building`. It used to be excluded on the grounds that nothing
+    /// has printed yet, which is not true: Flutter prints throughout, and the
+    /// eight seconds between `Launching lib/main.dart` and the first Gradle line
+    /// are full of Impeller notices, daemon messages and warnings. The space was
+    /// being spent instead on a placeholder reading `Waiting for the application
+    /// to start...`, which said nothing the spinner above was not already saying.
+    ///
+    /// Still excluded on build failure, where the failure card takes the space and
+    /// the compiler output is the only output that matters.
     pub fn has_logs(self) -> bool {
         matches!(
             self,
-            State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped
+            State::Building
+                | State::Running
+                | State::ReloadInFlight
+                | State::ReloadFailed
+                | State::ReloadDropped
+        )
+    }
+
+    /// Whether a hot reload or restart is being reported on the status row.
+    pub fn reloading(self) -> bool {
+        matches!(
+            self,
+            State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped
         )
     }
 
@@ -154,6 +172,29 @@ impl Platform {
             Platform::Web => "Web",
         }
     }
+
+    /// How many stages Flutter is expected to announce here.
+    ///
+    /// The platform is known before the build starts, and the trigger table in
+    /// 3.4 is per-platform, so the count is knowable after all — which is what
+    /// gives the progress bar an honest denominator.
+    ///
+    /// Only ever an upper bound. Flutter skips stages it does not need: no
+    /// `pod install` when `Podfile.lock` is current, no install when attaching to
+    /// an app that is already there. Being an upper bound is the useful
+    /// direction — the bar can stall below full and then complete, which reads
+    /// correctly, where the reverse would reach 100% and keep working.
+    pub fn stage_count(self) -> usize {
+        match self {
+            // Launching, CocoaPods, Xcode, Syncing, ready. macOS builds through
+            // CocoaPods and Xcode as well, so it counts the same.
+            Platform::Ios | Platform::Desktop => 5,
+            // Launching, Gradle, install, Syncing, ready.
+            Platform::Android => 5,
+            // No native toolchain in the middle: launching, Syncing, ready.
+            Platform::Web => 3,
+        }
+    }
 }
 
 // ============================================================
@@ -173,6 +214,23 @@ pub enum StageKey {
     Install,
     Sync,
     Ready,
+}
+
+impl StageKey {
+    /// Whether this stage is an announcement rather than work.
+    ///
+    /// Flutter prints `Launching lib/main.dart` and `Flutter run key commands`
+    /// and moves straight on, so timing the row itself yields `0ms` — which is
+    /// both meaningless and, on `Launch`, actively misleading: the eight seconds
+    /// of `fvm`, Dart VM boot, flutter_tools startup, pub and Gradle daemon
+    /// warmup all happen immediately afterwards and belong to nothing else.
+    ///
+    /// A marker therefore carries the gap from itself to the next stage. Both
+    /// timestamps are already recorded, so the figure is measured rather than
+    /// invented, and the emptiest number on the card becomes the most useful one.
+    pub fn is_marker(self) -> bool {
+        matches!(self, StageKey::Launch | StageKey::Ready)
+    }
 }
 
 /// The set is platform-dependent by construction: a stage Flutter never
@@ -291,8 +349,8 @@ pub enum Msg {
     Partial(String),
     /// The pty closed.
     Eof,
-    /// Discovery finished: attached devices, then bootable targets.
-    Devices(Result<(Vec<Device>, Vec<Device>), String>),
+    /// Discovery finished: one merged, ordered list of everything runnable.
+    Devices(Result<Vec<Device>, String>),
     /// A boot finished, carrying the id Flutter will use.
     Booted(Result<String, String>),
     /// The slow SDK version lookup landed.
@@ -369,6 +427,18 @@ pub struct App {
     pub selected_device: usize,
     pub scroll: usize,
 
+    /// Rows the log window is scrolled back from the live tail.
+    ///
+    /// Separate from `scroll`, which belongs to the device list. Sharing one
+    /// field was the bug: `Up`/`Down` in `RUNNING` moved a device selection that
+    /// was not on screen, so the arrow keys appeared to do nothing while the log
+    /// window stayed pinned to the bottom.
+    ///
+    /// Zero means the bottom, which is why new output keeps arriving without
+    /// having to be followed: the offset is measured from the end, so the tail
+    /// stays put as the buffer grows.
+    pub log_scroll: usize,
+
     /// The chosen device. Everything the SelectedTargetCard shows is derived
     /// from it rather than copied out, so the card cannot describe a device that
     /// is not the one being run.
@@ -414,6 +484,14 @@ pub struct App {
 
     pub last_action: Option<Action>,
 
+    /// Give the log window the whole frame, hiding the three static cards.
+    ///
+    /// 7.7 asked for more log on screen. A terminal application cannot change its
+    /// font size — one font at one size covers the grid — so the app-side answer
+    /// is to stop spending rows on information that is not changing. At 62 rows
+    /// this takes the log window from 19 rows to 58.
+    pub zoom: bool,
+
     /// Whether this app is talking to a real device. False for the dump and demo
     /// paths, which is what gates the prototype affordances: `Tab` must not move
     /// between states when Flutter is deciding them.
@@ -456,6 +534,7 @@ impl App {
             devices: Vec::new(),
             selected_device: 0,
             scroll: 0,
+            log_scroll: 0,
 
             target: None,
             command: String::new(),
@@ -486,6 +565,7 @@ impl App {
             mouse_on: false,
             last_action: None,
 
+            zoom: false,
             live: false,
             demo: false,
 
@@ -547,6 +627,15 @@ impl App {
 
     pub fn selected(&self) -> Option<&Device> {
         self.devices.get(self.selected_device)
+    }
+
+    /// Scroll the log window. Positive goes back in history.
+    ///
+    /// Not clamped here: the ceiling depends on how many visual rows the entries
+    /// wrap to, which is only known at the width the window is drawn at. `logs.rs`
+    /// clamps it while rendering, where that is known.
+    pub fn scroll_logs(&mut self, delta: isize) {
+        self.log_scroll = self.log_scroll.saturating_add_signed(delta);
     }
 
     /// Adopt a device as the run target.
@@ -742,6 +831,20 @@ impl App {
         self.build_time = crate::flutter::elapsed(self.build_started.elapsed());
     }
 
+    /// Stages this build is expected to announce, for the progress denominator.
+    ///
+    /// Never below what has already been seen, so the bar cannot exceed full even
+    /// if a platform turns out to announce more than the table predicts.
+    pub fn expected_stages(&self) -> usize {
+        let expected = self
+            .target
+            .as_ref()
+            .map(|d| d.platform.stage_count())
+            .unwrap_or(5);
+
+        expected.max(self.stages.len())
+    }
+
     pub fn hit_test(&self, col: u16, row: u16) -> Option<Action> {
         self.hits
             .iter()
@@ -895,30 +998,17 @@ fn mock_devices(state: State) -> Vec<Device> {
                 Platform::Ios,
                 Boot::Sim("77E0C1B4-2A6D".into()),
             ),
-            bootable(
-                "macos",
-                "macOS",
-                Platform::Desktop,
-                Boot::Ready("macos".into()),
-            ),
-            bootable(
-                "chrome",
-                "Chrome",
-                Platform::Web,
-                Boot::Ready("chrome".into()),
-            ),
+            // No boot step: already available, so picking one launches it.
+            mock_device("macos", "macOS", Platform::Desktop, "darwin", "", false),
+            mock_device("chrome", "Chrome", Platform::Web, "web-javascript", "", false),
         ],
 
+        // One merged list, ordered the way `probe::targets` orders it: running
+        // first, then things that need starting, then the platforms that are
+        // always there. The mock has to show this shape or the dumps verify a
+        // layout the live flow no longer produces.
         State::MultipleDevices => {
             let mut devices = vec![
-                mock_device(
-                    "8A3F91C2-4D2E",
-                    "iPhone 16 Pro",
-                    Platform::Ios,
-                    "ios",
-                    "iOS 18.2",
-                    true,
-                ),
                 mock_device(
                     "emulator-5554",
                     "Pixel 10 Pro XL",
@@ -927,20 +1017,25 @@ fn mock_devices(state: State) -> Vec<Device> {
                     "Android 17 (API 37)",
                     true,
                 ),
-                mock_device(
-                    "macos",
-                    "macOS",
-                    Platform::Desktop,
-                    "darwin",
-                    "macOS 26.6.1",
-                    false,
+                bootable(
+                    "Pixel_8",
+                    "Pixel 8",
+                    Platform::Android,
+                    Boot::Avd("Pixel_8".into()),
                 ),
+                bootable(
+                    "8A3F91C2-4D2E",
+                    "iPhone 17 Pro",
+                    Platform::Ios,
+                    Boot::Sim("8A3F91C2-4D2E".into()),
+                ),
+                mock_device("macos", "macOS", Platform::Desktop, "darwin", "", false),
                 mock_device(
                     "chrome",
                     "Chrome",
                     Platform::Web,
                     "web-javascript",
-                    "Chrome 151",
+                    "",
                     false,
                 ),
             ];
@@ -954,12 +1049,20 @@ fn mock_devices(state: State) -> Vec<Device> {
 }
 
 fn mock_stages(state: State) -> Vec<Stage> {
+    // A stage that has been running for a while, so `--dump building` shows the
+    // elapsed clock rather than a blank. Charging it to the mock is what makes
+    // that row verifiable at all: a clock that only appears after three real
+    // seconds cannot be seen in a single rendered frame otherwise.
+    let waiting_since = Instant::now()
+        .checked_sub(std::time::Duration::from_secs(6))
+        .unwrap_or_else(Instant::now);
+
     let stage = |key, label: &str, duration: &str, done| Stage {
         key,
         label: label.into(),
         duration: duration.into(),
         done,
-        started: Instant::now(),
+        started: if done { Instant::now() } else { waiting_since },
     };
 
     match state {

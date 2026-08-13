@@ -904,12 +904,23 @@ impl App {
             return;
         }
 
+        let now = Instant::now();
+
+        // A marker stage's own duration is meaningless, so it is given the gap
+        // from itself to here — which is the only place the startup gap after
+        // `Launching lib/main.dart` can ever be shown.
+        if let Some(previous) = self.stages.last_mut() {
+            if previous.key.is_marker() && previous.duration.is_empty() {
+                previous.duration = elapsed(now.duration_since(previous.started));
+            }
+        }
+
         self.stages.push(Stage {
             key,
             label,
             duration: String::new(),
             done: false,
-            started: Instant::now(),
+            started: now,
         });
     }
 
@@ -932,7 +943,10 @@ impl App {
 
         if !duration.is_empty() {
             stage.duration = duration;
-        } else if stage.duration.is_empty() {
+        } else if stage.duration.is_empty() && !stage.key.is_marker() {
+            // Markers are left empty here on purpose: `start_stage` fills them
+            // with the gap to whatever comes next, and the last row keeps a blank
+            // because nothing follows it.
             stage.duration = elapsed(stage.started.elapsed());
         }
 
@@ -1037,6 +1051,71 @@ mod tests {
         );
 
         assert_eq!(dart_location("no location here"), None);
+    }
+
+    /// The reported defect: the bar filled to 100% at the first stage and then
+    /// dropped as more stages were announced, because the denominator was the
+    /// number announced so far.
+    #[test]
+    fn the_progress_fraction_never_goes_backwards() {
+        let mut app = App::new(State::Building);
+        app.stages.clear();
+
+        let mut previous = 0.0;
+
+        for (key, label) in [
+            (StageKey::Launch, "Flutter started"),
+            (StageKey::Gradle, "Gradle task assembleDebug"),
+            (StageKey::Install, "Installing app"),
+            (StageKey::Sync, "Syncing files"),
+            (StageKey::Ready, "Interactive session ready"),
+        ] {
+            app.start_stage(key, label.into());
+
+            let done = app.stages.iter().filter(|s| s.done).count();
+            let fraction = done as f64 / app.expected_stages() as f64;
+
+            assert!(
+                fraction >= previous,
+                "fraction fell from {previous} to {fraction} at {label}"
+            );
+
+            assert!(fraction <= 1.0, "{fraction} exceeds full at {label}");
+
+            previous = fraction;
+            app.finish_stage(key, "1s".into());
+        }
+    }
+
+    /// A marker row shows the gap to the next stage, which is where the
+    /// eight-second startup delay after `Launching lib/main.dart` becomes visible.
+    #[test]
+    fn a_marker_stage_carries_the_gap_to_the_next_one() {
+        let mut app = App::new(State::Building);
+        app.stages.clear();
+
+        app.start_stage(StageKey::Launch, "Flutter started".into());
+        app.finish_stage(StageKey::Launch, String::new());
+
+        assert!(
+            app.stages[0].duration.is_empty(),
+            "a marker must not time itself, that is the 0ms defect"
+        );
+
+        std::thread::sleep(Duration::from_millis(20));
+        app.start_stage(StageKey::Gradle, "Gradle".into());
+
+        assert!(
+            !app.stages[0].duration.is_empty(),
+            "the gap to the next stage should have filled it"
+        );
+
+        // The last row has nothing after it, so it stays blank rather than
+        // inventing a figure.
+        app.start_stage(StageKey::Ready, "Interactive session ready".into());
+        app.finish_stage(StageKey::Ready, String::new());
+
+        assert!(app.stages.last().expect("a stage").duration.is_empty());
     }
 
     #[test]

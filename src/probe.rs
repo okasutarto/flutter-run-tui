@@ -473,44 +473,64 @@ fn pretty_avd(name: &str) -> String {
 // ============================================================
 
 /// What starting a target actually requires.
+///
+/// There is no `Ready` variant. A target that needs no booting is `boot: None`,
+/// which is the same thing an already-running device says, and they are treated
+/// identically from the moment they are picked: launch now. Two ways to spell one
+/// fact is one way too many.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Boot {
     /// An AVD name for `emulator -avd`.
     Avd(String),
     /// A simulator UDID for `simctl`.
     Sim(String),
-    /// Already available: a Flutter device id that needs no boot at all.
-    Ready(String),
 }
 
-/// Everything launchable while nothing is attached: AVDs, shut-down simulators,
-/// and whatever Flutter already offers that needs no booting.
+/// Every target worth offering, in one list, in the order they should be shown.
 ///
-/// The mobile-only restriction the shell version applied is lifted here, per
-/// DESIGN.md 3.3.
-pub fn bootable(available: &[Device]) -> Vec<Device> {
-    let mut targets = Vec::new();
+/// One list and not two, per DESIGN.md 7.6. Splitting them was what trapped you
+/// on whichever platform happened to be running: with one device attached there
+/// was nothing to choose, so booting anything else was unreachable without
+/// quitting. Booting *is* a choice, so it belongs in the picker.
+///
+/// Order is running first, then things that need starting, then the platforms
+/// that are simply always there. That puts the single `Enter` case at the top and
+/// the slowest options last.
+///
+/// The mobile-only restriction the shell version applied is lifted, per 3.3.
+pub fn targets(reported: Vec<Device>) -> Vec<Device> {
+    let (attached, always_available): (Vec<Device>, Vec<Device>) =
+        reported.into_iter().partition(|d| d.attached());
+
+    let mut targets = attached;
 
     if let Some(out) = run("emulator", &["-list-avds"], QUICK) {
         for avd in out.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let name = pretty_avd(avd);
+
+            // An AVD that is already running is in the attached list under this
+            // same name — `android_name` resolves the serial back through
+            // `adb emu avd name` precisely so the two agree — so listing it again
+            // would offer to boot a device you are looking at.
+            if targets.iter().any(|d| d.name == name) {
+                continue;
+            }
+
             targets.push(target(
                 avd,
-                &pretty_avd(avd),
+                &name,
                 Platform::Android,
                 Boot::Avd(avd.to_string()),
             ));
         }
     }
 
+    // Shut-down only, so a booted simulator cannot appear twice.
     targets.extend(simulators());
 
-    // Desktop and web, straight from what Flutter reported. No boot step: these
-    // go directly to launch, which is the asymmetry DESIGN.md 3.3 calls out.
-    for device in available.iter().filter(|d| !d.attached()) {
-        let mut row = device.clone();
-        row.boot = Some(Boot::Ready(device.id.clone()));
-        targets.push(row);
-    }
+    // macOS, Chrome and friends. No boot step and nothing to wait for, which is
+    // why they sit last rather than competing with a device you can see.
+    targets.extend(always_available);
 
     targets
 }
@@ -600,7 +620,6 @@ const BOOT_LIMIT: Duration = Duration::from_secs(180);
 /// Blocking, and meant to be called on a worker thread.
 pub fn boot(target: &Boot) -> Result<String, String> {
     match target {
-        Boot::Ready(id) => Ok(id.clone()),
         Boot::Sim(udid) => boot_sim(udid),
         Boot::Avd(name) => boot_avd(name),
     }

@@ -58,7 +58,7 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
         rows[TITLE],
     );
 
-    list(frame, rows[LIST], app, plan, true);
+    list(frame, rows[LIST], app, plan);
 
     frame.render_widget(
         Paragraph::new(spread(
@@ -92,7 +92,7 @@ pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget
 
     let rows = Layout::vertical([Constraint::Min(2), Constraint::Length(1)]).split(inner);
 
-    list(frame, rows[0], app, plan, false);
+    list(frame, rows[0], app, plan);
 
     frame.render_widget(
         Paragraph::new(spread(
@@ -172,7 +172,7 @@ pub fn render_single(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// The scrolling target list, shared by states 2 and 4.
-fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget, show_start: bool) {
+fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // Roomy: one row per target plus a separator, and no blank between them.
     //
     // The separator already divides one target from the next; adding a blank on
@@ -217,7 +217,6 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget, show_start:
             row,
             device,
             index == app.selected_device,
-            show_start,
             &mut pending,
         );
 
@@ -257,7 +256,6 @@ fn draw_row(
     area: Rect,
     device: &Device,
     selected: bool,
-    show_start: bool,
     hits: &mut Vec<Hit>,
 ) {
     let mut left = vec![
@@ -294,28 +292,27 @@ fn draw_row(
         right.push(text("virtual", theme::PURPLE));
     }
 
-    if show_start {
-        right.push(Span::raw("  "));
+    // The badge says what picking this row will do, and that is a property of the
+    // row rather than of the frame it is on. Both frames now draw one merged
+    // list, so a per-frame flag would label a bootable simulator `Run` purely
+    // because a phone happened to be plugged in.
+    right.push(Span::raw("  "));
 
-        // Desktop and web are always available, so they have nothing to boot.
-        // The label says which is happening rather than pretending both are
-        // the same operation.
-        let label = if device.platform.needs_boot() {
-            " ▶ Start "
-        } else {
-            " ▶ Run "
-        };
+    let label = if device.boot.is_some() {
+        " ▶ Start "
+    } else {
+        " ▶ Run "
+    };
 
-        right.extend(pill(
-            label,
-            if selected { theme::CYAN } else { theme::MUTED },
-        ));
+    right.extend(pill(
+        label,
+        if selected { theme::CYAN } else { theme::MUTED },
+    ));
 
-        hits.push(Hit {
-            area,
-            action: Action::StartDevice,
-        });
-    }
+    hits.push(Hit {
+        area,
+        action: Action::StartDevice,
+    });
 
     let line = spread(area.width, left, right);
 

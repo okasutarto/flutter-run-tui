@@ -59,7 +59,7 @@ The interface is organized into modular TUI blocks:
 │  ├─ State 2:  FlutterDeviceManager (NO_DEVICES - Launchable Targets)        │
 │  ├─ State 3:  FlutterDeviceManager (BOOTING)                                │
 │  ├─ State 4:  FlutterDeviceManager (MULTIPLE_DEVICES - picker)              │
-│  └─ State 5:  FlutterDeviceManager (SINGLE_DEVICE - auto-selected)          │
+│  └─ State 5:  FlutterDeviceManager (SINGLE_DEVICE - superseded, see 7.6)    │
 │                                                                             │
 │  Build                                                                      │
 │  ├─ State 6:  BuildPhaseTracker (BUILDING)                                  │
@@ -229,22 +229,40 @@ devices answered.
   the Dart VM, Gradle daemon, Xcode and simulator process tree for a number
   that is rarely acted on.
 
-* **Progress Bar**: filled bar with a step counter, but **no denominator**. A
-  blank row separates it from the stage list.
+* **Progress Bar**: filled bar with `Stage 3/5`. A blank row separates it from
+  the stage list.
 
   The bar itself is capped at 44 columns; the row it sits on is not, so the
   stage count still right-aligns to the border. A 118-column bar conveys nothing
   a short one does not and turns a glance into a scan.
-  `Step 4`, not `Step 4/4`, and no percentage.
 
-  The total is not knowable in advance. Stage count depends on platform, and
-  Flutter skips stages: `pod install` is skipped when `Podfile.lock` is
-  current, APK install is skipped when attaching to an already-installed app.
-  Any denominator shown before the build finishes is a guess, and a progress
-  bar that reaches 100% and then keeps working is worse than no bar.
+  **The denominator comes from the platform**, which is the correction to what
+  this section used to say. It read "no denominator", on the grounds that the
+  total is not knowable in advance because the stage set is platform-dependent and
+  Flutter skips stages it does not need. The first half of that is backwards: the
+  platform is chosen *before* the build starts, and the table above is indexed by
+  it, so the stage set follows from the target. Five for iOS, Android and macOS;
+  three for web.
 
-  Once the build completes the count is known and can be stated
-  (`4 stages · 3.4s`).
+  The skipping is real and is handled by direction rather than by avoidance. The
+  figure is an upper bound, never a floor — `pod install` is skipped when
+  `Podfile.lock` is current, the APK install when attaching to an app already
+  there — so the bar can stall one stage short and then complete. The failure this
+  section warned about, a bar reaching 100% and then continuing to work, is
+  precisely what an upper bound cannot do; it was the old denominator, the count of
+  stages announced so far, that produced it. See 7.6.
+
+  Once the build completes the count that actually ran is stated
+  (`4 stages · complete`).
+
+* **Marker rows carry the gap to the next stage.** `Flutter started` and
+  `Interactive session ready` are announcements, not work, so timing them yields
+  `0ms`. On `Flutter started` that is actively misleading: the seconds spent in
+  the `fvm` shim, Dart VM boot, flutter_tools startup, dependency resolution and
+  Gradle daemon warmup all follow it and belong to no stage at all. A marker
+  therefore reports the distance to whatever comes next, which is measured from
+  two timestamps already being recorded. The final row stays blank, because
+  nothing follows it. See 7.7.
 
 * **Failure State**: error summary, exit code, elapsed total, and which stage
   broke.
@@ -289,6 +307,19 @@ devices answered.
   Dropping the filters also resolves a data problem: `FLUTTER` is detectable
   from the `I/flutter (12345):` prefix, but `SYSTEM` and `NET` have no source
   in Flutter's output and would have to be guessed.
+
+* **On screen during the build, not only after it.** This view used to appear
+  only once the interactive session was live, on the grounds that nothing had
+  printed yet. That was false: Flutter prints throughout, and the eight seconds
+  between `Launching lib/main.dart` and the first Gradle line are full of Impeller
+  notices, daemon messages and warnings. Those rows were being spent instead on a
+  placeholder reading `Waiting for the application to start...`, which said nothing
+  the spinner above it was not already saying. See 7.6.
+
+* **Scrollable.** `log_scroll` counts rows back from the live tail, driven by the
+  arrow keys, `j`/`k` and the wheel; zero is the bottom, so new output keeps
+  arriving without being followed. The title says `· scrolled` when the window is
+  away from the tail. `z` gives the log window the whole frame (7.7).
 
 * **Application output only.** Build progress does not belong here. The design
   frames showed `[BLD] Running Xcode build...` and `[OK] Xcode build complete
@@ -525,6 +556,8 @@ Flutter untouched.
 | `r` | Hot reload | States 8, 10, 11 |
 | `r` | Retry build — kill, reap, respawn | State 7 |
 | `R` | Hot restart | States 8, 10, 11 |
+| `↑` / `↓`, `j` / `k` | Scroll the log window | States 6, 8-11 |
+| `z` | Give the log window the whole frame | States 6, 8-11 |
 | `q` | Quit gracefully — Flutter shuts itself down (`⏏`) | States 6, 8-11 |
 | `^C` | Stop — SIGINT forwarded to Flutter (`⏹`) | Any |
 | `m` | Toggle mouse capture | Global |
@@ -532,8 +565,14 @@ Flutter untouched.
 `:` is not bound. It used to open the command prompt, which is gone (3.6), so the
 key now forwards to Flutter like any other.
 
-The digit keys are scoped to the two states that show a list. Everywhere else a
-digit is Flutter's and has to arrive unchanged.
+The digit keys are scoped to the two states that show a list, and the arrows are
+scoped by what is on screen: a log window if there is one, the device list
+otherwise. There is never both. Everywhere else a digit is Flutter's and has to
+arrive unchanged.
+
+`j`, `k` and `z` are the three letters frun takes from Flutter beyond the table
+above, all three for the log window. Flutter binds none of them, and reaching a
+stack trace eight rows tall inside a twelve-row window is worth them.
 
 ### 5.1 Key forwarding
 
@@ -632,6 +671,11 @@ over; it is a floor that the cards must yield to.
   LOG_MIN = 12 rows      enough for one wrapped exception plus context
 ```
 
+The floor is defended during `BUILDING` as well, now that the log stream is on
+screen from the start of the build (3.5). In practice that costs the separators
+during a build and keeps the tracker's stage list, which is the right way round:
+the stage list is the thing changing.
+
 Elements are given up in this order until the floor is met, cheapest first:
 
 | Order | Given up | Reclaimed |
@@ -695,6 +739,13 @@ executed.
 | 3. `RELOAD_DROPPED` (11) | tested | needs Flutter to silently swallow a keypress, which is not reliably forceable |
 | 4. Boot, and `NO_DEVICES` (2) | live | AVD booted through `sys.boot_completed`, name mapped back to `emulator-5554`, picker skipped, straight into the build |
 | 5. Shell cutover | live | `frun` through the shim: flag passthrough, fatal path, exit codes 0 / 1 / 130 |
+| 7.6 Progress denominator | live + tested | `Stage 1/5` on a real build; a test walks a build and forbids the fraction decreasing |
+| 7.6 Log stream during build | live | on screen from the first frame of a real Gradle build |
+| 7.6 Merged picker | live | 16 rows on a real machine, running first, `Pixel_10_Pro_XL` de-duplicated against the running `emulator-5554` |
+| 7.6 Stage elapsed clock | tested | the `building` mock holds a stage started six seconds ago, so one frame proves it |
+| 7.6 Log scrolling | tested | rendered at a size where content overflows; asserts rows change and the offset was not clamped to zero |
+| 7.7 Zoom (`z`) | tested | fills the frame at the right width |
+| 7.7 Marker gap durations | tested | the gap fills on the next stage, and the final row stays blank |
 | Mouse capture | unrun | `m` toggles it; only the geometry is covered, by `--hits` |
 
 Two of these are worth naming as gaps rather than leaving in a table. States 10
@@ -703,12 +754,21 @@ neither has run against real Flutter output. Both are ported line for line from
 `frun-runner`, where they have been in daily use, which is the argument for
 believing them; it is not the same as having seen them.
 
-What the live runs covered, for the record: a picker with 5 devices and a
-`NO_DEVICES` screen with 16 targets, a booted AVD and an attached-emulator run, a
-Gradle build reaching `build finished` in 10.6s, 908 log lines in one session, a
-hot reload, a hot restart, a build failure, `Esc` at the picker, and `q` from the
-log stream. Ten of the eleven state frames have been on screen with real data
-behind them; `RELOAD_DROPPED` is the one that has not.
+What the live runs covered, for the record: a merged picker with 16 rows, a
+`NO_DEVICES` screen, a booted AVD and an attached-emulator run, a Gradle build
+reaching `build finished` in 10.6s, 908 log lines in one session, a hot reload, a
+hot restart, a build failure, a number hotkey selecting a row, `Esc` at the picker,
+and `q` from the log stream. Nine of the eleven state frames have been on screen
+with real data behind them. `RELOAD_DROPPED` has not, and `SINGLE_DEVICE` no longer
+can be.
+
+Two of the 7.6 fixes are covered by render tests rather than live runs, and that is
+a deliberate choice rather than a shortfall. Log scrolling does nothing unless the
+content overflows the window, and the stage clock appears only after three seconds
+— both are conditions that depend on how chatty the app happens to be at the
+moment a key is pressed. Tests can guarantee the condition; a live run can only
+hope for it. Three attempts to catch scrolling live all landed on a window that was
+not full, which is exactly the false pass the tests are written to exclude.
 
 `src/` layout:
 
@@ -1059,19 +1119,37 @@ key events. `FRUN_NO_QUERY=1` skips the query and falls back to halfblocks.
 line was followed by `Error: Custom { kind: NotFound, .. }`. Print the message and
 `std::process::exit`.
 
-### 7.6 Pending: defects, and the fixes decided for them
+### 7.6 Defects found by running it, and their fixes
 
-Found by running it against a real project. All open.
+All five were found by using it against a real project rather than by reading it.
+All five are now fixed. Each entry keeps its diagnosis, because the diagnosis is
+the part worth having later, and records what was actually done.
 
 **Progress bar runs backwards.** `build.rs` computes `done / total` with
 `total = app.stages.len()`, and `flutter.rs` appends stages as Flutter announces
 them. At `Flutter started` that is 1 of 1, so 100%; when Gradle appears it
 becomes 1 of 2, so 50%.
 
-3.4 already forbids a denominator and the implementation contradicts it. The
-total genuinely cannot be known ahead: the stage set is platform-dependent, and
-Flutter skips stages when it can. Fix: indeterminate while building, full on
-completion, and state the count only once it is known.
+3.4 forbids a denominator and the implementation contradicted it.
+
+**Done, and 3.4 is what changed.** The first instinct was to drop the denominator
+entirely — indeterminate while building, full on completion. That was wrong for a
+simpler reason than it looked: the total *is* knowable. The platform is chosen
+before the build starts, and 3.4's own trigger table is per-platform, so the stage
+set follows from the target. `Platform::stage_count` states it: five for iOS,
+Android and macOS, three for web.
+
+It is an upper bound, never a floor, and that asymmetry is what makes it safe.
+Flutter skips stages it does not need — no `pod install` when `Podfile.lock` is
+current, no install when attaching to an app already present — so the bar can
+stall a stage short and then complete, which reads correctly. The failure 3.4
+warned about, a bar reaching 100% and then carrying on, cannot happen from an
+upper bound. `expected_stages` also floors the total at the number of stages
+already seen, so a platform that announces more than predicted still cannot
+overflow it.
+
+The bar now shows `Stage 3/5`, and the count of stages that actually ran on
+completion. A test walks a full build and asserts the fraction never decreases.
 
 **A placeholder occupies the space output should be in.** During `BUILDING` the
 middle area renders `Waiting for the application to start...`, which says nothing
@@ -1092,6 +1170,13 @@ elapsed clock on the stage currently running, appearing only after about three
 seconds (`ELAPSED_AFTER`). Its comment gives the reason, which still holds — a
 spinner alone cannot distinguish slow from stuck.
 
+**Done, all three.** `State::has_logs()` now includes `Building`, so the middle
+region carries the log stream from the moment the build starts, and
+`waiting_for_build` is deleted. The stage rows show a clock once a stage passes
+three seconds. One consequence worth noting: the `LOG_MIN` floor in 6.2 is now
+defended during `BUILDING` as well, so the build tracker keeps its detail and the
+separators are conceded instead.
+
 **Auto-select traps you on the wrong platform.** With only the iPhone simulator
 up, `main.rs` finds exactly one attached device and launches on it. There is no
 way to say "boot Android instead" short of quitting and booting it by hand.
@@ -1104,6 +1189,33 @@ picker, running ones first, always shown. The device from `.frun-last-device` is
 preselected, so the common case stays a single `Enter`. Costs one keystroke per
 run and buys predictability, which beats a heuristic that is right most of the
 time and maddening the rest. This supersedes 3.3 mode 5.
+
+**Done.** `probe::targets` builds the one list: attached devices, then AVDs, then
+shut-down simulators, then the always-available platforms. Verified against a real
+machine at 16 rows.
+
+Three things fell out of it, each a deletion:
+
+* `Boot::Ready` is gone. A target that needs no booting is `boot: None`, which is
+  what an already-running device already said, and both mean the same thing at the
+  moment they are picked: launch now. Two spellings of one fact is one too many.
+* The `▶ Start` / `▶ Run` badge is decided per row rather than per frame. With one
+  merged list a per-frame flag would have labelled a shut-down simulator `Run`
+  purely because a phone happened to be plugged in.
+* `enter()` lost a branch. Both frames now hold the same list, so the only
+  question is whether the chosen row needs starting first.
+
+De-duplication is the one part that needed care: a running emulator appears in
+Flutter's list under its AVD name, because `android_name` resolves the serial back
+through `adb emu avd name`. `targets` skips an AVD whose name is already attached,
+so it never offers to boot a device you are looking at. Booted simulators cannot
+collide, since `simctl` is asked only for shut-down ones.
+
+**`SINGLE_DEVICE` (state 5) is now unreachable in the live flow.** The variant is
+kept rather than removed, and this is a deliberate trade: states 6 through 11 are
+referenced by number throughout this document, and renumbering them to close a gap
+would be a far larger and more error-prone change than leaving one frame that only
+`--dump single` reaches. It stays a rendering target, not a state.
 
 **App logs cannot be scrolled.** `logs.rs` always takes the last `height` rows,
 with no offset. `Up`/`Down` call `select_next`/`select_prev`, which move the
@@ -1118,13 +1230,48 @@ Fix: a `log_scroll` distinct from the device `scroll`, driven by arrows, `j`/`k`
 and the wheel, sticking to the bottom while already there so new output stays
 visible.
 
-### 7.7 Pending: open questions
+**Done.** `log_scroll` counts rows back from the live tail, so zero is the bottom
+and new output arrives without having to be followed. Arrows and `j`/`k` route to
+whichever list is on screen — there is never both — and the wheel moves three rows
+a notch. The title says `· scrolled` when the window is not at the tail, because
+scrolling back and then seeing nothing new is otherwise indistinguishable from the
+app having gone quiet.
+
+The clamp lives in `logs.rs`, not next to the keypress, and that placement is the
+point: the ceiling is a count of *visual* rows, which is only known after wrapping
+at the width the window is actually drawn at. One Dart exception is eight rows, so
+clamping against an entry count would stop in the wrong place.
+
+Verified by two render tests rather than live. Scrolling only does anything when
+the content overflows the window, and whether it does at any given moment depends
+on how chatty the app happens to be — an unreliable thing to hang a check on. The
+tests render at a size where it definitely overflows, assert the visible rows
+change, and assert the offset was not silently clamped to zero, which would make a
+scroll that does nothing look like a pass.
+
+### 7.7 Open questions, now answered
 
 **More log on screen.** Font size is not available to a terminal application; one
 font at one size covers the whole grid, and only Ghostty can change it. The
 app-side equivalent is a key that hides the three static cards and gives the log
-window the screen: at 62 rows that is 17 rows becoming 58. Not started, not
-decided.
+window the screen: at 62 rows that is 17 rows becoming 58.
+
+**Done: `z`.** It bypasses the `Budget` rather than being taught to it, because
+there is no ladder to solve when one block occupies the frame — the whole point of
+the ladder is choosing what to give up, and zoom has already answered that. Two
+details:
+
+* Width is taken unclamped, ignoring the 142-column cap. That cap exists so a card
+  cannot stretch a label to one edge and its value to the other, and there are no
+  cards here; more columns means fewer wrapped rows per entry, which is the entire
+  objective.
+* The footer swaps its own label to `z Cards` when zoomed, so the key that got you
+  here is visibly the key that gets you back. It is the only thing on screen at
+  that point, and a mode with no advertised exit is a trap.
+
+`z` is taken from Flutter's forwarding, which 5.1 otherwise forbids. Flutter binds
+neither `z` nor `j`/`k`, and this is the second of the two places where frun claims
+a letter for the log window.
 
 **Marker stages show `0ms`, and blanking them is the wrong fix.** `Flutter
 started` and `Interactive session ready` are markers; nothing takes zero
@@ -1151,3 +1298,11 @@ applies only to marker rows that have no duration of their own.
 
 A pleasant side effect: the column comes close to summing to `Build time` without
 adding an `other` row or renaming the label.
+
+**Done.** `StageKey::is_marker` names the two rows this applies to, `finish_stage`
+leaves a marker's duration empty instead of timing it, and `start_stage` fills the
+previous marker with the gap as it opens the next stage. The last row keeps a blank
+because nothing follows it, which is the honest answer rather than a zero.
+
+Both timestamps were already being recorded, so this added no measurement — only
+the arithmetic between two numbers that were sitting there unused.

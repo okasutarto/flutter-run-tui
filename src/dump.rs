@@ -258,6 +258,83 @@ mod tests {
         }
     }
 
+    /// Scrolling back is bounded by the oldest row, and the bound is in visual
+    /// rows rather than entries: one wrapped Dart exception is eight rows, so
+    /// counting entries would stop in the wrong place.
+    #[test]
+    fn log_scrolling_stops_at_the_oldest_row() {
+        let mut app = App::new(State::Running);
+        app.log_scroll = 9_999;
+
+        dump(&mut app, 106, 45);
+
+        assert!(
+            app.log_scroll < 9_999,
+            "scroll was never clamped: {}",
+            app.log_scroll
+        );
+
+        // Zero means the live tail, and must survive being asked for.
+        app.log_scroll = 0;
+        dump(&mut app, 106, 45);
+        assert_eq!(app.log_scroll, 0);
+    }
+
+    /// A stage that has been running a while shows a clock.
+    ///
+    /// `frun-runner` had this and the port dropped it. The reason it matters is
+    /// that the spinner cycles identically whether a stage is working or wedged,
+    /// so the elapsed time is the only thing distinguishing the two — and it is
+    /// exactly the kind of row that can vanish without anything failing.
+    #[test]
+    fn a_slow_stage_shows_its_elapsed_time() {
+        let mut app = App::new(State::Building);
+        let frame = strip_sgr(&dump(&mut app, 106, 45));
+
+        assert!(
+            frame.contains("6s") || frame.contains("7s"),
+            "no clock on the running stage:\n{frame}"
+        );
+    }
+
+    /// Scrolling back must actually change what is on screen.
+    ///
+    /// Clamping alone is not evidence of that: a window taller than its content
+    /// clamps every offset to zero, which looks identical to a scroll that does
+    /// nothing. A small frame is used deliberately so the content overflows.
+    #[test]
+    fn scrolling_back_shows_older_rows() {
+        let mut app = App::new(State::Running);
+
+        let at_bottom = dump(&mut app, 80, 24);
+
+        app.log_scroll = 3;
+        let scrolled = dump(&mut app, 80, 24);
+
+        assert!(
+            app.log_scroll > 0,
+            "the window was not full, so this proves nothing"
+        );
+
+        assert_ne!(at_bottom, scrolled, "scrolling back changed no rows");
+    }
+
+    /// Zoom hands the whole frame to the log window, so it must still fill the
+    /// height exactly and stay inside its width.
+    #[test]
+    fn zoom_fills_the_frame() {
+        let mut app = App::new(State::Running);
+        app.zoom = true;
+
+        let frame = dump(&mut app, 106, 45);
+
+        assert_eq!(frame.lines().count(), 45);
+
+        for row in frame.lines() {
+            assert!(width(&strip_sgr(row)) <= 106, "{row}");
+        }
+    }
+
     fn strip_sgr(s: &str) -> String {
         let mut out = String::new();
         let mut chars = s.chars();

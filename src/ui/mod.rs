@@ -33,6 +33,24 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     let area = budget::clamp_width(full);
     let plan = Budget::solve(area, app.state);
 
+    // Zoomed: the middle region and the footer, nothing else. The Budget is
+    // bypassed rather than taught about this, because there is no ladder to solve
+    // when only one block is on screen.
+    //
+    // Width is deliberately `full` and not the clamped area: the 142-column cap
+    // exists so a card cannot stretch a label to one edge and its value to the
+    // other, and there are no cards here. More columns means fewer wrapped rows.
+    if app.zoom && app.state.has_logs() {
+        let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(1)])
+            .spacing(1)
+            .split(full);
+
+        logs::render(frame, rows[0], app);
+        chrome::footer(frame, rows[1], app, &plan);
+
+        return;
+    }
+
     // Vertical stack, built from the same height functions the budget used to
     // decide the ladder.
     let mut rows = vec![Constraint::Length(plan.project_h())];
@@ -82,11 +100,15 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         State::Booting => devices::render_booting(frame, middle, app),
         State::MultipleDevices => devices::render_picker(frame, middle, app, &plan),
         State::SingleDevice => devices::render_single(frame, middle, app),
-        State::Building => waiting_for_build(frame, middle, app),
         State::BuildFailed => build::render_failure(frame, middle, app),
-        State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped => {
-            logs::render(frame, middle, app)
-        }
+
+        // Building included: Flutter is printing during the build and that output
+        // is what fills the long gap before the first stage after `Launching`.
+        State::Building
+        | State::Running
+        | State::ReloadInFlight
+        | State::ReloadFailed
+        | State::ReloadDropped => logs::render(frame, middle, app),
     }
 
     chrome::footer(frame, chunks[i], app, &plan);
@@ -120,16 +142,4 @@ fn detecting(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// State 6. The build tracker above is doing the talking; this space stays
-/// empty rather than showing logs that have not been printed yet.
-fn waiting_for_build(frame: &mut Frame, area: Rect, app: &App) {
-    let lines = vec![
-        Line::default(),
-        Line::from(vec![
-            strong(app.spinner(), theme::AMBER),
-            text("  Waiting for the application to start...", theme::MUTED),
-        ]),
-    ];
 
-    frame.render_widget(Paragraph::new(lines), area);
-}

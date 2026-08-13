@@ -22,6 +22,12 @@ use crate::widgets::{alert_card, card, keycap, spread, strong, text};
 /// every duration stopped at column 66.
 const BAR_MAX: u16 = 44;
 
+/// How long a stage runs before its row starts showing a clock.
+///
+/// The same three seconds `frun-runner` used. Short enough to catch a stall,
+/// long enough that a stage which finishes normally never shows a number.
+const ELAPSED_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
+
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     if !plan.full_build {
         collapsed(frame, area, app);
@@ -70,17 +76,22 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     stages(frame, rows[2], app);
 }
 
-/// Filled bar with a step counter and no denominator.
+/// Filled bar with a step counter, against the stage count the platform implies.
 ///
-/// The total is not knowable in advance: stage count depends on platform, and
-/// Flutter skips stages when it can (no `pod install` if `Podfile.lock` is
-/// current, no install when attaching to an already-installed app). Any
-/// denominator shown mid-build is a guess, and a bar that reaches 100% and then
-/// keeps working is worse than no bar. Once the build ends the count is known
-/// and gets stated.
+/// The denominator used to be `app.stages.len()`, which is the number of stages
+/// *announced so far*. That runs the bar backwards: at `Flutter started` it is 1
+/// of 1 and shows full, and when Gradle appears it becomes 1 of 2 and drops to
+/// half.
+///
+/// The fix is that the total was knowable all along. The platform is chosen
+/// before the build starts and 3.4's trigger table is per-platform, so
+/// `Platform::stage_count` is the answer. It is an upper bound, never a floor,
+/// which is the direction that keeps the bar honest: a skipped stage leaves it
+/// short of full until completion fills it, rather than reaching 100% early and
+/// carrying on.
 fn progress(frame: &mut Frame, area: Rect, app: &App) {
     let done = app.stages.iter().filter(|s| s.done).count();
-    let total = app.stages.len();
+    let total = app.expected_stages();
     let finished = app.state.build_done();
 
     // The bar is bounded; the row it sits on is not.
@@ -88,21 +99,23 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
 
     let filled = if finished {
         bar_w
-    } else if total == 0 {
-        0
     } else {
         bar_w * done / total.max(1)
     };
 
     let right = if finished {
         vec![
-            strong(format!("{total} stages"), theme::EMERALD),
+            // The count that actually ran, not the estimate.
+            strong(format!("{} stages", app.stages.len()), theme::EMERALD),
             text("  complete", theme::MUTED),
         ]
     } else {
         vec![
             text("Stage ", theme::MUTED),
-            strong(format!("{}", done + 1), theme::AMBER),
+            // Clamped, because the estimate is an upper bound and a skipped
+            // stage must not produce `Stage 6/5`.
+            strong(format!("{}", (done + 1).min(total)), theme::AMBER),
+            text(format!("/{total}"), theme::MUTED),
         ]
     };
 
@@ -147,6 +160,21 @@ fn stages(frame: &mut Frame, area: Rect, app: &App) {
                 (app.spinner(), theme::AMBER)
             };
 
+            // A clock on the stage still running, once it has been running long
+            // enough to wonder about. `frun-runner` had this and the reason it
+            // gave still holds: the spinner cycles the same frames whether the
+            // stage is working or wedged, and the elapsed time is the difference.
+            //
+            // Withheld for the first few seconds so a normal fast stage does not
+            // flash a number on its way past.
+            let right = if stage.done || failed {
+                stage.duration.clone()
+            } else if stage.started.elapsed() >= ELAPSED_AFTER {
+                crate::flutter::clock(stage.started.elapsed())
+            } else {
+                String::new()
+            };
+
             spread(
                 w,
                 vec![
@@ -154,7 +182,7 @@ fn stages(frame: &mut Frame, area: Rect, app: &App) {
                     Span::raw(" "),
                     text(stage.label.as_str(), theme::TEXT),
                 ],
-                vec![text(stage.duration.as_str(), theme::MUTED)],
+                vec![text(right, theme::MUTED)],
             )
         })
         .collect();

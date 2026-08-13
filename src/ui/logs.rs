@@ -24,20 +24,28 @@ const GUTTER: u16 = 18;
 /// Four columns covers the 4000-entry cap in `App::log`.
 const INDEX_W: usize = 4;
 
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
+    // Says so when the window is not at the live tail. Without it, scrolling back
+    // and then seeing no new output is indistinguishable from the app having gone
+    // quiet.
+    let count = if app.log_scroll > 0 {
+        format!("[{} entries · scrolled] ", app.logs.len())
+    } else {
+        format!("[{} entries] ", app.logs.len())
+    };
+
     let block = card("APP LOGS STREAM", theme::CYAN).title_top(
-        Line::from(vec![
-            Span::raw(" "),
-            text(format!("[{} entries] ", app.logs.len()), theme::MUTED),
-        ])
-        .right_aligned(),
+        Line::from(vec![Span::raw(" "), text(count, theme::MUTED)]).right_aligned(),
     );
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Reserve the last row for the reload status, when there is one to show.
-    let (stream, status) = if app.state == State::Running {
+    // Reserve the last row for the reload status, but only when there is one to
+    // show. Keyed on `reloading()` rather than on "not Running", because Building
+    // now draws this view too and would otherwise reserve two rows to print
+    // nothing in them.
+    let (stream, status) = if !app.state.reloading() {
         (inner, None)
     } else {
         let split = Rect {
@@ -61,7 +69,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn draw_stream(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_stream(frame: &mut Frame, area: Rect, app: &mut App) {
     let msg_w = area.width.saturating_sub(GUTTER).max(8) as usize;
 
     // Build every visual row first, then keep the tail. Wrapping means one
@@ -97,8 +105,21 @@ fn draw_stream(frame: &mut Frame, area: Rect, app: &App) {
     // Bottom-anchored. A stream that fills from the top puts new output at the
     // top of a mostly blank box, far from where the eye already is.
     let height = area.height as usize;
-    let start = rows.len().saturating_sub(height);
-    let visible: Vec<Line> = rows.into_iter().skip(start).collect();
+
+    // Clamped here rather than where the key is handled, because the ceiling is
+    // the number of *visual* rows and that is only known after wrapping at this
+    // width. One Dart exception is eight rows, so an entry count would be the
+    // wrong unit.
+    let max_scroll = rows.len().saturating_sub(height);
+    app.log_scroll = app.log_scroll.min(max_scroll);
+
+    let start = rows.len().saturating_sub(height + app.log_scroll);
+
+    let visible: Vec<Line> = rows
+        .into_iter()
+        .skip(start)
+        .take(height.max(1))
+        .collect();
 
     let target = if visible.len() < height {
         Rect {

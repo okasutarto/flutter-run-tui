@@ -54,7 +54,18 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
             left.push(text(" Cancel", theme::MUTED));
         }
 
-        State::SingleDevice | State::Building => {
+        State::SingleDevice => {
+            left.extend(keycap("^C", theme::ROSE));
+            left.push(text(" Stop", theme::MUTED));
+        }
+
+        // The log window is on screen during a build now, so the keys that drive
+        // it belong here too.
+        State::Building => {
+            left.extend(keycap("↑↓", theme::CYAN));
+            left.push(text(" Scroll  ", theme::MUTED));
+            left.extend(keycap("z", theme::CYAN));
+            left.push(text(" Zoom  ", theme::MUTED));
             left.extend(keycap("^C", theme::ROSE));
             left.push(text(" Stop", theme::MUTED));
         }
@@ -94,12 +105,20 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
                 left.extend(spans);
             }
 
+            // frun's own keys for the log window.
+            left.extend(keycap("↑↓", theme::CYAN));
+            left.push(text(" Scroll  ", theme::MUTED));
+
+            left.extend(keycap("z", theme::CYAN));
+            left.push(text(
+                if app.zoom { " Cards  " } else { " Zoom  " },
+                theme::MUTED,
+            ));
+
             // Forwarded to Flutter rather than handled here, so they get no hit
             // region: there is nothing for frun to click on its own behalf.
             left.extend(keycap("h", theme::CYAN));
             left.push(text(" Help  ", theme::MUTED));
-            left.extend(keycap("c", theme::CYAN));
-            left.push(text(" Clear  ", theme::MUTED));
 
             left.extend(action_hint(Action::Quit, theme::ROSE));
         }

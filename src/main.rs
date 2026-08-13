@@ -37,7 +37,6 @@ use ratatui::Terminal;
 
 use data::{Action, App, Msg, State};
 use flutter::Session;
-use probe::Boot;
 use ui::logo::Logo;
 
 /// What the command line asked for.
@@ -219,38 +218,43 @@ fn probe_report() {
     match probe::devices(&last) {
         Err(reason) => println!("devices   FATAL  {reason}"),
 
-        Ok(devices) => {
-            let attached = devices.iter().filter(|d| d.attached()).count();
+        Ok(reported) => {
+            println!("reported  {} from flutter devices --machine", reported.len());
 
-            println!(
-                "devices   {} reported, {attached} attached -> {}",
-                devices.len(),
-                match attached {
-                    0 => "no-devices",
-                    1 => "single",
-                    _ => "picker",
-                }
-            );
-
-            for d in &devices {
+            for d in &reported {
                 println!(
-                    "  {} {:<24} {:<16} {:<14} {}{}",
+                    "  {} {:<24} {:<16} {:<14} {}",
                     d.platform.glyph(),
                     d.name,
                     d.id,
                     d.target_platform,
                     d.sdk,
-                    if d.last_used { "  [last used]" } else { "" },
                 );
             }
 
-            if attached == 0 {
-                println!();
-                println!("bootable");
+            let targets = probe::targets(reported);
+            let attached = targets.iter().any(probe::Device::attached);
 
-                for t in probe::bootable(&devices) {
-                    println!("  {} {:<24} {:?}", t.platform.glyph(), t.name, t.boot);
-                }
+            println!();
+            println!(
+                "picker    {} rows, frame {}",
+                targets.len(),
+                if attached { "picker" } else { "no-devices" }
+            );
+
+            for (i, t) in targets.iter().enumerate() {
+                println!(
+                    "  {}{} {:<24} {:<16} {}{}",
+                    if t.last_used { "*" } else { " " },
+                    t.platform.glyph(),
+                    t.name,
+                    t.id,
+                    match &t.boot {
+                        None => "run now".to_string(),
+                        Some(boot) => format!("{boot:?}"),
+                    },
+                    if i == 0 { "   <- Enter" } else { "" },
+                );
             }
         }
     }
@@ -319,21 +323,10 @@ fn detect(tx: &Sender<Msg>) {
     std::thread::spawn(move || {
         let last = probe::last_device();
 
-        let msg = match probe::devices(&last) {
-            Ok(devices) => {
-                // Only pay for the bootable scan when it is going to be shown.
-                // With something attached it is three spawns of wasted work.
-                let bootable = if devices.iter().any(probe::Device::attached) {
-                    Vec::new()
-                } else {
-                    probe::bootable(&devices)
-                };
-
-                Ok((devices, bootable))
-            }
-
-            Err(e) => Err(e),
-        };
+        // The bootable scan is no longer conditional. It used to run only when
+        // nothing was attached, which is exactly why booting was unreachable the
+        // rest of the time. Two extra spawns, both of which answer immediately.
+        let msg = probe::devices(&last).map(probe::targets);
 
         let _ = tx.send(Msg::Devices(msg));
     });
@@ -504,6 +497,11 @@ fn event_loop(app: &mut App, ctx: &mut Ctx, art: &mut Logo) -> io::Result<()> {
                     app.hover = app.hit_test(mouse.column, mouse.row);
                 }
 
+                // Three rows a notch, which is what a wheel click means in every
+                // other scrolling view. One row per notch reads as a stuck wheel.
+                MouseEventKind::ScrollDown if app.state.has_logs() => app.scroll_logs(-3),
+                MouseEventKind::ScrollUp if app.state.has_logs() => app.scroll_logs(3),
+
                 MouseEventKind::ScrollDown => app.select_next(),
                 MouseEventKind::ScrollUp => app.select_prev(),
 
@@ -543,7 +541,7 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
             ctx.done = true;
         }
 
-        Msg::Devices(Ok((devices, bootable))) => devices_answered(app, ctx, devices, bootable),
+        Msg::Devices(Ok(targets)) => devices_answered(app, ctx, targets),
 
         Msg::Booted(Ok(id)) => {
             app.boot_started = None;
@@ -588,59 +586,44 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
     }
 }
 
-/// State 1 answered. DESIGN.md 4 branches here on how many devices answered.
+/// State 1 answered.
 ///
-/// The count is of *attached* devices, not of everything Flutter listed. macOS
-/// and Chrome appear in every answer on a Mac, so counting them would make
-/// `NO_DEVICES` unreachable and its "Nothing is attached" subtitle false.
+/// The picker is always shown, per DESIGN.md 7.6. It used to auto-launch when
+/// exactly one device was attached, on the reasoning that one option is not a
+/// choice. Using it disproved that: with only the iPhone simulator up there was
+/// no way to ask for Android, because booting is a choice and auto-launch removed
+/// it. One keystroke per run buys back the ability to say what you meant.
 ///
-/// The picker still lists everything, because that is the one screen whose job
-/// is choosing: the branch decides whether to ask, and the list decides what can
-/// be answered.
-fn devices_answered(
-    app: &mut App,
-    ctx: &mut Ctx,
-    devices: Vec<probe::Device>,
-    bootable: Vec<probe::Device>,
-) {
-    let attached = devices.iter().filter(|d| d.attached()).count();
+/// The remembered device is preselected, so that keystroke is a bare `Enter`.
+///
+/// Two frames, one list. Which frame depends only on whether anything is
+/// attached, because "nothing is attached, these can be started" is the honest
+/// heading in that case and a poor one in the other.
+fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
+    if targets.is_empty() {
+        app.fatal = Some("No device(s) detected".into());
+        ctx.done = true;
 
-    match attached {
-        0 => {
-            if bootable.is_empty() {
-                app.fatal = Some("No device(s) detected".into());
-                ctx.done = true;
-                return;
-            }
-
-            app.devices = bootable;
-            app.selected_device = 0;
-            app.goto(State::NoDevices);
-        }
-
-        // Nothing to choose, so asking would be a keystroke spent on a foregone
-        // conclusion.
-        //
-        // ponytail: one attached phone wins even when macOS and Chrome are also
-        // listed, which is what frun is for. `fvm flutter run -d chrome` covers
-        // the rare case; a prompt on every single-device run would not be worth
-        // what it costs.
-        1 => {
-            let Some(device) = devices.into_iter().find(probe::Device::attached) else {
-                return;
-            };
-
-            app.devices = Vec::new();
-            app.goto(State::SingleDevice);
-            launch(app, ctx, device);
-        }
-
-        _ => {
-            app.devices = devices;
-            app.selected_device = 0;
-            app.goto(State::MultipleDevices);
-        }
+        return;
     }
+
+    let attached = targets.iter().any(probe::Device::attached);
+
+    // `targets` is already ordered running-first, so this is the top row unless
+    // the remembered device is further down.
+    app.selected_device = targets
+        .iter()
+        .position(|d| d.last_used)
+        .unwrap_or(0);
+
+    app.devices = targets;
+    app.scroll = 0;
+
+    app.goto(if attached {
+        State::MultipleDevices
+    } else {
+        State::NoDevices
+    });
 }
 
 /// A device that was booted but is not in any list yet.
@@ -779,8 +762,23 @@ fn key_press(
 
         KeyCode::Char('R') => return Ok(apply(app, ctx, Action::Restart)),
 
+        // Arrows and `j`/`k` mean the log window wherever one is on screen, and
+        // the device list otherwise. There is never both.
+        //
+        // `j`/`k` are taken from Flutter here, which 5.1 otherwise forbids. Flutter
+        // binds neither, and reaching a stack trace eight rows tall in a window
+        // twelve rows deep is worth the two letters.
+        KeyCode::Down | KeyCode::Char('j') if app.state.has_logs() => app.scroll_logs(-1),
+        KeyCode::Up | KeyCode::Char('k') if app.state.has_logs() => app.scroll_logs(1),
+
         KeyCode::Down => app.select_next(),
         KeyCode::Up => app.select_prev(),
+
+        // 7.7: hand the whole window to the log stream. The three cards above are
+        // static once a run is under way, so on a short terminal they are 26 rows
+        // describing things that are not changing while the only region that is
+        // gets twelve.
+        KeyCode::Char('z') => app.zoom = !app.zoom,
 
         KeyCode::Enter => return Ok(enter(app, ctx)),
 
@@ -816,36 +814,24 @@ fn key_press(
 /// `Enter` means "select" in the two states that offer a list, and nothing
 /// anywhere else.
 fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
-    match app.state {
-        State::MultipleDevices => {
-            let Some(device) = app.selected().cloned() else {
-                return false;
-            };
+    if !matches!(app.state, State::NoDevices | State::MultipleDevices) {
+        forward(ctx, b"\r");
+        return false;
+    }
 
+    let Some(device) = app.selected().cloned() else {
+        return false;
+    };
+
+    // One list, so one branch: either the target has to be started first or it is
+    // ready to run. Which frame the row was on does not matter.
+    match device.boot.clone() {
+        None => {
             app.devices = Vec::new();
             launch(app, ctx, device);
         }
 
-        State::NoDevices => {
-            let Some(device) = app.selected().cloned() else {
-                return false;
-            };
-
-            let Some(boot) = device.boot.clone() else {
-                return false;
-            };
-
-            // Desktop and web need no boot at all, so they skip State 3 entirely.
-            if let Boot::Ready(_) = boot {
-                let mut ready = device;
-                ready.boot = None;
-
-                app.devices = Vec::new();
-                launch(app, ctx, ready);
-
-                return false;
-            }
-
+        Some(boot) => {
             app.boot_name = device.name.clone();
             app.boot_started = Some(std::time::Instant::now());
             app.goto(State::Booting);
@@ -856,8 +842,6 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
                 let _ = tx.send(Msg::Booted(probe::boot(&boot)));
             });
         }
-
-        _ => forward(ctx, b"\r"),
     }
 
     false
