@@ -45,9 +45,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
     frame.render_widget(block, area);
 
     let body = if plan.logo {
-        // 20 columns, not 22: wide enough for `Cross-Platform CLI` at 18 cells
-        // and nothing more. The artwork itself is narrower still, see `logo`.
-        let split = Layout::horizontal([Constraint::Length(20), Constraint::Min(30)]).split(inner);
+        // Sized to the artwork plus a margin, nothing more.
+        //
+        // It was 20 columns to fit an 18-cell `Cross-Platform CLI` subtitle.
+        // That label is gone, so the justification went with it, and the six
+        // columns it was holding belong to the metadata beside it.
+        let split =
+            Layout::horizontal([Constraint::Length(ART_W + 3), Constraint::Min(30)]).split(inner);
 
         logo(frame, split[0], art);
         split[1]

@@ -80,7 +80,23 @@ There is no top header bar. The command string it used to carry
 already the component describing what is being run and where.
 
 ### 3.1 `ProjectCard` (2-Column Layout)
-* **Left Column (4 Cols)**: Features a high-contrast Flutter Engine graphic logo badge (`my-2` vertical margin), version text (`Flutter Engine`), and `Cross-Platform CLI` subtitle without outer card borders.
+* **Left Column**: the Flutter mark and nothing else, centred on both axes.
+
+  A real image, not block art: the PNG is embedded with `include_bytes!` and
+  rendered through whichever graphics protocol the terminal reports, falling
+  back to halfblocks. Embedded rather than read from disk because frun runs from
+  whichever project directory you are in, so a relative path is useless and an
+  absolute one is fragile. `flutter-trim.png` and not `flutter.png`: the latter
+  carries ~79px of transparent padding per side, which renders as dead columns.
+
+  Five rows in an 11-column box, inside a column three columns wider. `Resize::Fit`
+  scales to whichever dimension binds first, so at five rows the height binds and
+  extra width goes unused.
+
+  The `Flutter Engine` and `Cross-Platform CLI` labels this section used to
+  specify are gone. Both restated what the mark and the metadata column beside
+  it already said, and `Flutter Engine` was inaccurate as well: the versions
+  shown are the framework and the Dart SDK, not the engine.
 * **Right Column (8 Cols)**: Key-value table showing:
   * `Project`: `cwclub`
   * `Version`: `1.4.0+12`
@@ -89,6 +105,15 @@ already the component describing what is being run and where.
   * **3-Column Technical Stats Row**: `Flutter` (`3.27.1`), `Dart` (`3.7.2`), `Runtime` (`(FVM)`).
 * **Row Separators**: a hairline rule between metadata rows, in the border
   colour. Costs 3 rows; see 6.2 for what that displaces.
+* **Widths follow the terminal.** Values right-align to the card border and the
+  separators span the block. An absolute content cap was tried and removed: at
+  142 columns the border reached the window while the values stopped at column
+  44, and the separators stopped with them, hanging in open space.
+* **Technical stats row** is three columns spaced across the width: Flutter
+  flush left, Dart centred, Runtime flush right. Not a single spread line, which
+  pushed `Runtime (FVM)` to the border and cut it off from the two values it
+  belongs with, and not one left-aligned group, which left two thirds of the row
+  empty.
 * **Header Bar**: Includes path tag `~/cwclub` and a metadata `[COPY]` button.
 
 ### 3.2 `SelectedTargetCard`
@@ -199,7 +224,12 @@ devices answered.
   the Dart VM, Gradle daemon, Xcode and simulator process tree for a number
   that is rarely acted on.
 
-* **Progress Bar**: filled bar with a step counter, but **no denominator**.
+* **Progress Bar**: filled bar with a step counter, but **no denominator**. A
+  blank row separates it from the stage list.
+
+  The bar itself is capped at 44 columns; the row it sits on is not, so the
+  stage count still right-aligns to the border. A 118-column bar conveys nothing
+  a short one does not and turns a glance into a scan.
   `Step 4`, not `Step 4/4`, and no percentage.
 
   The total is not knowable in advance. Stage count depends on platform, and
@@ -293,7 +323,21 @@ to make, and the row is more useful spent on the keys that do.
 
 Contents adapt to the active state, since a key that does nothing here should
 not be advertised: `↑↓ Enter Esc` during discovery, `r R q ^C` while running.
-Mouse state (`mouse on` / `mouse off`) sits at the right edge.
+The right-hand group is optional and priority-ordered, dropped whole until it
+fits: mouse state, then what the layout gave up, then the prototype position.
+Keys are never dropped. `spread` pads to fit and silently truncates past that,
+so without this the tail of the cheatsheet simply disappeared on the running
+state — and a cheatsheet that truncates is worse than a short one, because you
+cannot tell whether the key you want is absent or just cut off.
+
+Mouse state appears **only when capture is on**. Printing `mouse off` while off
+is the default spends a permanent slot on a non-event; capture is worth naming,
+because it takes text selection away from the terminal and the only other
+symptom is that copying a stack trace quietly stops working.
+
+`Flutter <version> CLI` was here and is gone. The version is already on the
+ProjectCard, it changed no decision taken from the footer, and it cost 18
+columns on the one row that must never truncate.
 
 Note: this replaces the hotkey legend that 3.6 places under the prompt.
 Listing the same keys twice on one screen is redundant, and the footer
