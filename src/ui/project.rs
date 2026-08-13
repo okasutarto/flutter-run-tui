@@ -20,8 +20,9 @@ use crate::widgets::{card, elide, field, pill, separator, spread, strong, text};
 /// card border, which is also what the design frames show.
 const BRANCH_MAX: usize = 30;
 
-/// Width of the logo artwork box, inside the wider left column.
+/// Size of the logo artwork box, inside the wider left column.
 const ART_W: u16 = 11;
+const ART_H: u16 = 5;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut Logo) {
     if !plan.full_cards {
@@ -207,22 +208,20 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
 fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
     // Centred on both axes inside the left column.
     //
-    // The block is 7 rows (artwork, blank, wordmark) but the column is as tall
-    // as the metadata beside it, so `Fill` on either side distributes the
-    // remainder instead of leaving the mark pinned to the top. Using Fill rather
-    // than arithmetic also gets odd remainders right without a special case.
+    // `Fill` on both sides, not one. A single leading Fill absorbs the whole
+    // remainder and pins the artwork to the opposite edge, which is how the mark
+    // ended up sitting on the floor of the column. Two Fills of equal weight
+    // split the slack, and get an odd remainder right without a special case.
     let rows = Layout::vertical([
         Constraint::Fill(1),
-        Constraint::Length(5), // artwork
-        Constraint::Length(1), // blank
-        Constraint::Length(1), // wordmark
+        Constraint::Length(ART_H),
         Constraint::Fill(1),
     ])
     .split(area);
 
-    // `Resize::Fit` scales to whichever dimension binds first, so at 5 rows the
-    // height binds and any extra width goes unused. Bounding the box makes the
-    // size deliberate, and the Fill columns centre it.
+    // `Resize::Fit` scales to whichever dimension binds first, so at five rows
+    // the height binds and any extra width goes unused. Bounding the box makes
+    // the size deliberate, and the Fill columns centre it.
     let art_cols = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(ART_W),
@@ -231,9 +230,4 @@ fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
     .split(rows[1]);
 
     art.render(frame, art_cols[1]);
-
-    frame.render_widget(
-        Paragraph::new(Line::from(strong("Flutter Engine", theme::CYAN)).centered()),
-        rows[3],
-    );
 }

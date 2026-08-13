@@ -150,7 +150,6 @@ pub fn render_booting(frame: &mut Frame, area: Rect, app: &App) {
 /// the launch itself.
 pub fn render_single(frame: &mut Frame, area: Rect, app: &App) {
     let lines = vec![
-        Line::default(),
         Line::from(vec![
             strong(app.spinner(), theme::CYAN),
             text("  Launching Flutter...", theme::TEXT),
