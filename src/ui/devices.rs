@@ -24,11 +24,24 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Slot layout, not a line list: each row below is its own widget, so a
+    // blank row is an empty slot rather than a pushed `Line::default()`.
+    //
+    // Only the device list is flexible. Everything else is one row, and the
+    // blanks are declared here so the indices below stay readable.
+    const SUBTITLE: usize = 0;
+    const TITLE: usize = 2;
+    const LIST: usize = 4;
+    const HINT: usize = 6;
+
     let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(2),
-        Constraint::Length(1),
+        Constraint::Length(1), // subtitle
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // "Start a Device"
+        Constraint::Length(1), // blank
+        Constraint::Min(2),    // the list
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // hint
     ])
     .split(inner);
 
@@ -37,19 +50,19 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
             "Nothing is attached. These can be started:",
             theme::MUTED,
         ))),
-        rows[0],
+        rows[SUBTITLE],
     );
 
     frame.render_widget(
         Paragraph::new(Line::from(strong("Start a Device", theme::TEXT))),
-        rows[1],
+        rows[TITLE],
     );
 
-    list(frame, rows[2], app, plan, true);
+    list(frame, rows[LIST], app, plan, true);
 
     frame.render_widget(
         Paragraph::new(spread(
-            rows[3].width,
+            rows[HINT].width,
             vec![
                 strong(format!("{} ", theme::GLYPH_BOLT), theme::AMBER),
                 text("Use ↑↓ arrow keys & Enter to launch device", theme::MUTED),
@@ -60,7 +73,7 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
                 text(" to launch", theme::MUTED),
             ],
         )),
-        rows[3],
+        rows[HINT],
     );
 }
 
