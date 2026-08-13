@@ -225,7 +225,7 @@ fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
     let art_cols = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(ART_W),
-        Constraint::Fill(1),
+        Constraint::Fill(2),
     ])
     .split(rows[1]);
 
