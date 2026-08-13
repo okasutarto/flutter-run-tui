@@ -20,6 +20,9 @@ use crate::widgets::{card, elide, field, pill, separator, spread, strong, text};
 /// card border, which is also what the design frames show.
 const BRANCH_MAX: usize = 30;
 
+/// Width of the logo artwork box, inside the wider left column.
+const ART_W: u16 = 11;
+
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut Logo) {
     if !plan.full_cards {
         collapsed(frame, area, app);
@@ -202,29 +205,35 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
 /// each and have to be paid for in the budget, or the card clips them in
 /// silence.
 fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
+    // Centred on both axes inside the left column.
+    //
+    // The block is 7 rows (artwork, blank, wordmark) but the column is as tall
+    // as the metadata beside it, so `Fill` on either side distributes the
+    // remainder instead of leaving the mark pinned to the top. Using Fill rather
+    // than arithmetic also gets odd remainders right without a special case.
     let rows = Layout::vertical([
+        Constraint::Fill(1),
         Constraint::Length(5), // artwork
         Constraint::Length(1), // blank
-        Constraint::Length(1), // Flutter Engine
+        Constraint::Length(1), // wordmark
+        Constraint::Fill(1),
     ])
     .split(area);
 
-    // The artwork gets a narrower box than the column it sits in.
-    //
-    // `Resize::Fit` scales to whichever dimension binds first, so at 20 columns
-    // by 5 rows the height binds and the extra width goes unused regardless.
-    // Constraining it makes the mark compact on purpose rather than by accident,
-    // and leaves the labels the column's full width.
-    art.render(
-        frame,
-        Rect {
-            width: rows[0].width.min(11),
-            ..rows[0]
-        },
-    );
+    // `Resize::Fit` scales to whichever dimension binds first, so at 5 rows the
+    // height binds and any extra width goes unused. Bounding the box makes the
+    // size deliberate, and the Fill columns centre it.
+    let art_cols = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(ART_W),
+        Constraint::Fill(1),
+    ])
+    .split(rows[1]);
+
+    art.render(frame, art_cols[1]);
 
     frame.render_widget(
-        Paragraph::new(Line::from(strong("Flutter Engine", theme::CYAN))),
-        rows[2],
+        Paragraph::new(Line::from(strong("Flutter Engine", theme::CYAN)).centered()),
+        rows[3],
     );
 }

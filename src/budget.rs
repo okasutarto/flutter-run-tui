@@ -110,9 +110,12 @@ impl Budget {
     /// lost its `Type` field and its command string.
     const TITLE_GAP: u16 = 1;
 
-    /// Rows the logo column needs: 5 of artwork, then a blank before each of the
-    /// two label lines.
-    const LOGO_H: u16 = 9;
+    /// Rows the logo block needs: 5 of artwork, a blank, and the wordmark.
+    ///
+    /// Charging only what is drawn matters here. The column ends up as tall as
+    /// the metadata beside it anyway, and the difference is what `logo` uses to
+    /// centre the mark vertically.
+    const LOGO_H: u16 = 7;
 
     /// ProjectCard.
     ///
