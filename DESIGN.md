@@ -581,3 +581,103 @@ rendering a broken grid.
 stretch a label to one edge and its value to the other. The log window is
 exempt and takes every column available, because more columns means fewer
 wrapped rows per entry.
+
+---
+
+## 🚧 7. Implementation status
+
+### 7.1 Done
+
+All eleven state frames render, at any terminal size, verified rather than
+eyeballed. `src/` layout:
+
+```text
+  theme.rs     palette + Nerd Font glyph vocabulary
+  data.rs      App state, the 11-variant State enum, mock data per state
+  budget.rs    responsive ladder; owns every component height
+  widgets.rs   pill, badge, keycap, card, spread, field, separator, elide, wrap
+  dump.rs      TestBackend -> Buffer -> ANSI, plus hit probing and row reports
+  ui/          mod (assembly), project, target, devices, build, logs, chrome, logo
+```
+
+Verification tooling, which exists because layout bugs here are silent:
+
+```text
+  --dump <state> [WxH]   render one frame to stdout
+  --all [WxH]            every state in flow order
+  --hits <state> [WxH]   probe every clickable region
+  --rows <state> [W]     the degradation ladder across heights
+  --states               list the slugs
+  --demo                 walk the flow on a timer
+```
+
+18 tests. The two that matter most: no row in any state at any size exceeds
+its width budget (measured in cells, not bytes), and every state fills exactly
+the height it was given.
+
+Crates: `ratatui`, `textwrap`, `unicode-width`, `ratatui-image`, `image`.
+`ratatui-image` runs with default features off, because the default set
+dynamically links libchafa.
+
+### 7.2 Not done
+
+**Every value on screen is static.** Nothing is read, nothing is spawned. No
+pty, no `flutter` invocation, no git, no device query. `Tab` moves between
+states because in a prototype nothing else can.
+
+### 7.3 Remaining work, in order
+
+**1. Project metadata.** `pubspec.yaml` for name and version, `git branch
+--show-current` and `git status --porcelain` for branch and dirty count, and
+`bin/cache/flutter.version.json` inside the FVM SDK for the Flutter and Dart
+versions.
+
+Read the manifest, not `fvm flutter --version --machine`: the latter boots the
+Dart VM and costs 3-4 seconds, and `frun.zsh` already worked this out. Resolve
+the SDK through `.fvm/flutter_sdk` if the symlink exists, otherwise the pin in
+`.fvmrc` against `FVM_CACHE_PATH`.
+
+Cheapest step and the first one that is verifiable in a real project. Scope is
+one card.
+
+**2. Device discovery.** `flutter devices --machine` through `serde_json`, plus
+`adb -s <serial> emu avd name` to turn `emulator-5554` into a name that means
+something, `emulator -list-avds` and `xcrun simctl list devices available -j`
+for bootable targets.
+
+Keep `sdkNameAndVersion`, `targetPlatform` and the `emulator` flag, all of
+which `_frun_device_list` currently discards, because 3.2 needs them.
+
+Brings four states to life at once: Detecting, NoDevices, MultipleDevices,
+SingleDevice.
+
+**3. pty and the Flutter parser.** The bulk of the work, and where all the
+regression risk lives. `portable-pty` to spawn, `vte` to emulate the terminal
+rather than stripping escapes with regexes, then the state machine from
+`frun-runner`: platform-dependent stage detection, the hot reload ack/timeout
+machine, `printBox` passthrough, startup log buffering.
+
+`BUILD_FAILED` has to be built from nothing. `frun-runner` has no
+build-failure detection at all: if Gradle dies the output falls through to raw
+passthrough and the spinner simply stops.
+
+**4. Boot.** `emulator -avd` with `sys.boot_completed` polling capped at 180
+seconds, and `xcrun simctl bootstatus -b`. Depends on 2.
+
+Then: reduce `frun.zsh` to a shim, and decide whether `frun-tui` parses
+`frun-theme.zsh` or owns the palette outright.
+
+### 7.4 Two traps this codebase has already sprung
+
+Both cost real debugging time. They will recur.
+
+**Every drawn row must be charged in `budget.rs`.** The Layout splits fixed
+blocks by those heights, so a row added to a card without a row added to the
+budget is clipped in silence — no error, no warning, content simply gone. It
+has happened three times: the title gap, the logo labels, and the blank under
+the progress bar.
+
+**A failed build leaves the old binary in place.** `cargo build` fails,
+`./target/release/frun-tui` still runs, and the output looks stale rather than
+broken. Use `cargo run --release --` so a compile error surfaces instead of
+last-good output.
