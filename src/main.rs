@@ -238,7 +238,7 @@ fn probe_report() {
                 );
             }
 
-            let targets = probe::targets(reported);
+            let targets = probe::targets(reported, &probe::last_device());
             let attached = targets.iter().any(probe::Device::attached);
 
             println!();
@@ -332,7 +332,7 @@ fn detect(tx: &Sender<Msg>) {
         // The bootable scan is no longer conditional. It used to run only when
         // nothing was attached, which is exactly why booting was unreachable the
         // rest of the time. Two extra spawns, both of which answer immediately.
-        let msg = probe::devices(&last).map(probe::targets);
+        let msg = probe::devices(&last).map(|d| probe::targets(d, &last));
 
         let _ = tx.send(Msg::Devices(msg));
     });

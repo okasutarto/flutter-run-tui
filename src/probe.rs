@@ -495,7 +495,7 @@ pub enum Boot {
 /// the slowest options last.
 ///
 /// The mobile-only restriction the shell version applied is lifted, per 3.3.
-pub fn targets(reported: Vec<Device>) -> Vec<Device> {
+pub fn targets(reported: Vec<Device>, last_used: &str) -> Vec<Device> {
     let (attached, always_available): (Vec<Device>, Vec<Device>) =
         reported.into_iter().partition(|d| d.attached());
 
@@ -528,6 +528,25 @@ pub fn targets(reported: Vec<Device>) -> Vec<Device> {
     // macOS, Chrome and friends. No boot step and nothing to wait for, which is
     // why they sit last rather than competing with a device you can see.
     targets.extend(always_available);
+
+    // Stamped here, on the merged list, and not only in `devices()`.
+    //
+    // A bootable row comes from `target()`, which had no way to know about the
+    // remembered device and hardcoded `false`. So the chip vanished exactly when
+    // it was most useful: the simulator you always reach for is off, and nothing
+    // on screen says which one that was.
+    //
+    // Note the asymmetry this cannot fix. An iOS simulator carries the same UDID
+    // whether running or shut down, so it matches either way. A running Android
+    // emulator is `emulator-5554` while its bootable row is the AVD name, so
+    // those never match and Android cannot be recovered this way once it is off.
+    for device in &mut targets {
+        device.last_used = !device.id.is_empty() && device.id == last_used;
+    }
+
+    // Sorted once, at the end. `devices()` sorts its own half, and the bootable
+    // rows appended after it would otherwise undo that.
+    targets.sort_by_key(|d| !d.last_used);
 
     targets
 }

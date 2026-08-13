@@ -1377,3 +1377,19 @@ look like an accident.
 **The `/N` denominator is back**, by request. It remains an upper bound rather than
 a fact: iOS can show `/5` and run four, because CocoaPods is skipped when
 `Podfile.lock` is current. The completed row states the real count.
+
+**`last used` was missing on bootable rows.** `target()` builds those and had no
+way to know about the remembered device, so it hardcoded `false`. The chip
+therefore vanished in the one situation it exists for: the simulator you always
+reach for is off, and nothing on screen says which one that was.
+
+Stamped on the merged list in `targets()` now, and sorted there too, since
+`devices()` sorts only its own half and the bootable rows appended after it undid
+that.
+
+One asymmetry this cannot fix. An iOS simulator carries the same UDID running or
+shut down, so it matches either way. A running Android emulator is
+`emulator-5554` while its bootable row is the AVD name, so those never match and
+Android cannot be recovered from `.frun-last-device` once the emulator is off.
+Fixing that means storing the AVD name rather than the serial, which then breaks
+the match while it *is* running, so it needs both.

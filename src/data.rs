@@ -963,8 +963,15 @@ fn mock_devices(state: State) -> Vec<Device> {
         target_platform: String::new(),
         sdk: String::new(),
         virtual_device: platform.needs_boot(),
+        // Set on one row below rather than here, so `--dump no-devices` shows the
+        // case the chip exists for: the device you always reach for is off.
         last_used: false,
         boot: Some(boot),
+    };
+
+    let remembered = |mut d: Device| {
+        d.last_used = true;
+        d
     };
 
     match state {
@@ -983,12 +990,12 @@ fn mock_devices(state: State) -> Vec<Device> {
                 Platform::Android,
                 Boot::Avd("Pixel_8".into()),
             ),
-            bootable(
+            remembered(bootable(
                 "8A3F91C2-4D2E",
                 "iPhone 17 Pro",
                 Platform::Ios,
                 Boot::Sim("8A3F91C2-4D2E".into()),
-            ),
+            )),
             bootable(
                 "1B7C22E9-90AF",
                 "iPhone 17 Pro Max",
