@@ -177,6 +177,7 @@ impl Budget {
     ///
     /// ```text
     ///   progress bar                              1
+    ///   blank                                     1
     ///   one row per stage                         5 finished / 3 mid-build
     /// ```
     pub fn build_h(&self, state: State) -> u16 {
@@ -186,7 +187,7 @@ impl Budget {
 
         let stages = if state.build_done() { 5 } else { 3 };
 
-        1 + stages + 2 + Self::TITLE_GAP
+        1 + 1 + stages + 2 + Self::TITLE_GAP
     }
 
     pub fn prompt_h(&self) -> u16 {
@@ -324,11 +325,11 @@ mod tests {
     fn full_chrome_matches_the_spec_arithmetic() {
         // DESIGN.md 6.2 quotes 40, which was an estimate written before the
         // cards existed. 44 is enumerated from the rows they actually draw:
-        // project 12, target 14, build 9, prompt 3, footer 1, five gaps.
+        // project 12, target 14, build 10, prompt 3, footer 1, five gaps.
         let chrome = Budget::full().chrome(State::Running);
 
         assert_eq!(
-            chrome, 44,
+            chrome, 45,
             "enumerated from the rows each card actually draws"
         );
     }

@@ -46,10 +46,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+    // Slot model: the blank between the bar and the stage list is its own slot.
+    // Charged in `Budget::build_h`, without which the Layout would keep the old
+    // height and clip the last stage.
+    let rows = Layout::vertical([
+        Constraint::Length(1), // progress bar
+        Constraint::Length(1), // blank
+        Constraint::Min(1),    // stage list
+    ])
+    .split(inner);
 
     progress(frame, rows[0], app);
-    stages(frame, rows[1], app);
+    stages(frame, rows[2], app);
 }
 
 /// Filled bar with a step counter and no denominator.

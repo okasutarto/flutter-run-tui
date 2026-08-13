@@ -528,18 +528,18 @@ draw rather than estimated:
   SELECTED TARGET        14 rows   2 border + 1 title gap + 11 body
                                    body = banner + blank + 4 fields + blank
                                           + command + 3 separators
-  BUILD PHASE             9 rows   2 border + 1 title gap + bar + 5 stages
+  BUILD PHASE            10 rows   2 border + 1 title gap + bar + blank + 5 stages
   prompt bar              3 rows
   footer                  1 row
   gaps between blocks     5 rows   blocks - 1, not a constant
   ────────────────────────────────
-  TOTAL                  44 rows
+  TOTAL                  45 rows
 ```
 
 At the 106x45 target that leaves the log window **1 row**. A five-line Dart
 exception, wrapped at 84 columns of message space, occupies **8 rows**. So a
 single error would not fit on screen at the design's own target size, and full
-detail now needs a 56-row window.
+detail now needs a 57-row window.
 
 Two notes on the arithmetic, both learned by getting it wrong:
 
