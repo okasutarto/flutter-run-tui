@@ -708,8 +708,38 @@ passthrough and the spinner simply stops.
 **4. Boot.** `emulator -avd` with `sys.boot_completed` polling capped at 180
 seconds, and `xcrun simctl bootstatus -b`. Depends on 2.
 
-Then: reduce `frun.zsh` to a shim, and decide whether `frun-tui` parses
-`frun-theme.zsh` or owns the palette outright.
+**5. Cut over.** Last, not first: all three shell files stay working until the
+Rust version reaches parity, so `frun` keeps running throughout.
+
+| File | Fate |
+| :--- | :--- |
+| `frun-runner` | deleted. All 1,748 lines are step 3. |
+| `frun.zsh` | 1,201 lines down to a one-line shim. |
+| `frun-theme.zsh` | deleted. `theme.rs` owns the palette. |
+| `.frun-last-device` | kept, read and written by the Rust version. |
+
+`frun.zsh` is not a caller that survives: every part of it is work that moves
+into Rust. Reading pubspec, git and the SDK manifest is step 1; device discovery
+and the picker is step 2; booting is step 4; `render_frun_header` is already
+built. What is left is only the shim, and only because `frun` is invoked as a
+command that `.zshrc` line 179 sources:
+
+```zsh
+frun() { "$HOME/.config/zsh/frun-tui/target/release/frun-tui" "$@" }
+```
+
+Even that is optional. `frun` changes no shell state — no `cd`, no exports — so
+a binary on `PATH` would do and `frun.zsh` could go entirely. The shim is the
+lighter choice only because `~/.cargo/bin` is deliberately not on `PATH`.
+
+`frun-theme.zsh` exists solely because it had two consumers: `frun.zsh` sourced
+it and `frun-runner` parsed its `FRUN_C_*` lines. With both gone nothing reads
+it, and `theme.rs` already carries a newer palette.
+
+`.frun-last-device` is the one file that must survive, currently holding
+`emulator-5554`. It is data, not code, and reading the same path means the
+remembered device is not lost in the migration — no reselecting a target on the
+first run after the switch.
 
 ### 7.4 Two traps this codebase has already sprung
 
