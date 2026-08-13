@@ -1345,3 +1345,35 @@ anything. The footer already adapts per state; these were missed.
 Note this replaces the earlier plan of showing logs during `BUILDING` to fill the
 startup gap (7.6). With the card hidden, that gap has nothing to fill it except
 the elapsed clock above, which makes that clock load-bearing rather than a nicety.
+
+### 7.9 Third round — done
+
+**The startup gap is named.** `Flutter started` became `Starting Flutter`, because
+the row's number is now the time spent starting, not the instant it happened. On
+iOS that is the longest row on the card and it was previously unexplained: the
+`fvm` shim, the Dart VM, flutter_tools, dependency resolution, and whatever Xcode
+does before Flutter announces it.
+
+**Stage durations come from one clock, so the column sums.** Every stage is
+measured open-to-open. Mixing sources was the defect: markers took our measured
+gap while real stages kept Flutter's own figure, and Flutter's timers start before
+its announcements arrive. A real run showed 11.0s + 11.2s + 0ms against a 20.1s
+total, 2.1s counted twice.
+
+The cost is deliberate. `Building with Xcode` now reads about 9.1s where raw
+`flutter run` prints 11.2s. Flutter's figure is the truer measure of the Xcode
+build alone; ours is the truer measure of where the wall clock went. Only one of
+the two can add up, and the card is a breakdown of the total.
+
+**`^C` is red everywhere**, and it reads `Force stop`.
+
+**`q` and `^C` stay separate**, because they are not the same exit. `q` is
+forwarded to Flutter, which shuts itself down and closes the pty. `^C` sends
+SIGINT, which needs Flutter in no particular state to receive it. When Flutter is
+wedged only one of the two works, and that is worth two rows on the cheatsheet. The
+labels now carry the difference, since two keys for one apparent outcome otherwise
+look like an accident.
+
+**The `/N` denominator is back**, by request. It remains an upper bound rather than
+a fact: iOS can show `/5` and run four, because CocoaPods is skipped when
+`Podfile.lock` is current. The completed row states the real count.

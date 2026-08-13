@@ -479,7 +479,7 @@ pub fn feed(app: &mut App, raw: &str) {
 /// ones, and a stage that never appears is simply never created.
 fn stage_line(app: &mut App, text: &str) -> bool {
     if text.starts_with("Launching ") && text.contains(".dart") {
-        app.start_stage(StageKey::Launch, "Flutter started".into());
+        app.start_stage(StageKey::Launch, "Starting Flutter".into());
         app.finish_stage(StageKey::Launch, String::new());
         return true;
     }
@@ -903,13 +903,20 @@ impl App {
 
         let now = Instant::now();
 
-        // A marker stage's own duration is meaningless, so it is given the gap
-        // from itself to here — which is the only place the startup gap after
-        // `Launching lib/main.dart` can ever be shown.
+        // Every stage is measured open-to-open, so the column partitions the build
+        // and therefore sums to it.
+        //
+        // Mixing sources is what broke this: markers got our measured gap while
+        // real stages kept Flutter's own figure, and Flutter's timers start before
+        // its announcements reach us. A measured run showed 11.0s + 11.2s + 0ms
+        // against a 20.1s total, 2.1s counted twice.
+        //
+        // The cost is that `Building with Xcode` now reads ~9.1s where raw
+        // `flutter run` says 11.2s. Flutter's figure is the truer measure of the
+        // Xcode build alone; ours is the truer measure of where the wall clock
+        // went, and only one of the two can add up.
         if let Some(previous) = self.stages.last_mut() {
-            if previous.key.is_marker() && previous.duration.is_empty() {
-                previous.duration = elapsed(now.duration_since(previous.started));
-            }
+            previous.duration = elapsed(now.duration_since(previous.started));
         }
 
         self.stages.push(Stage {
@@ -938,9 +945,13 @@ impl App {
             return;
         };
 
-        if !duration.is_empty() {
-            stage.duration = duration;
-        } else if stage.duration.is_empty() && !stage.key.is_marker() {
+        // Flutter's reported figure is deliberately ignored, see `start_stage`:
+        // its timers start before its announcements arrive, so mixing it with
+        // measured gaps double-counts. Kept as a parameter because the call sites
+        // read better naming what Flutter said, even where we do not use it.
+        let _ = duration;
+
+        if stage.duration.is_empty() && !stage.key.is_marker() {
             // Markers are left empty here on purpose: `start_stage` fills them
             // with the gap to whatever comes next, and the last row keeps a blank
             // because nothing follows it.
@@ -1064,7 +1075,7 @@ mod tests {
         let mut previous = 0.0;
 
         for (key, label) in [
-            (StageKey::Launch, "Flutter started"),
+            (StageKey::Launch, "Starting Flutter"),
             (StageKey::Gradle, "Gradle task assembleDebug"),
             (StageKey::Install, "Installing app"),
             (StageKey::Sync, "Syncing files"),
@@ -1094,7 +1105,7 @@ mod tests {
         let mut app = App::new(State::Building);
         app.stages.clear();
 
-        app.start_stage(StageKey::Launch, "Flutter started".into());
+        app.start_stage(StageKey::Launch, "Starting Flutter".into());
         app.finish_stage(StageKey::Launch, String::new());
 
         assert!(

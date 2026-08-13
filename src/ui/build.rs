@@ -113,12 +113,13 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
         vec![
             text("Stage ", theme::MUTED),
             // Completed stages, so it reads 0 until the first one turns green.
-            // No denominator: iOS showed `0/5` and then ran four, because
-            // CocoaPods is skipped when Podfile.lock is current. The estimate is
-            // an upper bound and printing it as a denominator states it as a
-            // fact. The bar still fills against that bound, where being an
-            // over-estimate is harmless.
+            //
+            // The denominator is back by request. It is an upper bound rather
+            // than a fact — iOS can show `/5` and then run four, because
+            // CocoaPods is skipped when Podfile.lock is current — and the row
+            // states the real count once the build ends.
             strong(format!("{done}"), theme::AMBER),
+            text(format!("/{total}"), theme::MUTED),
         ]
     };
 

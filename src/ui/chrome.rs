@@ -46,12 +46,12 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
 
         // No scroll and no expand: there is no log card during a build, so both
         // keys would be advertised while doing nothing.
-        State::SingleDevice | State::Building => vec![("^C", "Stop", theme::ROSE, None)],
+        State::SingleDevice | State::Building => vec![("^C", "Force stop", theme::ROSE, None)],
 
         State::BuildFailed => vec![
             hint(Action::RetryBuild, theme::ROSE),
             ("q", "Quit", theme::MUTED, None),
-            ("^C", "Stop", theme::MUTED, None),
+            ("^C", "Force stop", theme::ROSE, None),
         ],
 
         State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped => {
@@ -64,7 +64,7 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
                 // frun to click on its own behalf.
                 ("h", "Help", theme::CYAN, None),
                 ("q", "Quit", theme::ROSE, None),
-                ("^C", "Stop", theme::MUTED, None),
+                ("^C", "Force stop", theme::ROSE, None),
             ]
         }
     };

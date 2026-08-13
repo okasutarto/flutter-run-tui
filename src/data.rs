@@ -390,8 +390,17 @@ impl Action {
             Action::Restart => "Hot restart",
             Action::RetryBuild => "Retry Build",
             Action::StartDevice => "Start",
+            // `q` and `^C` are not the same exit, so they are not merged.
+            //
+            // `q` is forwarded to Flutter, which shuts itself down and closes the
+            // pty; frun waits. `^C` sends SIGINT, which does not need Flutter to
+            // be in any state to read a key. That is the difference that matters:
+            // when Flutter is wedged, only one of the two works.
+            //
+            // The labels have to carry that, otherwise two keys for one apparent
+            // outcome look like an accident.
             Action::Quit => "Quit",
-            Action::Stop => "Stop",
+            Action::Stop => "Force stop",
         }
     }
 }
@@ -1075,19 +1084,19 @@ fn mock_stages(state: State) -> Vec<Stage> {
     match state {
         // iOS: CocoaPods then Xcode. Gradle never appears here.
         State::Building => vec![
-            stage(StageKey::Launch, "Flutter started", "0.4s", true),
+            stage(StageKey::Launch, "Starting Flutter", "0.4s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "", false),
         ],
 
         State::BuildFailed => vec![
-            stage(StageKey::Launch, "Flutter started", "0.4s", true),
+            stage(StageKey::Launch, "Starting Flutter", "0.4s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "11.1s", false),
         ],
 
         s if s.build_done() => vec![
-            stage(StageKey::Launch, "Flutter started", "0.4s", true),
+            stage(StageKey::Launch, "Starting Flutter", "0.4s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "11.1s", true),
             stage(StageKey::Sync, "Syncing files", "240ms", true),
