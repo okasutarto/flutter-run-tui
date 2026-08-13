@@ -693,7 +693,7 @@ executed.
 | 3. `BUILD_FAILED` | live | `BUILD ERROR` card, exit code 1, retry action registered |
 | 3. `RELOAD_FAILED` (10) | tested | needs a Dart compile error introduced mid-session |
 | 3. `RELOAD_DROPPED` (11) | tested | needs Flutter to silently swallow a keypress, which is not reliably forceable |
-| 4. Boot, and `NO_DEVICES` (2) | unrun | reachable only with nothing attached, which has not happened yet |
+| 4. Boot, and `NO_DEVICES` (2) | live | AVD booted through `sys.boot_completed`, name mapped back to `emulator-5554`, picker skipped, straight into the build |
 | 5. Shell cutover | live | `frun` through the shim: flag passthrough, fatal path, exit codes 0 / 1 / 130 |
 | Mouse capture | unrun | `m` toggles it; only the geometry is covered, by `--hits` |
 
@@ -702,6 +702,13 @@ and 11 are the subtlest logic in the parser — the ack/timeout machine — and
 neither has run against real Flutter output. Both are ported line for line from
 `frun-runner`, where they have been in daily use, which is the argument for
 believing them; it is not the same as having seen them.
+
+What the live runs covered, for the record: a picker with 5 devices and a
+`NO_DEVICES` screen with 16 targets, a booted AVD and an attached-emulator run, a
+Gradle build reaching `build finished` in 10.6s, 908 log lines in one session, a
+hot reload, a hot restart, a build failure, `Esc` at the picker, and `q` from the
+log stream. Ten of the eleven state frames have been on screen with real data
+behind them; `RELOAD_DROPPED` is the one that has not.
 
 `src/` layout:
 
@@ -761,6 +768,13 @@ the answer.
 so does a normal return from the event loop. Being killed outright skips all
 three, and `fvm` survives the pty hangup that follows. A signal handler would fix
 it; nothing in normal use reaches that path.
+
+**A booted emulator outlives frun, but not the terminal.** `emulator -avd` runs
+under `nohup`, so quitting frun leaves it attached and the next run finds it
+already there — verified. Destroying the terminal itself immediately afterwards
+still takes it down, and ignoring SIGHUP is not enough to prevent that. Booting
+again is the only cost, and no interactive use reaches this: you quit frun and
+keep your window.
 
 **Log history is capped at 4000 entries**, dropping the oldest 1000 when it
 fills. A day-long run would otherwise grow without bound. `flutter logs` is the
@@ -1104,13 +1118,28 @@ app-side equivalent is a key that hides the three static cards and gives the log
 window the screen: at 62 rows that is 17 rows becoming 58. Not started, not
 decided.
 
-**The prompt bar may not be worth its four rows.** Every command 3.6 specifies
-(`help`, `clear`, `r`, `R`) already has a single key, two of them owned by
-Flutter, and `theme` is not a feature. It is already the third concession in the
-ladder, which is the design admitting it carries no load. It is also the only
-reason input has to be modal. If a log filter is ever wanted, `/` can open one
-row on demand rather than renting a box permanently.
+**Marker stages show `0ms`, and blanking them is the wrong fix.** `Flutter
+started` and `Interactive session ready` are markers; nothing takes zero
+milliseconds. But emptying the column would remove the only place the eight-second
+startup gap could ever appear, since that gap happens immediately after `Flutter
+started`.
 
-**Marker stages show `0ms`.** `Flutter started` and `Interactive session ready`
-are markers, not durations; nothing takes zero milliseconds. The column should be
-empty for them.
+So a marker row carries the time from itself until the next stage begins. Both
+timestamps are already known, so the figure is measured rather than invented, and
+the most meaningless number on the card becomes the most informative one:
+
+```text
+  ✓ Flutter started                8.0s     fvm, Dart VM, flutter_tools, pub, daemon
+  ✓ Gradle task assembleDebug    2,834ms
+  ✓ Installing app               1,207ms
+  ✓ Syncing files                   81ms
+  ✓ Interactive session ready              last row, nothing follows it
+```
+
+Rows that already carry a duration keep it. `2,834ms` is Flutter's own figure and
+matches what raw `fvm flutter run` prints, which is worth preserving; measuring
+those ourselves would make the card disagree with Flutter for no gain. Gap-to-next
+applies only to marker rows that have no duration of their own.
+
+A pleasant side effect: the column comes close to summing to `Build time` without
+adding an `other` row or renaming the label.
