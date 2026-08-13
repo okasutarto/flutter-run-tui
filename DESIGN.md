@@ -888,6 +888,14 @@ what the copy says. The **picker** lists everything Flutter reported, because th
 is the screen whose whole purpose is choosing. `Device::attached()` is the one
 predicate, and a test pins it.
 
+**Half of that is superseded by 7.6.** The counting rule stands: it is what keeps
+`NO_DEVICES` reachable and its subtitle true. What does not stand is the branch it
+fed — skipping the picker when exactly one device is attached. Running it for real
+showed why: with only the iPhone simulator up there is no way to ask for Android,
+because booting is a choice and that branch removes it. The merged single-list
+picker in 7.6 replaces it, and `Device::attached()` survives as the sort key
+rather than as a branch condition.
+
 **3. pty and the Flutter parser.** The bulk of the work, and where all the
 regression risk lives. `portable-pty` to spawn, then the state machine from
 `frun-runner`: platform-dependent stage detection, the hot reload ack/timeout

@@ -619,9 +619,23 @@ fn boot_sim(udid: &str) -> Result<String, String> {
 }
 
 fn boot_avd(name: &str) -> Result<String, String> {
-    // Detached: the emulator has to outlive frun, and its stdout is noise.
-    Command::new("emulator")
-        .args(["-avd", name])
+    // `nohup`, so the emulator ignores the hangup when frun exits.
+    //
+    // The emulator has to outlive frun: booting costs half a minute at best, and
+    // the next run should find it already there. That part works — quit with `q`
+    // and `adb devices` still reports it.
+    //
+    // Honest about the limit: `nohup` does not save it from the terminal itself
+    // being destroyed. Measured under a pty that closes the instant frun exits,
+    // the emulator dies anyway, so something beyond SIGHUP is involved there.
+    // Ignoring SIGHUP is still the right thing to ask for and is what the shell
+    // implementation reached for with its detached subshell; surviving a
+    // terminal that is being torn down is a further problem, and not one that
+    // arises when a human quits frun and keeps their window.
+    //
+    // stdio is null, so no `nohup.out` is written.
+    Command::new("nohup")
+        .args(["emulator", "-avd", name])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

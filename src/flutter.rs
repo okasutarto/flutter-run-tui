@@ -805,8 +805,15 @@ pub fn failure(app: &App, code: i32) -> crate::data::Failure {
         None => (Vec::new(), 0),
     };
 
-    // Reversed back into the order Flutter printed them.
-    let mut output: Vec<String> = tail.into_iter().take(8).collect();
+    // Reversed back into the order Flutter printed them, and without the line
+    // already shown as the summary: a one-line failure like `Target file ... not
+    // found.` is both the summary and the entire output, so it appeared twice.
+    let mut output: Vec<String> = tail
+        .into_iter()
+        .filter(|line| line.trim() != summary)
+        .take(8)
+        .collect();
+
     output.reverse();
 
     crate::data::Failure {
