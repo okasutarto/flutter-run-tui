@@ -669,7 +669,41 @@ dynamically links libchafa.
 pty, no `flutter` invocation, no git, no device query. `Tab` moves between
 states because in a prototype nothing else can.
 
-### 7.3 Remaining work, in order
+### 7.3 Crates the remaining work needs
+
+Versions verified 2026-08-14. Already in the tree: `ratatui`, `textwrap`,
+`unicode-width`, `ratatui-image`, `image`.
+
+| Step | Crate | Version | For |
+| :--- | :--- | :--- | :--- |
+| 1 | `serde` + `serde_json` | 1.0.229 / 1.0.151 | `flutter.version.json`, `.fvmrc` |
+| 1 | `anyhow` | 1.0.104 | error handling throughout |
+| 2 | — | — | `serde_json` again, plus `std::process::Command` |
+| 3 | `portable-pty` | 0.9.0 | spawning `fvm flutter run` behind a pty |
+| 3 | `vte` | 0.15.0 | terminal emulation over the pty stream |
+| 3 | `ansi-to-tui` | 8.0.1 | Flutter's own coloured output into `Span`s |
+| 3 | `regex` | 1.13.1 | duration and Gradle task extraction |
+| 4 | — | — | `Command` and polling only |
+
+`ansi-to-tui` 8.0.1 depends on `ratatui-core ^0.1`, which is what ratatui 0.30.2
+is built on, so it fits. `portable-pty` pulls `anyhow` regardless.
+
+**Deliberately not used.** Recorded so they are not reconsidered from scratch:
+
+* `serde_yaml` — deprecated, its version literally reads `0.9.34+deprecated`.
+  Only two fields are needed from `pubspec.yaml`, `name` and `version`, which is
+  a six-line parse rather than a whole YAML dependency of uncertain future.
+* `git2` / `gix` — for `branch --show-current` and `status --porcelain` this is
+  enormous. `git2` builds libgit2; `gix` adds dozens of crates. Shell out.
+* `tokio` — two threads and one channel is the whole concurrency requirement.
+  Async buys nothing here and costs a runtime.
+* `strip-ansi-escapes` — pulls `vte` anyway, and `vte` used directly is strictly
+  better: it replays backspace and CR rather than deleting escape sequences,
+  which is the actual disease behind `frun-runner`'s six braille regexes.
+* `unicode-segmentation` — grapheme clustering is already handled by ratatui at
+  render time.
+
+### 7.4 Remaining work, in order
 
 **1. Project metadata.** `pubspec.yaml` for name and version, `git branch
 --show-current` and `git status --porcelain` for branch and dirty count, and
@@ -741,7 +775,7 @@ it, and `theme.rs` already carries a newer palette.
 remembered device is not lost in the migration — no reselecting a target on the
 first run after the switch.
 
-### 7.4 Two traps this codebase has already sprung
+### 7.5 Two traps this codebase has already sprung
 
 Both cost real debugging time. They will recur.
 
