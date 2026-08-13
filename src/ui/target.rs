@@ -2,7 +2,7 @@
 
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Padding, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
@@ -16,7 +16,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
         return;
     }
 
-    let block = card("SELECTED TARGET", theme::CYAN).padding(Padding::horizontal(1));
+    let block = card("SELECTED TARGET", theme::CYAN);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

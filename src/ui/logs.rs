@@ -2,7 +2,7 @@
 
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Padding, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::data::{App, State};
@@ -17,15 +17,13 @@ use crate::widgets::{badge, card, spread, strong, text, wrap};
 const GUTTER: u16 = 18;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let block = card("APP LOGS STREAM", theme::CYAN)
-        .title_top(
-            Line::from(vec![
-                Span::raw(" "),
-                text(format!("[{} entries] ", app.logs.len()), theme::MUTED),
-            ])
-            .right_aligned(),
-        )
-        .padding(Padding::horizontal(1));
+    let block = card("APP LOGS STREAM", theme::CYAN).title_top(
+        Line::from(vec![
+            Span::raw(" "),
+            text(format!("[{} entries] ", app.logs.len()), theme::MUTED),
+        ])
+        .right_aligned(),
+    );
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

@@ -31,19 +31,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
         ("BUILDING", theme::AMBER)
     };
 
-    let block = card(title, color)
-        .title_top(
-            Line::from(vec![
-                Span::raw(" "),
-                text("Build time ", theme::MUTED),
-                strong(app.build_time, theme::TEXT),
-                text("   Sync ", theme::MUTED),
-                strong(app.sync_time, theme::TEXT),
-                Span::raw(" "),
-            ])
-            .right_aligned(),
-        )
-        .padding(Padding::horizontal(1));
+    let block = card(title, color).title_top(
+        Line::from(vec![
+            Span::raw(" "),
+            text("Build time ", theme::MUTED),
+            strong(app.build_time, theme::TEXT),
+            text("   Sync ", theme::MUTED),
+            strong(app.sync_time, theme::TEXT),
+            Span::raw(" "),
+        ])
+        .right_aligned(),
+    );
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

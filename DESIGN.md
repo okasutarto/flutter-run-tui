@@ -512,21 +512,39 @@ Two consequences to design around:
 The layout adapts to the actual terminal size. `106x45` is a target, not a
 floor and not a cap.
 
-**The problem this has to solve.** Row separators (3.1) and roomy device rows
-(3.3) are worth having, but they are not free. Full chrome now measures:
+**The problem this has to solve.** Row separators (3.1), roomy device rows
+(3.3) and the blank row under each card title are all worth having, but none
+of them are free. Full chrome, enumerated from the rows the cards actually
+draw rather than estimated:
 
 ```
-  PROJECT INFO           11 rows   2 border + 5 content + 3 separator + 1 stats
-  SELECTED TARGET        10 rows   2 border + 4 content + 3 separator + 1 banner
-  BUILD PHASE            10 rows   2 border + 6 content + title + bar
-  prompt + footer + gaps  9 rows
-  ─────────────────────────────
-  TOTAL                  40 rows
+  PROJECT INFO           12 rows   2 border + 1 title gap + 9 body
+                                   body = max(metadata 6 + separators 3, logo 9)
+  SELECTED TARGET        14 rows   2 border + 1 title gap + 11 body
+                                   body = banner + blank + 4 fields + blank
+                                          + command + 3 separators
+  BUILD PHASE             9 rows   2 border + 1 title gap + bar + 5 stages
+  prompt bar              3 rows
+  footer                  1 row
+  gaps between blocks     5 rows   blocks - 1, not a constant
+  ────────────────────────────────
+  TOTAL                  44 rows
 ```
 
-At the 106x45 target that leaves the log window **5 rows**. A five-line Dart
+At the 106x45 target that leaves the log window **1 row**. A five-line Dart
 exception, wrapped at 84 columns of message space, occupies **8 rows**. So a
-single error would not fit on screen at the design's own target size.
+single error would not fit on screen at the design's own target size, and full
+detail now needs a 56-row window.
+
+Two notes on the arithmetic, both learned by getting it wrong:
+
+* The gap count is `blocks - 1`, because `Layout::spacing(1)` inserts a row
+  *between* blocks. Hardcoding it undercounted the running view by one row.
+* The title gap has to be charged here as well as applied in the card. Adding
+  it to the card alone left the heights unchanged, so the padding ate into the
+  inner area and the bottom of every card was clipped in silence — the target
+  card lost its `Type` field and its command string, and the logo lost its
+  label.
 
 **Therefore the priority is inverted.** The log window is not what is left
 over; it is a floor that the cards must yield to.

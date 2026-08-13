@@ -101,51 +101,92 @@ impl Budget {
     // in `ui` splits by them. Keeping two copies is how a degradation ladder
     // ends up deciding one thing and drawing another.
 
-    /// ProjectCard: 2 border + 4 metadata + 1 stats row, plus separators, plus
-    /// whatever the logo needs beyond the metadata block.
+    /// Blank row under every card title.
+    ///
+    /// Charged separately because it is easy to add to `card()` and forget
+    /// here, and the failure mode is silent: the Layout keeps the old height,
+    /// the padding eats into the inner area, and the card's last rows are
+    /// clipped without any warning. That is exactly how the SelectedTargetCard
+    /// lost its `Type` field and its command string.
+    const TITLE_GAP: u16 = 1;
+
+    /// Rows the logo column needs: 7 of artwork plus two label lines.
+    const LOGO_H: u16 = 9;
+
+    /// ProjectCard.
+    ///
+    /// Content rows, enumerated so the number can be checked against the code
+    /// that draws them rather than estimated:
+    ///
+    /// ```text
+    ///   Project / Version / Branch / Git Status   4
+    ///   blank                                     1
+    ///   Flutter · Dart · Runtime                  1
+    ///   separators between the four fields        3   (optional)
+    /// ```
+    ///
+    /// The logo sits in a parallel column, so the body is the taller of the two
+    /// rather than their sum.
     pub fn project_h(&self) -> u16 {
         if !self.full_cards {
             return 1;
         }
 
-        let mut h = 7;
+        let mut meta = 6;
 
         if self.separators {
-            h += 3;
+            meta += 3;
         }
 
-        if self.logo {
-            h += 2;
-        }
+        let body = if self.logo {
+            meta.max(Self::LOGO_H)
+        } else {
+            meta
+        };
 
-        h
+        body + 2 + Self::TITLE_GAP
     }
 
-    /// SelectedTargetCard: 2 border + banner + 4 fields + command string.
+    /// SelectedTargetCard.
+    ///
+    /// ```text
+    ///   ✔ 1 device active: ...                    1
+    ///   blank                                     1
+    ///   Device Target / Platform ID / OS / Type   4
+    ///   blank                                     1
+    ///   ❯ fvm flutter run -d ...                  1
+    ///   separators between the four fields        3   (optional)
+    /// ```
     pub fn target_h(&self) -> u16 {
         if !self.full_cards {
             return 1;
         }
 
+        let mut body = 8;
+
         if self.separators {
-            11
-        } else {
-            8
+            body += 3;
         }
+
+        body + 2 + Self::TITLE_GAP
     }
 
     /// BuildPhaseTracker. Taller once finished, because the summary row and the
     /// full stage list are both present.
+    /// BuildPhaseTracker.
+    ///
+    /// ```text
+    ///   progress bar                              1
+    ///   one row per stage                         5 finished / 3 mid-build
+    /// ```
     pub fn build_h(&self, state: State) -> u16 {
         if !self.full_build {
             return 1;
         }
 
-        if state.build_done() {
-            8
-        } else {
-            6
-        }
+        let stages = if state.build_done() { 5 } else { 3 };
+
+        1 + stages + 2 + Self::TITLE_GAP
     }
 
     pub fn prompt_h(&self) -> u16 {
@@ -281,9 +322,36 @@ mod tests {
 
     #[test]
     fn full_chrome_matches_the_spec_arithmetic() {
-        // 6.2 quotes 40 rows of chrome for the running state at full detail.
+        // DESIGN.md 6.2 quotes 40, which was an estimate written before the
+        // cards existed. 44 is enumerated from the rows they actually draw:
+        // project 12, target 14, build 9, prompt 3, footer 1, five gaps.
         let chrome = Budget::full().chrome(State::Running);
-        assert_eq!(chrome, 40, "spec 6.2 says 40 rows");
+
+        assert_eq!(
+            chrome, 44,
+            "enumerated from the rows each card actually draws"
+        );
+    }
+
+    /// Guards the failure mode that adding the title gap caused: the Layout is
+    /// split by these heights, so if `card()` grows and the budget does not, the
+    /// bottom of every card is clipped in silence.
+    #[test]
+    fn card_heights_account_for_the_title_gap() {
+        let full = Budget::full();
+        let mut flat = full;
+        flat.separators = false;
+        flat.logo = false;
+
+        // 6 content + 2 border + 1 title gap.
+        assert_eq!(flat.project_h(), 9);
+
+        // 8 content + 2 border + 1 title gap.
+        assert_eq!(flat.target_h(), 11);
+
+        // Separators add three rows to each.
+        assert_eq!(full.project_h(), 12, "logo needs 9, metadata needs 9");
+        assert_eq!(full.target_h(), 14);
     }
 
     #[test]

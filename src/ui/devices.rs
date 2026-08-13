@@ -3,7 +3,7 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::Frame;
 
 use crate::budget::Budget;
@@ -13,15 +13,13 @@ use crate::widgets::{card, elide, pill, spread, strong, text};
 
 /// State 2. Zero devices answered, so offer everything launchable.
 pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
-    let block = card("NO DEVICE RUNNING", theme::AMBER)
-        .title_top(
-            Line::from(vec![
-                Span::raw(" "),
-                text(format!("{} targets ", app.devices.len()), theme::MUTED),
-            ])
-            .right_aligned(),
-        )
-        .padding(Padding::horizontal(1));
+    let block = card("NO DEVICE RUNNING", theme::AMBER).title_top(
+        Line::from(vec![
+            Span::raw(" "),
+            text(format!("{} targets ", app.devices.len()), theme::MUTED),
+        ])
+        .right_aligned(),
+    );
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -68,15 +66,13 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
 
 /// State 4. Two or more answered, so pick one.
 pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
-    let block = card("SELECT TARGET", theme::CYAN)
-        .title_top(
-            Line::from(vec![
-                Span::raw(" "),
-                text(format!("{} devices ", app.devices.len()), theme::MUTED),
-            ])
-            .right_aligned(),
-        )
-        .padding(Padding::horizontal(1));
+    let block = card("SELECT TARGET", theme::CYAN).title_top(
+        Line::from(vec![
+            Span::raw(" "),
+            text(format!("{} devices ", app.devices.len()), theme::MUTED),
+        ])
+        .right_aligned(),
+    );
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

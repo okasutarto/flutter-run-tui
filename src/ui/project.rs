@@ -2,7 +2,7 @@
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Padding, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
@@ -23,18 +23,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
         return;
     }
 
-    let block = card("PROJECT INFO", theme::CYAN)
-        .title_top(
-            Line::from(vec![
-                Span::raw(" "),
-                text(app.cwd, theme::MUTED),
-                Span::raw("  "),
-                text("[COPY]", theme::MUTED),
-                Span::raw(" "),
-            ])
-            .right_aligned(),
-        )
-        .padding(Padding::horizontal(1));
+    let block = card("PROJECT INFO", theme::CYAN).title_top(
+        Line::from(vec![
+            Span::raw(" "),
+            text(app.cwd, theme::MUTED),
+            Span::raw("  "),
+            text("[COPY]", theme::MUTED),
+            Span::raw(" "),
+        ])
+        .right_aligned(),
+    );
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -149,8 +147,10 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
 /// `assets/flutter-trim.png` through the kitty graphics protocol, which needs
 /// the `image` crate and a terminal capability query.
 fn logo(frame: &mut Frame, area: Rect) {
+    // Exactly nine rows, which is what `Budget::LOGO_H` charges for. The
+    // leading blank the earlier version had is now supplied by the card's title
+    // gap, and keeping both pushed the two label lines off the bottom.
     let art = vec![
-        Line::default(),
         Line::from(text("      ▄▄██", theme::CYAN)),
         Line::from(text("    ▄▄██▀", theme::CYAN)),
         Line::from(text("  ▄▄██▀", theme::CYAN)),
@@ -160,7 +160,6 @@ fn logo(frame: &mut Frame, area: Rect) {
         Line::from(text("      ▀▀██", theme::CYAN)),
         Line::default(),
         Line::from(strong("  Flutter Engine", theme::CYAN)),
-        Line::from(text("  Cross-Platform CLI", theme::MUTED)),
     ];
 
     frame.render_widget(Paragraph::new(art), area);

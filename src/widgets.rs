@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType};
+use ratatui::widgets::{Block, BorderType, Padding};
 use unicode_width::UnicodeWidthStr;
 
 use crate::theme;
@@ -53,6 +53,11 @@ pub fn card<'a>(title: &'a str, title_color: Color) -> Block<'a> {
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme::BORDER))
+        // One blank row under the title, baked in here rather than left to each
+        // call site. Content butting straight against the title read as a
+        // continuation of it, and a rule that has to be remembered six times is
+        // a rule that will be forgotten once.
+        .padding(Padding::new(1, 1, 1, 0))
         .title(Line::from(vec![
             Span::styled("─ ", Style::new().fg(theme::BORDER)),
             Span::styled("◆ ", Style::new().fg(title_color)),
