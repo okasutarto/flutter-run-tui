@@ -4,7 +4,11 @@ Document Version: `1.2.2`
 Last Updated: `2026-08-13`  
 Design System: **Monospace Character Grid TUI (Terminal User Interface)**  
 Target Font: `JetBrains Mono`, `Fira Code`, or `ui-monospace` (12px base)  
-Canvas Dimensions: Character matrix bounding box (`max-w-3xl` / 768px default, responsive up to 1024px)
+Canvas Dimensions: `106x45` character matrix target, widening to `142` columns
+on a larger window and degrading progressively below the target (see 6.2).
+Derived from the web mockup's 768px default and 1024px maximum at JetBrains
+Mono 12px, where one cell measures ~7.2px. Columns are the unit of record
+from here on; a terminal has no pixels.
 
 ---
 
