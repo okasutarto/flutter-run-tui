@@ -143,38 +143,84 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         }
     }
 
-    let mut right = vec![
-        text("mouse ", theme::MUTED),
-        if app.mouse_on {
-            strong("on", theme::EMERALD)
-        } else {
-            strong("off", theme::MUTED)
-        },
-        text("  ", theme::MUTED),
-    ];
-
-    // The degradation state is worth surfacing: when the layout has conceded
-    // something, knowing that beats wondering where it went.
-    if plan.describe() != "full" {
-        right.push(text(format!("[{}]  ", plan.describe()), theme::BORDER));
-    }
-
-    // Prototype-only affordance, deliberately styled as chrome rather than as
-    // content. DESIGN.md removed the frame switcher because state is decided by
-    // what Flutter is doing, so this must not read as a feature. It exists
-    // because without it a static frame that never advances looks like a hang.
+    // The right side is optional, in priority order, and gets dropped from the
+    // bottom up until it fits.
+    //
+    // `spread` only clips when it overflows, which on the running state meant
+    // the tail of the footer silently disappeared. A cheatsheet that truncates
+    // is worse than a shorter one, because you cannot tell whether the key you
+    // are looking for is missing or just cut off.
     let (index, total) = app.position();
 
-    right.push(text(
-        format!("proto {index}/{total} {}  ", app.state.slug()),
-        theme::BORDER,
-    ));
+    // Ordered lowest priority first; the tail is what survives a narrow window.
+    //
+    // `Flutter <version> CLI` used to sit here and is now gone entirely. The
+    // version is already on the ProjectCard, it changes no decision taken from
+    // the footer, and it was costing 18 columns on the one row that must never
+    // truncate.
+    let mut optional: Vec<Vec<Span>> = Vec::new();
 
-    right.push(text("⇥ next  ", theme::BORDER));
+    // Prototype-only affordance, styled as chrome rather than content.
+    // DESIGN.md removed the frame switcher because state is decided by what
+    // Flutter is doing, so this must not read as a feature; it exists only
+    // because a static frame that never advances looks like a hang.
+    optional.push(vec![
+        text(
+            format!("proto {index}/{total} {}", app.state.slug()),
+            theme::BORDER,
+        ),
+        text("  ⇥ next", theme::BORDER),
+    ]);
 
-    right.push(text("Flutter ", theme::MUTED));
-    right.push(text(app.flutter, theme::MUTED));
-    right.push(text(" CLI", theme::MUTED));
+    // What the layout gave up, so a missing element reads as a decision rather
+    // than as a glitch.
+    if plan.describe() != "full" {
+        optional.push(vec![text(format!("[{}]", plan.describe()), theme::BORDER)]);
+    }
+
+    // Highest priority: only shown when the mouse is captured, which is not the
+    // default. Printing `mouse off` while off is the default spends a permanent
+    // slot on a non-event; capture is worth announcing because it takes text
+    // selection away from the terminal, and the only other symptom is that
+    // copying a stack trace quietly stops working.
+    if app.mouse_on {
+        optional.push(vec![strong("mouse on", theme::EMERALD)]);
+    }
+
+    let left_w: usize = left.iter().map(Span::width).sum();
+
+    // Highest priority first, and stop at the first group that will not fit.
+    //
+    // `continue` here would be a bin-packing search: it kept a low-priority
+    // group merely because it was smaller than the important one that had just
+    // been rejected. If the thing that matters more cannot be shown, showing
+    // something else in its place is not a saving.
+    let mut kept: Vec<Vec<Span>> = Vec::new();
+    let mut used = 0usize;
+
+    for group in optional.into_iter().rev() {
+        let group_w: usize = group.iter().map(Span::width).sum();
+        let gap = if kept.is_empty() { 4 } else { 2 };
+
+        if left_w + used + group_w + gap > area.width as usize {
+            break;
+        }
+
+        used += group_w + gap;
+        kept.push(group);
+    }
+
+    // Reversed for display so the highest priority ends up nearest the right
+    // edge, where the eye lands first on a right-aligned group.
+    let mut right: Vec<Span> = Vec::new();
+
+    for (i, group) in kept.into_iter().rev().enumerate() {
+        if i > 0 {
+            right.push(text("  ", theme::MUTED));
+        }
+
+        right.extend(group);
+    }
 
     frame.render_widget(Paragraph::new(spread(area.width, left, right)), area);
 }
