@@ -1,6 +1,6 @@
 # 🖥️ Flutter CLI Terminal UI (TUI) - Architecture & Design Specification (`design.md`)
 
-Document Version: `1.3.0`  
+Document Version: `1.6.0`  
 Last Updated: `2026-08-13`  
 Design System: **Monospace Character Grid TUI (Terminal User Interface)**  
 Target Font: `JetBrains Mono`, `Fira Code`, or `ui-monospace` (12px base)  
@@ -193,6 +193,11 @@ devices answered.
    No picker is shown. The device is selected automatically and the flow
    goes straight to the SelectedTargetCard. There is nothing to choose, so
    asking would be a keystroke spent on a foregone conclusion.
+
+   **Superseded, see 7.6.** One attached device turned out not to mean no
+   choice: it means no other *running* device, and booting is a choice that this
+   mode makes unreachable. The picker now shows running devices and bootable
+   targets in one list, always, with the last-used device preselected.
 
    Same for a device that was just booted through State 3: it is already
    known, so it skips the picker and also suppresses the
@@ -665,10 +670,40 @@ wrapped rows per entry.
 
 ## 🚧 7. Implementation status
 
-### 7.1 Done
+### 7.1 Status
 
 All eleven state frames render at any terminal size, and every value on them is
-read from the machine. `src/` layout:
+read from the machine.
+
+**What that claim rests on.** Three different levels of evidence, kept apart
+because they are not worth the same. *Live* means it ran against a real device on
+a real project and the screen was read. *Tested* means unit tests cover the logic
+but no device has exercised it. *Unrun* means the code compiles and has never
+executed.
+
+| Area | Evidence | Notes |
+| :--- | :--- | :--- |
+| Layout, all 11 states, 6 sizes | live + tested | `--dump`/`--all`; two tests measure every row in cells |
+| Degradation ladder | tested | `--rows`; a test requires each rung to reclaim rows |
+| Click regions | tested | `--hits` probes every rectangle it registered |
+| 1. Project metadata | live | `--probe` on a real project; every field cross-checked against `pubspec.yaml`, `git`, the FVM manifest |
+| 2. Device discovery | live | 5 devices reported, `emulator-5554` resolved to its AVD name, branch into `SINGLE_DEVICE` and `MULTIPLE_DEVICES` both seen |
+| 3. pty + build parser | live | Gradle build to `build finished`, stage durations, 908 log lines classified |
+| 3. Hot reload / restart | live | `Reloaded 0 libraries in 90ms`, `Restarted application in 4,072ms` |
+| 3. `BUILD_FAILED` | live | `BUILD ERROR` card, exit code 1, retry action registered |
+| 3. `RELOAD_FAILED` (10) | tested | needs a Dart compile error introduced mid-session |
+| 3. `RELOAD_DROPPED` (11) | tested | needs Flutter to silently swallow a keypress, which is not reliably forceable |
+| 4. Boot, and `NO_DEVICES` (2) | unrun | reachable only with nothing attached, which has not happened yet |
+| 5. Shell cutover | live | `frun` through the shim: flag passthrough, fatal path, exit codes 0 / 1 / 130 |
+| Mouse capture | unrun | `m` toggles it; only the geometry is covered, by `--hits` |
+
+Two of these are worth naming as gaps rather than leaving in a table. States 10
+and 11 are the subtlest logic in the parser — the ack/timeout machine — and
+neither has run against real Flutter output. Both are ported line for line from
+`frun-runner`, where they have been in daily use, which is the argument for
+believing them; it is not the same as having seen them.
+
+`src/` layout:
 
 ```text
   theme.rs     palette + Nerd Font glyph vocabulary
@@ -731,9 +766,9 @@ it; nothing in normal use reaches that path.
 fills. A day-long run would otherwise grow without bound. `flutter logs` is the
 archive.
 
-**One attached device wins outright**, even when macOS and Chrome are also
-listed. That is 3.3 mode 5 working as specified, and it is right for what frun is
-for; `fvm flutter run -d chrome` covers the rare case.
+**One attached device used to win outright.** That was 3.3 mode 5 as specified,
+and it is now overturned: it traps you on whichever platform happens to be
+running. See 7.6.
 
 ### 7.3 Crates
 
@@ -772,8 +807,8 @@ with our own styling.
 The evidence is in the implementation being replaced. `frun-runner` strips every
 escape Flutter emits, via `ANSI_RE` and `LITERAL_ANSI_RE`, and recolours from
 scratch. That has been the behaviour all along and it has never been a
-complaint. `vte` already handles the stripping as a side effect of emulating the
-terminal properly.
+complaint. `flutter::clean` does the same stripping directly, which is the whole
+of what was wanted from a terminal emulator here.
 
 If it is ever wanted, it fits: 8.0.1 depends on `ratatui-core ^0.1`, which is
 what ratatui 0.30.2 is built on. Adding it now would be a dependency for a
@@ -788,9 +823,11 @@ decision not yet taken.
   enormous. `git2` builds libgit2; `gix` adds dozens of crates. Shell out.
 * `tokio` — two threads and one channel is the whole concurrency requirement.
   Async buys nothing here and costs a runtime.
-* `strip-ansi-escapes` — pulls `vte` anyway, and `vte` used directly is strictly
-  better: it replays backspace and CR rather than deleting escape sequences,
-  which is the actual disease behind `frun-runner`'s six braille regexes.
+* `strip-ansi-escapes` — pulls `vte`, which is itself declined above. Deleting
+  escape sequences is only half the job anyway: the other half is replaying
+  backspace and treating CR as a line break, which is the actual disease behind
+  `frun-runner`'s six braille regexes, and no crate does that half for us.
+  `flutter::clean` does both in about forty lines.
 * `unicode-segmentation` — grapheme clustering is already handled by ratatui at
   render time.
 
@@ -838,10 +875,12 @@ is the screen whose whole purpose is choosing. `Device::attached()` is the one
 predicate, and a test pins it.
 
 **3. pty and the Flutter parser.** The bulk of the work, and where all the
-regression risk lives. `portable-pty` to spawn, `vte` to emulate the terminal
-rather than stripping escapes with regexes, then the state machine from
+regression risk lives. `portable-pty` to spawn, then the state machine from
 `frun-runner`: platform-dependent stage detection, the hot reload ack/timeout
 machine, `printBox` passthrough, startup log buffering.
+
+This step said `vte`, to emulate the terminal rather than strip escapes with
+regexes. It shipped without it, for the reason in 7.3.
 
 `BUILD_FAILED` has to be built from nothing. `frun-runner` has no
 build-failure detection at all: if Gradle dies the output falls through to raw
@@ -861,10 +900,14 @@ the Gradle line itself re-emits partial durations. None of that is derivable fro
 Flutter's documentation.
 
 The infrastructure is where crates win outright. `portable-pty` replaces
-`pty.fork()` and the termios juggling, and brings window-resize forwarding
-(`TIOCSWINSZ`) which `frun-runner` does not do at all today. `vte` replaces the
-18 lines of ANSI cleanup and is strictly more correct, since those six braille
-regexes exist precisely because regexes do not emulate a terminal.
+`pty.fork()` and the termios juggling.
+
+It wins less completely than expected, though: this paragraph used to claim `vte`
+replaced the 18 lines of ANSI cleanup and was strictly more correct. It is not,
+because emulation is not what the cleanup is for. The six braille regexes exist
+because Flutter animates in place with `\b` and CR, and the fix for that is
+replaying those two bytes — 40 lines in `flutter::clean`, against implementing
+`vte::Perform` for a screen model this UI never reads. See 7.3.
 
 The third option was keeping `frun-runner` alive behind a JSON event stream, with
 frun-tui only rendering. Its appeal is real: zero risk of regressing the ack
@@ -993,3 +1036,87 @@ key events. `FRUN_NO_QUERY=1` skips the query and falls back to halfblocks.
 **`main` returning `Err` prints the `Debug` form.** A carefully formatted `✖ FATAL`
 line was followed by `Error: Custom { kind: NotFound, .. }`. Print the message and
 `std::process::exit`.
+
+### 7.6 Pending: defects, and the fixes decided for them
+
+Found by running it against a real project. All open.
+
+**Progress bar runs backwards.** `build.rs` computes `done / total` with
+`total = app.stages.len()`, and `flutter.rs` appends stages as Flutter announces
+them. At `Flutter started` that is 1 of 1, so 100%; when Gradle appears it
+becomes 1 of 2, so 50%.
+
+3.4 already forbids a denominator and the implementation contradicts it. The
+total genuinely cannot be known ahead: the stage set is platform-dependent, and
+Flutter skips stages when it can. Fix: indeterminate while building, full on
+completion, and state the count only once it is known.
+
+**A placeholder occupies the space output should be in.** During `BUILDING` the
+middle area renders `Waiting for the application to start...`, which says nothing
+the tracker above is not already saying with a spinner.
+
+**Nothing marks the gap after `Flutter started`.** Roughly eight seconds pass
+before `Running Gradle task` with no indication of progress: the `fvm` shim, the
+Dart VM boot, flutter_tools startup, dependency resolution, Gradle daemon warmup.
+None of it announces itself as a stage.
+
+Those two share one fix. Flutter *is* printing during that gap — Impeller
+messages, Gradle daemon notices, warnings — so the log stream should be on screen
+during `BUILDING` instead of the placeholder. The gap fills with real output and
+the placeholder disappears.
+
+Plus one thing `frun-runner` already had and that was not carried over: an
+elapsed clock on the stage currently running, appearing only after about three
+seconds (`ELAPSED_AFTER`). Its comment gives the reason, which still holds — a
+spinner alone cannot distinguish slow from stuck.
+
+**Auto-select traps you on the wrong platform.** With only the iPhone simulator
+up, `main.rs` finds exactly one attached device and launches on it. There is no
+way to say "boot Android instead" short of quitting and booting it by hand.
+
+The premise was that one attached device means no choice. It does not: it means no
+other *running* device. Booting is a choice, and it is unreachable.
+
+Decided fix: **one merged list.** Running devices and bootable targets in a single
+picker, running ones first, always shown. The device from `.frun-last-device` is
+preselected, so the common case stays a single `Enter`. Costs one keystroke per
+run and buys predictability, which beats a heuristic that is right most of the
+time and maddening the rest. This supersedes 3.3 mode 5.
+
+**App logs cannot be scrolled.** `logs.rs` always takes the last `height` rows,
+with no offset. `Up`/`Down` call `select_next`/`select_prev`, which move the
+*device* selection, and `app.scroll` belongs to the device list. So in `RUNNING`
+the arrow keys do nothing.
+
+Wrapping makes this worse than it sounds: one Dart exception occupies eight rows
+against a log window of twelve to nineteen, so anything older than about two
+entries is unreachable.
+
+Fix: a `log_scroll` distinct from the device `scroll`, driven by arrows, `j`/`k`
+and the wheel, sticking to the bottom while already there so new output stays
+visible.
+
+### 7.7 Pending: open questions
+
+**More log on screen.** Font size is not available to a terminal application; one
+font at one size covers the whole grid, and only Ghostty can change it. The
+app-side equivalent is a key that hides the three static cards and gives the log
+window the screen: at 62 rows that is 17 rows becoming 58. Not started, not
+decided.
+
+**The prompt bar may not be worth its four rows.** Every command 3.6 specifies
+(`help`, `clear`, `r`, `R`) already has a single key, two of them owned by
+Flutter, and `theme` is not a feature. It is already the third concession in the
+ladder, which is the design admitting it carries no load. It is also the only
+reason input has to be modal. If a log filter is ever wanted, `/` can open one
+row on demand rather than renting a box permanently.
+
+**`Build time` does not sum to its stages.** A measured run reported 12.1s over
+five stages totalling 4.1s: two thirds of it is the unannounced startup above.
+The number is correct — it is wall clock from the pty spawn — but placing it above
+stages that do not add up to it invites the question. Either add the remainder as
+its own row, which is informative, or rename the label to `Elapsed`.
+
+**Marker stages show `0ms`.** `Flutter started` and `Interactive session ready`
+are markers, not durations; nothing takes zero milliseconds. The column should be
+empty for them.
