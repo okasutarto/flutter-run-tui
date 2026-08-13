@@ -10,12 +10,14 @@ use crate::data::App;
 use crate::theme;
 use crate::widgets::{card, elide, field, pill, separator, spread, strong, text};
 
-/// Widest a label/value pair may span.
+/// Widest the branch pill may grow before it is elided.
 ///
-/// Right-aligning a value against the full card width only reads as alignment
-/// while the card is narrow. Past this the gap becomes two unrelated columns:
-/// `project` on the far left and `cwclub` sixty columns away.
-const META_W: u16 = 44;
+/// A width cap on the metadata block itself used to live here, which is what
+/// stopped this card responding to the terminal: the border stretched to the
+/// window while the values stopped at column 44, and the row separators stopped
+/// with them, hanging in the middle of the card. Values now right-align to the
+/// card border, which is also what the design frames show.
+const BRANCH_MAX: usize = 30;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     if !plan.full_cards {
@@ -46,13 +48,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
         inner
     };
 
-    let w = body.width.min(META_W);
+    // Full body width: values right-align to the card border and the row
+    // separators span the whole block, both of which follow the terminal.
+    let w = body.width;
 
     // Bound before the lines so the pill can borrow it. Elided because a real
     // branch name is not the tidy one in the mockup:
     // `feature/PROJ-4821-refactor-checkout-payment-sheet` is 48 characters and
     // ran the pill past the card, taking its closing cap with it.
-    let branch = format!(" {} ", elide(app.branch, META_W as usize - 14));
+    let branch = format!(" {} ", elide(app.branch, BRANCH_MAX));
 
     let git = if app.git_clean {
         pill(" ✔ Clean ", theme::EMERALD)
@@ -76,22 +80,21 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
 
     lines.retain(|l| !l.spans.is_empty() || plan.separators);
 
-    // The three-column stats row from 3.1, spread across the same width so it
-    // lines up with the fields above rather than floating free.
+    // The three-column stats row from 3.1, kept as one left-aligned group.
+    //
+    // Not spread: the fields above are label/value pairs, where the gap is the
+    // alignment. These three are a single fact about the toolchain, so pushing
+    // `Runtime (FVM)` to the far border would separate it from the two values it
+    // belongs with.
     lines.push(Line::default());
-    lines.push(spread(
-        w,
-        vec![
-            text("Flutter ", theme::MUTED),
-            strong(app.flutter, theme::CYAN),
-            text("   Dart ", theme::MUTED),
-            strong(app.dart, theme::PURPLE),
-        ],
-        vec![
-            text("Runtime ", theme::MUTED),
-            strong("(FVM)", theme::PURPLE),
-        ],
-    ));
+    lines.push(Line::from(vec![
+        text("Flutter ", theme::MUTED),
+        strong(app.flutter, theme::CYAN),
+        text("   Dart ", theme::MUTED),
+        strong(app.dart, theme::PURPLE),
+        text("   Runtime ", theme::MUTED),
+        strong("(FVM)", theme::PURPLE),
+    ]));
 
     frame.render_widget(Paragraph::new(lines), body);
 }
@@ -160,6 +163,8 @@ fn logo(frame: &mut Frame, area: Rect) {
         Line::from(text("      ▀▀██", theme::CYAN)),
         Line::default(),
         Line::from(strong("  Flutter Engine", theme::CYAN)),
+        Line::default(),
+        Line::from(text("      ▀▀██", theme::CYAN)),
     ];
 
     frame.render_widget(Paragraph::new(art), area);

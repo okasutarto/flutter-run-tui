@@ -10,9 +10,17 @@ use crate::data::{Action, App, Hit, State};
 use crate::theme;
 use crate::widgets::{alert_card, card, keycap, spread, strong, text};
 
-/// Widest a stage row may span, so the duration does not fly out to column 140
-/// and detach from its label.
-const STEP_W: u16 = 66;
+/// Widest the filled bar itself may grow.
+///
+/// This applies to the bar graphic only, not to the row it sits on. A stage row
+/// spans the card so its duration right-aligns to the border, but a progress bar
+/// 118 columns long conveys nothing a 44-column one does not, and it turns a
+/// glance into a scan.
+///
+/// The previous version capped the whole row at 66 columns, which is what left
+/// this card ignoring the terminal: the border reached the window edge while
+/// every duration stopped at column 66.
+const BAR_MAX: u16 = 44;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     if !plan.full_build {
@@ -73,7 +81,8 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
     let total = app.stages.len();
     let finished = app.state.build_done();
 
-    let bar_w = area.width.min(STEP_W).saturating_sub(24) as usize;
+    // The bar is bounded; the row it sits on is not.
+    let bar_w = area.width.saturating_sub(24).min(BAR_MAX) as usize;
 
     let filled = if finished {
         bar_w
@@ -96,7 +105,7 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let line = spread(
-        area.width.min(STEP_W),
+        area.width,
         vec![
             text("[", theme::BORDER),
             strong(
@@ -117,7 +126,8 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn stages(frame: &mut Frame, area: Rect, app: &App) {
-    let w = area.width.min(STEP_W);
+    // Full width, so durations right-align to the card border.
+    let w = area.width;
 
     let lines: Vec<Line> = app
         .stages
