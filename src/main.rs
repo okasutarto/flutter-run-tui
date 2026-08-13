@@ -32,27 +32,82 @@ use ratatui::Terminal;
 
 use data::{Action, App, State};
 
+/// What the command line asked for.
+///
+/// Separated from `main` so the routing can be tested. The bug that prompted
+/// this was pure arm ordering: a `starts_with("--")` catch-all sitting above a
+/// literal arm swallowed `--demo`, and nothing in the test suite looked at
+/// argument parsing at all.
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    States,
+    Dump(State, u16, u16),
+    All(u16, u16),
+    Hits(State, u16, u16),
+    Rows(State, u16),
+    Demo,
+    Interactive,
+}
+
+fn parse(args: &[String]) -> io::Result<Command> {
+    let flag = args.first().map(String::as_str);
+
+    Ok(match flag {
+        Some("--states") => Command::States,
+
+        Some("--dump") => {
+            let (w, h) = size(args.get(2), 106, 45);
+            Command::Dump(state_arg(args.get(1))?, w, h)
+        }
+
+        Some("--all") => {
+            let (w, h) = size(args.get(1), 106, 45);
+            Command::All(w, h)
+        }
+
+        Some("--hits") => {
+            let (w, h) = size(args.get(2), 106, 45);
+            Command::Hits(state_arg(args.get(1))?, w, h)
+        }
+
+        Some("--rows") => Command::Rows(
+            state_arg(args.get(1))?,
+            args.get(2).and_then(|s| s.parse().ok()).unwrap_or(106),
+        ),
+
+        Some("--demo") => Command::Demo,
+
+        // Catch-all for typos. Must stay last among the flag arms: arms are
+        // tried in order, so a guard this broad placed above a literal swallows
+        // it.
+        Some(other) if other.starts_with("--") => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown flag {other}"),
+            ))
+        }
+
+        _ => Command::Interactive,
+    })
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    match args.first().map(String::as_str) {
-        Some("--states") => {
+    match parse(&args)? {
+        Command::States => {
             for state in State::ALL {
                 println!("{}", state.slug());
             }
             Ok(())
         }
 
-        Some("--dump") => {
-            let state = state_arg(args.get(1))?;
-            let (w, h) = size(args.get(2), 106, 45);
+        Command::Dump(state, w, h) => {
             print!("{}", dump::dump(&mut App::new(state), w, h));
             Ok(())
         }
 
-        Some("--all") => {
-            let (w, h) = size(args.get(1), 106, 45);
-
+        Command::All(w, h) => {
             for state in State::ALL {
                 println!(
                     "\x1b[2m── {} ─────────────────────────\x1b[0m",
@@ -65,26 +120,17 @@ fn main() -> io::Result<()> {
             Ok(())
         }
 
-        Some("--hits") => {
-            let state = state_arg(args.get(1))?;
-            let (w, h) = size(args.get(2), 106, 45);
+        Command::Hits(state, w, h) => {
             print!("{}", dump::hits(&mut App::new(state), w, h));
             Ok(())
         }
 
-        Some("--rows") => {
-            let state = state_arg(args.get(1))?;
-            let w = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(106);
+        Command::Rows(state, w) => {
             print!("{}", dump::rows(&App::new(state), w));
             Ok(())
         }
 
-        Some(other) if other.starts_with("--") => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unknown flag {other}"),
-        )),
-
-        Some("--demo") => {
+        Command::Demo => {
             let mut app = App::new(State::Detecting);
             app.demo = true;
             run(app)
@@ -92,11 +138,11 @@ fn main() -> io::Result<()> {
 
         // Opens on Running rather than Detecting.
         //
-        // Detecting is a state that waits for a process to finish, and in a
-        // prototype no process ever does, so it sat there forever and read as a
-        // hang. Running is the state with the most on screen and nothing
-        // pending, which is the honest place to start when the data is static.
-        _ => run(App::new(State::Running)),
+        // Detecting waits for a process to finish, and in a prototype none ever
+        // does, so it sat there and read as a hang. Running has the most on
+        // screen and nothing pending, which is the honest place to start when
+        // the data is static.
+        Command::Interactive => run(App::new(State::Running)),
     }
 }
 
@@ -314,5 +360,90 @@ fn apply(app: &mut App, action: Action) {
         // Interrupt: SIGINT is forwarded to the child (⏹). Distinct from Quit
         // in the existing implementation, and kept distinct here.
         Action::Stop => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(args: &[&str]) -> Command {
+        let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        parse(&owned).expect("should parse")
+    }
+
+    /// Every documented flag must reach its own arm.
+    ///
+    /// The bug this guards against was ordering, not logic: a
+    /// `starts_with("--")` catch-all placed above the literal arms swallowed
+    /// `--demo`, and it shipped because nothing tested argument parsing.
+    #[test]
+    fn every_flag_routes_to_its_own_arm() {
+        assert_eq!(parsed(&["--states"]), Command::States);
+        assert_eq!(parsed(&["--demo"]), Command::Demo);
+        assert_eq!(parsed(&[]), Command::Interactive);
+
+        assert_eq!(
+            parsed(&["--dump", "running"]),
+            Command::Dump(State::Running, 106, 45)
+        );
+
+        assert_eq!(parsed(&["--all"]), Command::All(106, 45));
+
+        assert_eq!(
+            parsed(&["--hits", "picker"]),
+            Command::Hits(State::MultipleDevices, 106, 45)
+        );
+
+        assert_eq!(
+            parsed(&["--rows", "building"]),
+            Command::Rows(State::Building, 106)
+        );
+    }
+
+    #[test]
+    fn size_argument_is_honoured() {
+        assert_eq!(
+            parsed(&["--dump", "running", "142x56"]),
+            Command::Dump(State::Running, 142, 56)
+        );
+
+        assert_eq!(parsed(&["--all", "80x30"]), Command::All(80, 30));
+        assert_eq!(
+            parsed(&["--rows", "running", "80"]),
+            Command::Rows(State::Running, 80)
+        );
+    }
+
+    #[test]
+    fn a_typo_is_reported_rather_than_ignored() {
+        let owned = vec!["--dmeo".to_string()];
+        let err = parse(&owned).expect_err("should reject");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("--dmeo"), "{err}");
+    }
+
+    /// Every slug printed by `--states` must be accepted back.
+    #[test]
+    fn state_slugs_round_trip() {
+        for state in State::ALL {
+            let owned = vec!["--dump".to_string(), state.slug().to_string()];
+
+            assert_eq!(
+                parse(&owned).expect("slug should parse"),
+                Command::Dump(state, 106, 45),
+                "{} did not round-trip",
+                state.slug()
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_state_names_the_valid_ones() {
+        let owned = vec!["--dump".to_string(), "nope".to_string()];
+        let err = parse(&owned).expect_err("should reject");
+
+        assert!(err.to_string().contains("running"), "{err}");
     }
 }
