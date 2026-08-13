@@ -1,0 +1,24 @@
+[package]
+name = "frun-tui"
+version = "0.1.0"
+edition = "2021"
+
+# Design prototype for the frun rewrite. Renders the "Sophisticated
+# Dark" spec from DESIGN.md as a real ratatui application so the layout
+# can be judged in a terminal instead of a browser mockup.
+#
+# No pty, no Flutter, no device discovery yet. Static data on purpose:
+# the question this answers is whether the design works, not whether the
+# parser works.
+
+[dependencies]
+# crossterm is used via ratatui::crossterm rather than as a direct
+# dependency. ratatui re-exports the exact version it was built against,
+# which is the documented way to avoid two incompatible crossterms
+# ending up in the tree.
+ratatui = "=0.30.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
