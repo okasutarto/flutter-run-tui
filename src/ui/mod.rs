@@ -1,9 +1,9 @@
 //! Frame assembly. One module per component, this file decides what appears.
 
 mod build;
-pub mod logo;
 mod chrome;
 mod devices;
+pub mod logo;
 mod logs;
 mod project;
 mod target;

@@ -7,8 +7,8 @@ use ratatui::Frame;
 
 use crate::budget::Budget;
 use crate::data::App;
-use crate::ui::logo::Logo;
 use crate::theme;
+use crate::ui::logo::Logo;
 use crate::widgets::{card, elide, field, pill, separator, spread, strong, text};
 
 /// Widest the branch pill may grow before it is elided.
@@ -41,7 +41,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
     frame.render_widget(block, area);
 
     let body = if plan.logo {
-        let split = Layout::horizontal([Constraint::Length(22), Constraint::Min(30)]).split(inner);
+        // 20 columns, not 22: wide enough for `Cross-Platform CLI` at 18 cells
+        // and nothing more. The artwork itself is narrower still, see `logo`.
+        let split = Layout::horizontal([Constraint::Length(20), Constraint::Min(30)]).split(inner);
 
         logo(frame, split[0], art);
         split[1]
@@ -81,23 +83,73 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
 
     lines.retain(|l| !l.spans.is_empty() || plan.separators);
 
-    // The three-column stats row from 3.1, kept as one left-aligned group.
+    // Metadata fills its own region, with the stats row in a separate one below.
     //
-    // Not spread: the fields above are label/value pairs, where the gap is the
-    // alignment. These three are a single fact about the toolchain, so pushing
-    // `Runtime (FVM)` to the far border would separate it from the two values it
-    // belongs with.
-    lines.push(Line::default());
-    lines.push(Line::from(vec![
-        text("Flutter ", theme::MUTED),
-        strong(app.flutter, theme::CYAN),
-        text("   Dart ", theme::MUTED),
-        strong(app.dart, theme::PURPLE),
-        text("   Runtime ", theme::MUTED),
-        strong("(FVM)", theme::PURPLE),
-    ]));
+    // It has to be its own Rect rather than another entry in `lines`, because a
+    // three-column row cannot be expressed as one Line: three groups spaced
+    // across a width need three areas.
+    let meta_h = if plan.separators { 7 } else { 4 };
 
-    frame.render_widget(Paragraph::new(lines), body);
+    let rows = Layout::vertical([
+        Constraint::Length(meta_h),
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // stats
+    ])
+    .split(body);
+
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+
+    stats(frame, rows[2], app);
+}
+
+/// The three-column technical stats row from DESIGN.md 3.1.
+///
+/// Spaced across the width rather than grouped: three equal columns, the first
+/// flush left, the last flush right. Grouping them left left two thirds of the
+/// row empty and made the block look unfinished; spreading them as one Line
+/// pushed `Runtime (FVM)` to the far border and separated it from the two values
+/// it belongs with. Three columns is the shape the design asked for and it
+/// solves both.
+fn stats(frame: &mut Frame, area: Rect, app: &App) {
+    let cols = Layout::horizontal([
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+    ])
+    .split(area);
+
+    let groups = [
+        (
+            vec![
+                text("Flutter ", theme::MUTED),
+                strong(app.flutter, theme::CYAN),
+            ],
+            0,
+        ),
+        (
+            vec![text("Dart ", theme::MUTED), strong(app.dart, theme::PURPLE)],
+            1,
+        ),
+        (
+            vec![
+                text("Runtime ", theme::MUTED),
+                strong("(FVM)", theme::PURPLE),
+            ],
+            2,
+        ),
+    ];
+
+    for (spans, i) in groups {
+        let line = Line::from(spans);
+
+        let line = match i {
+            0 => line,
+            1 => line.centered(),
+            _ => line.right_aligned(),
+        };
+
+        frame.render_widget(Paragraph::new(line), cols[i]);
+    }
 }
 
 /// Empty line when separators have been conceded, so the row indices stay put.
@@ -151,14 +203,27 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
 /// silence.
 fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
     let rows = Layout::vertical([
-        Constraint::Length(7),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(5), // artwork
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // Flutter Engine
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // Cross-Platform CLI
     ])
     .split(area);
 
-    art.render(frame, rows[0]);
+    // The artwork gets a narrower box than the column it sits in.
+    //
+    // `Resize::Fit` scales to whichever dimension binds first, so at 20 columns
+    // by 5 rows the height binds and the extra width goes unused regardless.
+    // Constraining it makes the mark compact on purpose rather than by accident,
+    // and leaves the labels the column's full width.
+    art.render(
+        frame,
+        Rect {
+            width: rows[0].width.min(11),
+            ..rows[0]
+        },
+    );
 
     frame.render_widget(
         Paragraph::new(Line::from(strong("Flutter Engine", theme::CYAN))),
@@ -167,6 +232,6 @@ fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
 
     frame.render_widget(
         Paragraph::new(Line::from(text("Cross-Platform CLI", theme::MUTED))),
-        rows[3],
+        rows[4],
     );
 }

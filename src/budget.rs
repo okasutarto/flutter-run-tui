@@ -110,8 +110,9 @@ impl Budget {
     /// lost its `Type` field and its command string.
     const TITLE_GAP: u16 = 1;
 
-    /// Rows the logo column needs: 7 of artwork, a blank, and two label lines.
-    const LOGO_H: u16 = 10;
+    /// Rows the logo column needs: 5 of artwork, then a blank before each of the
+    /// two label lines.
+    const LOGO_H: u16 = 9;
 
     /// ProjectCard.
     ///
@@ -325,11 +326,11 @@ mod tests {
     fn full_chrome_matches_the_spec_arithmetic() {
         // DESIGN.md 6.2 quotes 40, which was an estimate written before the
         // cards existed. 44 is enumerated from the rows they actually draw:
-        // project 13, target 14, build 10, prompt 3, footer 1, five gaps.
+        // project 12, target 14, build 10, prompt 3, footer 1, five gaps.
         let chrome = Budget::full().chrome(State::Running);
 
         assert_eq!(
-            chrome, 46,
+            chrome, 45,
             "enumerated from the rows each card actually draws"
         );
     }
@@ -351,7 +352,7 @@ mod tests {
         assert_eq!(flat.target_h(), 11);
 
         // Separators add three rows to each.
-        assert_eq!(full.project_h(), 13, "logo needs 10, metadata needs 9");
+        assert_eq!(full.project_h(), 12, "logo needs 9, metadata needs 9");
         assert_eq!(full.target_h(), 14);
     }
 
