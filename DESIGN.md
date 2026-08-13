@@ -681,12 +681,27 @@ Versions verified 2026-08-14. Already in the tree: `ratatui`, `textwrap`,
 | 2 | — | — | `serde_json` again, plus `std::process::Command` |
 | 3 | `portable-pty` | 0.9.0 | spawning `fvm flutter run` behind a pty |
 | 3 | `vte` | 0.15.0 | terminal emulation over the pty stream |
-| 3 | `ansi-to-tui` | 8.0.1 | Flutter's own coloured output into `Span`s |
 | 3 | `regex` | 1.13.1 | duration and Gradle task extraction |
 | 4 | — | — | `Command` and polling only |
 
-`ansi-to-tui` 8.0.1 depends on `ratatui-core ^0.1`, which is what ratatui 0.30.2
-is built on, so it fits. `portable-pty` pulls `anyhow` regardless.
+`portable-pty` pulls `anyhow` regardless, so depending on it directly costs
+nothing.
+
+**`ansi-to-tui` is not on that list, on reflection.** It converts ANSI-coloured
+bytes into styled `Span`s, which would be needed only if Flutter's own colours
+were preserved verbatim. Nothing here wants that: every log line is recoloured
+into INF/WRN/ERR from our palette, and the BUILD_FAILED code frame is rebuilt
+with our own styling.
+
+The evidence is in the implementation being replaced. `frun-runner` strips every
+escape Flutter emits, via `ANSI_RE` and `LITERAL_ANSI_RE`, and recolours from
+scratch. That has been the behaviour all along and it has never been a
+complaint. `vte` already handles the stripping as a side effect of emulating the
+terminal properly.
+
+If it is ever wanted, it fits: 8.0.1 depends on `ratatui-core ^0.1`, which is
+what ratatui 0.30.2 is built on. Adding it now would be a dependency for a
+decision not yet taken.
 
 **Deliberately not used.** Recorded so they are not reconsidered from scratch:
 
