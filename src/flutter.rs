@@ -548,7 +548,7 @@ fn stage_line(app: &mut App, text: &str) -> bool {
     }
 
     if text.contains("Flutter run key commands") {
-        app.start_stage(StageKey::Ready, "Interactive session ready".into());
+        app.start_stage(StageKey::Ready, "Application Running".into());
         app.session_ready();
         return true;
     }
@@ -1036,7 +1036,7 @@ mod tests {
             (StageKey::Gradle, "Gradle task assembleDebug"),
             (StageKey::Install, "Installing app"),
             (StageKey::Sync, "Syncing files"),
-            (StageKey::Ready, "Interactive session ready"),
+            (StageKey::Ready, "Application Running"),
         ] {
             app.start_stage(key, label.into());
 
@@ -1052,6 +1052,41 @@ mod tests {
 
             previous = fraction;
         }
+    }
+
+    /// A build that skips a stage still ends complete.
+    ///
+    /// iOS runs five when `Podfile.lock` is current, against an estimate of six.
+    /// The estimate is an upper bound, so the numerator can never reach it — which
+    /// is correct while building and wrong the moment the build is over. Ending on
+    /// `5/6` reports a build that stopped short of itself.
+    #[test]
+    fn a_skipped_stage_still_ends_at_full() {
+        let mut app = App::new(State::Building);
+        app.begin_build();
+
+        // Neither `Running pod install` nor `Syncing files`, so this run comes in
+        // under the estimate: starting, launching, Xcode, running.
+        for line in [
+            "Launching lib/main.dart on iPhone 17 Pro in debug mode...",
+            "Running Xcode build...",
+            "Flutter run key commands.",
+        ] {
+            feed(&mut app, line);
+        }
+
+        assert_eq!(app.stages.len(), 4, "the skipped path should run four");
+        assert_eq!(app.expected_stages(), 5, "the estimate stays an upper bound");
+
+        assert!(
+            app.state.build_done(),
+            "the session should be live, which is what collapses the denominator"
+        );
+
+        // What the row draws once finished: both numbers taken from what ran, so
+        // the bar reads full instead of stopping short of itself.
+        let ran = app.stages.len();
+        assert_eq!((ran, ran), (4, 4), "should read 4/4, not 4/5");
     }
 
     /// The invariant: something is always visibly happening.

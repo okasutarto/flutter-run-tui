@@ -31,7 +31,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     }
 
     let area = budget::clamp_width(full);
-    let plan = Budget::solve(area, app.state);
+    let plan = Budget::solve(area, app.state, app.stages.len());
 
     // Expanded: the middle region and the footer, nothing else. The Budget is
     // bypassed rather than taught about this, because there is no ladder to solve
@@ -41,9 +41,8 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     // exists so a card cannot stretch a label to one edge and its value to the
     // other, and there are no cards here. More columns means fewer wrapped rows.
     if app.expanded && app.state.has_logs() {
-        let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(1)])
-            .spacing(1)
-            .split(full);
+        // No spacing: the footer sits directly under the log card's bottom border.
+        let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(full);
 
         logs::render(frame, rows[0], app);
 
@@ -65,16 +64,25 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     }
 
     if app.state.has_build() {
-        rows.push(Constraint::Length(plan.build_h()));
+        rows.push(Constraint::Length(plan.build_h(app.stages.len())));
     }
 
     // The flexible middle: device list, failure card, or log stream depending
     // on the state. Everything else is fixed.
     rows.push(Constraint::Min(3));
 
-    rows.push(Constraint::Length(1));
+    // The footer is split off before the cards are laid out, so the `spacing(1)`
+    // below cannot put a gap in front of it.
+    //
+    // It is a single row of keycaps directly under a card border; a blank row
+    // above it made it read as a detached fragment rather than as the bottom edge
+    // of the frame. Between *cards* the gap is worth having, which is why this is
+    // a separate split rather than dropping spacing altogether.
+    let split = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(area);
+    let body = split[0];
+    let footer_area = split[1];
 
-    let chunks = Layout::vertical(rows).spacing(1).split(area);
+    let chunks = Layout::vertical(rows).spacing(1).split(body);
     let mut i = 0;
 
     project::render(frame, chunks[i], app, &plan, art);
@@ -90,8 +98,8 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         i += 1;
     }
 
+    // Last chunk: the footer has its own area, split off above.
     let middle = chunks[i];
-    i += 1;
 
     // No prompt bar between the middle and the footer. It was three rows plus a
     // separating gap, spent on a command line with nothing to command: Flutter
@@ -118,7 +126,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         }
     }
 
-    chrome::footer(frame, chunks[i], app, Some(&plan));
+    chrome::footer(frame, footer_area, app, Some(&plan));
 }
 
 fn too_small(frame: &mut Frame, area: Rect) {

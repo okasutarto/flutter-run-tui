@@ -173,26 +173,32 @@ impl Platform {
         }
     }
 
-    /// How many stages Flutter is expected to announce here.
+    /// Phases the progress bar counts on this platform.
     ///
-    /// The platform is known before the build starts, and the trigger table in
-    /// 3.4 is per-platform, so the count is knowable after all — which is what
-    /// gives the progress bar an honest denominator.
+    /// The platform is known before the build starts and the trigger table in 3.4
+    /// is per-platform, so the count is knowable in advance — which is what gives
+    /// the bar an honest denominator.
     ///
-    /// Only ever an upper bound. Flutter skips stages it does not need: no
-    /// `pod install` when `Podfile.lock` is current, no install when attaching to
-    /// an app that is already there. Being an upper bound is the useful
-    /// direction — the bar can stall below full and then complete, which reads
-    /// correctly, where the reverse would reach 100% and keep working.
+    /// Only ever an upper bound. Flutter skips phases it does not need, and a
+    /// phase that is skipped leaves the bar one short until the build ends, where
+    /// the denominator collapses to what actually ran. The reverse — a floor —
+    /// would let the bar reach full and keep working, which is the failure worth
+    /// avoiding.
     pub fn stage_count(self) -> usize {
         match self {
-            // Starting, launching, CocoaPods, Xcode, syncing, ready. macOS builds
-            // through CocoaPods and Xcode as well, so it counts the same.
-            Platform::Ios | Platform::Desktop => 6,
-            // Starting, launching, Gradle, install, syncing, ready.
+            // Starting, launching, Xcode, syncing, running.
+            //
+            // Five, not six: iOS has no separate install step, and CocoaPods is
+            // skipped whenever `Podfile.lock` is current, which is most runs.
+            // Counting a phase that usually does not happen would leave the bar
+            // permanently one short; when pods does run, `expected_stages` raises
+            // the total to match.
+            Platform::Ios | Platform::Desktop => 5,
+            // Starting, launching, Gradle, install, syncing, running. The install
+            // step is the one Android has and iOS does not.
             Platform::Android => 6,
             // No native toolchain in the middle: starting, launching, syncing,
-            // ready.
+            // running.
             Platform::Web => 4,
         }
     }
@@ -1117,7 +1123,7 @@ fn mock_stages(state: State) -> Vec<Stage> {
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "14.5s", true),
             stage(StageKey::Sync, "Syncing files", "240ms", true),
-            stage(StageKey::Ready, "Interactive session ready", "0.9s", true),
+            stage(StageKey::Ready, "Application Running", "0.9s", true),
         ],
 
         _ => Vec::new(),

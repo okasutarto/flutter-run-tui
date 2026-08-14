@@ -102,8 +102,10 @@ impl Budget {
     /// lost its `Type` field and its command string.
     const TITLE_GAP: u16 = 1;
 
-    /// Stage rows the tracker is sized for. See `build_h`.
-    const MAX_STAGES: u16 = 6;
+    /// Ceiling on tracker rows, so an unexpected flood of stages cannot push the
+    /// log window off the screen. Android's six plus `pub get` and CocoaPods is
+    /// the most that has ever been observed.
+    const MAX_STAGES: u16 = 8;
 
     /// ProjectCard.
     ///
@@ -174,21 +176,25 @@ impl Budget {
     ///   blank                                     1
     ///   one row per stage                         5 finished / 3 mid-build
     /// ```
-    pub fn build_h(&self) -> u16 {
+    /// Height of the tracker, for `stages` rows.
+    ///
+    /// The count is passed in rather than assumed. It was a fixed six, which left
+    /// blank rows below `Starting Flutter` for phases that had not been announced
+    /// yet — reserving space for work nobody had asked for. The cost of taking it
+    /// from the live list is that the card grows a row as each phase opens, and the
+    /// log window below gives one up; that is honest, and cheaper than dead space.
+    ///
+    /// Charging exactly what is drawn is not optional: a row drawn past the
+    /// charged height is clipped with no error at all (7.5).
+    pub fn build_h(&self, stages: usize) -> u16 {
         if !self.full_build {
             return 1;
         }
 
-        // The full set, always, rather than the number currently drawn.
-        //
-        // Charging fewer rows than are drawn clips the extras in silence, which is
-        // trap one in 7.5, and the list grows during a build so any figure taken
-        // from its current length is stale the moment a stage opens. A fixed
-        // height also stops the log window below jumping each time a row appears.
-        //
-        // Six: starting, launching, the platform's two, syncing, ready. `pub get`
-        // is not counted, since it appears on few runs.
-        let stages = Self::MAX_STAGES;
+        // One row minimum. `begin_build` opens `Starting Flutter` before Flutter
+        // has printed anything, so a build always has at least one row — but a
+        // zero here would collapse the card into its own borders.
+        let stages = (stages.max(1) as u16).min(Self::MAX_STAGES);
 
         1 + 1 + stages + 2 + Self::TITLE_GAP
     }
@@ -200,8 +206,12 @@ impl Budget {
     /// Hardcoding it at 4 undercounted the running view by one row, which the
     /// spec-arithmetic test caught.
     fn blocks(&self, state: State) -> u16 {
-        // ProjectCard, the flexible middle, and the footer are always present.
-        let mut n = 3;
+        // ProjectCard and the flexible middle are always present.
+        //
+        // The footer is not counted. It is split off before these are laid out so
+        // that no gap precedes it, so it contributes its row to `chrome` but no
+        // spacing.
+        let mut n = 2;
 
         if state.has_target() {
             n += 1;
@@ -219,7 +229,7 @@ impl Budget {
     /// Excludes the flexible middle, which is what the log window or the device
     /// list expands into. Includes the blank rows between blocks, because those
     /// are just as unavailable to the log window as a border is.
-    pub fn chrome(&self, state: State) -> u16 {
+    pub fn chrome(&self, state: State, stages: usize) -> u16 {
         let mut rows = self.project_h();
 
         if state.has_target() {
@@ -227,7 +237,7 @@ impl Budget {
         }
 
         if state.has_build() {
-            rows += self.build_h();
+            rows += self.build_h(stages);
         }
 
         // Footer, always present.
@@ -238,7 +248,7 @@ impl Budget {
 
     /// Solve for the largest configuration that still leaves the log window
     /// its floor.
-    pub fn solve(area: Rect, state: State) -> Self {
+    pub fn solve(area: Rect, state: State, stages: usize) -> Self {
         let mut budget = Self::full();
 
         // The floor protects whichever region carries the information the user
@@ -252,7 +262,7 @@ impl Budget {
             3
         };
 
-        while budget.chrome(state) + floor > area.height {
+        while budget.chrome(state, stages) + floor > area.height {
             if !budget.concede() {
                 break;
             }
@@ -298,6 +308,13 @@ pub fn clamp_width(area: Rect) -> Rect {
 mod tests {
     use super::*;
 
+    /// Stage rows a finished Android build leaves on the tracker: starting,
+    /// launching, Gradle, install, syncing, running.
+    ///
+    /// The tracker's height follows this now, so it has to be stated rather than
+    /// assumed — that is the whole point of passing it in.
+    const DONE: usize = 6;
+
     fn area(w: u16, h: u16) -> Rect {
         Rect::new(0, 0, w, h)
     }
@@ -306,10 +323,10 @@ mod tests {
     fn full_chrome_matches_the_spec_arithmetic() {
         // Enumerated from the rows the cards actually draw, not estimated:
         // project 12, target 14, build 10, footer 1, four gaps.
-        let chrome = Budget::full().chrome(State::Running);
+        let chrome = Budget::full().chrome(State::Running, DONE);
 
         assert_eq!(
-            chrome, 42,
+            chrome, 41,
             "enumerated from the rows each card actually draws"
         );
     }
@@ -322,20 +339,20 @@ mod tests {
     #[test]
     fn the_log_window_keeps_what_the_prompt_bar_used_to_cost() {
         let log_rows = |h: u16| {
-            let plan = Budget::solve(area(106, h), State::Running);
-            h - plan.chrome(State::Running)
+            let plan = Budget::solve(area(106, h), State::Running, DONE);
+            h - plan.chrome(State::Running, DONE)
         };
 
-        // At the design target, full chrome now leaves 3 rows rather than 0. It was
-        // 4 until the tracker was sized for six stage rows instead of five, which
-        // is the row that keeps `Starting Flutter` from being clipped.
-        assert_eq!(45 - Budget::full().chrome(State::Running), 3);
+        // At the design target, full chrome leaves 4 rows rather than 0: three from
+        // dropping the prompt bar, and a fourth from the footer no longer taking a
+        // blank row above it.
+        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 4);
         assert!(log_rows(45) >= LOG_MIN, "{} rows", log_rows(45));
 
         // A window tall enough to keep everything still gains what the prompt cost.
-        let plan = Budget::solve(area(106, 60), State::Running);
+        let plan = Budget::solve(area(106, 60), State::Running, DONE);
         assert_eq!(plan, Budget::full());
-        assert_eq!(60 - plan.chrome(State::Running), 18);
+        assert_eq!(60 - plan.chrome(State::Running, DONE), 19);
     }
 
     /// Guards the failure mode that adding the title gap caused: the Layout is
@@ -361,8 +378,8 @@ mod tests {
     #[test]
     fn log_floor_is_defended_at_the_design_target() {
         // At 106x45 the full layout would leave 5 rows, so it must concede.
-        let budget = Budget::solve(area(106, 45), State::Running);
-        let remaining = 45 - budget.chrome(State::Running);
+        let budget = Budget::solve(area(106, 45), State::Running, DONE);
+        let remaining = 45 - budget.chrome(State::Running, DONE);
 
         assert!(
             remaining >= LOG_MIN,
@@ -373,7 +390,7 @@ mod tests {
 
     #[test]
     fn a_tall_window_keeps_everything() {
-        let budget = Budget::solve(area(106, 60), State::Running);
+        let budget = Budget::solve(area(106, 60), State::Running, DONE);
         assert_eq!(budget, Budget::full());
     }
 
@@ -406,25 +423,25 @@ mod tests {
         // Running: no device list on screen, so the device-row rung is inert here
         // by design and is checked against the picker instead.
         let mut b = Budget::full();
-        let before = b.chrome(State::Running);
+        let before = b.chrome(State::Running, DONE);
 
         b.separators = false;
         assert!(
-            b.chrome(State::Running) < before,
+            b.chrome(State::Running, DONE) < before,
             "separators must reclaim rows"
         );
 
-        let before = b.chrome(State::Running);
+        let before = b.chrome(State::Running, DONE);
         b.full_build = false;
         assert!(
-            b.chrome(State::Running) < before,
+            b.chrome(State::Running, DONE) < before,
             "collapsing the build tracker must reclaim rows"
         );
 
-        let before = b.chrome(State::Running);
+        let before = b.chrome(State::Running, DONE);
         b.full_cards = false;
         assert!(
-            b.chrome(State::Running) < before,
+            b.chrome(State::Running, DONE) < before,
             "collapsing the cards must reclaim rows"
         );
     }
@@ -433,7 +450,7 @@ mod tests {
     fn states_without_logs_do_not_defend_a_floor() {
         // The picker has no log window, so it should keep its detail at a
         // height where the running view would already be conceding.
-        let budget = Budget::solve(area(106, 34), State::MultipleDevices);
+        let budget = Budget::solve(area(106, 34), State::MultipleDevices, DONE);
         assert!(budget.separators, "picker has no log floor to protect");
     }
 }

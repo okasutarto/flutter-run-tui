@@ -113,8 +113,8 @@ pub fn rows(app: &App, width: u16) -> String {
     out.push_str("  ────   ───   ────────\n");
 
     for h in [20u16, 24, 29, 33, 37, 40, 45, 50, 56, 62] {
-        let plan = Budget::solve(Rect::new(0, 0, width, h), app.state);
-        let chrome = plan.chrome(app.state);
+        let plan = Budget::solve(Rect::new(0, 0, width, h), app.state, app.stages.len());
+        let chrome = plan.chrome(app.state, app.stages.len());
         let log = h.saturating_sub(chrome);
 
         out.push_str(&format!("  {h:>4}   {log:>3}   {}\n", plan.describe()));
@@ -122,7 +122,7 @@ pub fn rows(app: &App, width: u16) -> String {
 
     out.push_str(&format!(
         "\n  full chrome = {} rows   ·   log floor = {} rows\n",
-        Budget::solve(Rect::new(0, 0, width, 200), app.state).chrome(app.state),
+        Budget::solve(Rect::new(0, 0, width, 200), app.state, app.stages.len()).chrome(app.state, app.stages.len()),
         crate::budget::LOG_MIN,
     ));
 

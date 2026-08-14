@@ -272,20 +272,61 @@ devices answered.
 * **Progress Pipeline**: stage list built from what Flutter actually emits,
   and **platform-dependent** rather than a fixed sequence:
 
-  | Trigger in Flutter output | Stage shown | Platform |
+  | Trigger | Row opened | Platform |
   | :--- | :--- | :--- |
-  | `Launching lib/main.dart` | flutter started | both |
-  | `Running pod install` | cocoapods | iOS |
-  | `Running Xcode build` / `Xcode build done` | xcode build | iOS |
-  | `Running Gradle task '<task>'` | gradle, with the task name | Android |
-  | `Built build/...` | gradle complete | Android |
-  | `Installing build/...` | app installed | Android |
-  | `Syncing files to device` | files synced | both |
-  | `Flutter run key commands` | interactive session ready | both |
+  | *the pty spawns* | `Starting Flutter` | both |
+  | `Launching lib/main.dart` | `Launching lib/main.dart` | both |
+  | `flutter pub get` / `Resolving dependencies` | `Resolving dependencies` | when needed |
+  | `Running pod install` | `Installing CocoaPods` | iOS |
+  | `Running Xcode build` | `Building with Xcode` | iOS |
+  | `Running Gradle task '<task>'` | `Gradle task <task>` | Android |
+  | `Installing build/...` | `Installing app` | Android |
+  | `Syncing files to device` | `Syncing files` | both |
+  | `Flutter run key commands` | `Application Running` | both |
 
-  Durations are parsed from the same lines. Note Flutter formats elapsed time
-  through `NumberFormat`, so values carry a group separator (`1,847ms`) and
-  must not be matched with `[0-9]+`.
+  **Every trigger opens a row. Nothing closes one.** A row is closed by the
+  arrival of its successor, at the same instant it is charged its duration. That
+  single rule is what guarantees a spinner is on screen for every second of the
+  build: closing a row *is* opening the next, so there is no moment in between.
+
+  Consequences worth stating, because they are the whole point:
+
+  * **`Starting Flutter` is opened by frun, not by Flutter.** It covers `fvm`
+    resolving the pinned SDK, the Dart VM booting flutter_tools, and
+    flutter_tools starting up. Flutter's first line is what *ends* that span, so
+    nothing in its output brackets it, and without a row of frun's own those
+    seconds have no indicator at all.
+  * **`Xcode build done`, `Built build/...`, `Compiling, linking and signing` and
+    a bare duration line are swallowed.** They used to close a row. Each one
+    stopped the spinner while the build carried on — on iOS the wait between
+    `Xcode build done` and `Syncing files` is the app being installed and
+    launched, and the tracker sat idle through it.
+  * **A closed row's number never moves.** The old split — closed by its own
+    trigger, charged later at the next open — let a row show
+    `✔ Building with Xcode 11.1s` and silently become `14.5s` seconds afterwards.
+    Measured on an iOS transcript: `0ms → 125ms`, `121ms → 241ms`,
+    `124ms → 249ms`.
+  * **Flutter's own figures are not used.** Its timers start before its
+    announcements reach us, so mixing them with measured spans double-counts.
+    The cost is that `Building with Xcode` reads ~14s where raw `flutter run`
+    says `11.1s`: Flutter's figure is the truer measure of the Xcode build alone,
+    ours is the truer measure of where the wall clock went, and only one of the
+    two can add up to the total.
+
+  Flutter's durations are still parsed, for the log stream and the reload rows.
+  Note it formats elapsed time through `NumberFormat`, so values carry a group
+  separator (`1,847ms`) and must not be matched with `[0-9]+`.
+
+* **Each row's timer runs while its phase runs.** It starts at zero the moment
+  the row opens, ticks live, and freezes at its measured figure when the
+  successor closes it. One formatter for both halves, so `1.8s` running becomes
+  `1.9s` frozen rather than switching units mid-life.
+
+  There was a three-second delay before a clock appeared, inherited from
+  `frun-runner`, on the grounds that a stage which finishes quickly should never
+  show a number. That made the fast rows read as though they were not being timed
+  at all. The delay is gone: a row that has just opened reads `0ms` and starts
+  moving.
 
 * **Timing Bar**: `Build Time` and `Sync Time` only. CPU and memory gauges are
   removed. Whose CPU is ambiguous, and reporting system-wide load would be
@@ -293,7 +334,7 @@ devices answered.
   the Dart VM, Gradle daemon, Xcode and simulator process tree for a number
   that is rarely acted on.
 
-* **Progress Bar**: filled bar with `Stage 3/5`. A blank row separates it from
+* **Progress Bar**: filled bar with `Stage 4/5`. A blank row separates it from
   the stage list.
 
   The bar itself is capped at 44 columns; the row it sits on is not, so the
@@ -305,8 +346,21 @@ devices answered.
   total is not knowable in advance because the stage set is platform-dependent and
   Flutter skips stages it does not need. The first half of that is backwards: the
   platform is chosen *before* the build starts, and the table above is indexed by
-  it, so the stage set follows from the target. Five for iOS, Android and macOS;
-  three for web.
+  it, so the phase set follows from the target:
+
+  | Platform | Phases counted | Total |
+  | :--- | :--- | :--- |
+  | Android | starting, launching, Gradle, install, syncing, running | 6 |
+  | iOS, macOS | starting, launching, Xcode, syncing, running | 5 |
+  | Web | starting, launching, syncing, running | 4 |
+
+  Android is the one with six: it installs the APK as a step of its own, which iOS
+  does not. And **CocoaPods is not counted**, for the same reason
+  `Resolving dependencies` is not — both are skipped on most runs, `pod install`
+  whenever `Podfile.lock` is current, so counting them would leave the bar
+  permanently a row short on every ordinary build. When either does run,
+  `expected_stages` raises the total to match, because it is floored at the number
+  of rows that actually exist.
 
   The skipping is real and is handled by direction rather than by avoidance. The
   figure is an upper bound, never a floor — `pod install` is skipped when
@@ -316,17 +370,28 @@ devices answered.
   precisely what an upper bound cannot do; it was the old denominator, the count of
   stages announced so far, that produced it. See 7.6.
 
-  Once the build completes the count that actually ran is stated
-  (`4 stages · complete`).
+  **The numerator is the stage you are on, not the count that has closed.** It was
+  the closed count, which read `Stage 0/6` for the whole of the first stage — a
+  build four seconds in reporting that nothing had happened. The row currently
+  spinning is the stage you are on, so it counts, and the bar is filled from the
+  same two numbers the label shows so the two cannot disagree.
 
-* **Marker rows carry the gap to the next stage.** `Flutter started` and
-  `Interactive session ready` are announcements, not work, so timing them yields
-  `0ms`. On `Flutter started` that is actively misleading: the seconds spent in
-  the `fvm` shim, Dart VM boot, flutter_tools startup, dependency resolution and
-  Gradle daemon warmup all follow it and belong to no stage at all. A marker
-  therefore reports the distance to whatever comes next, which is measured from
-  two timestamps already being recorded. The final row stays blank, because
-  nothing follows it. See 7.7.
+  **On completion the denominator collapses to what actually ran**, so the row
+  reads `6/6`, or `5/5` on an iOS build that skipped CocoaPods. The estimate has
+  done its job by then, and an upper bound that stays put would end the build on
+  `5/6` — a build reporting that it stopped short of itself.
+
+* **There are no marker rows.** An earlier revision named `Flutter started` and
+  `Application Running` markers — announcements rather than work — and gave
+  them a special rule: report the distance to the next stage, since timing the
+  announcement itself yields `0ms`.
+
+  The special case is gone because the general rule absorbed it. Every row is now
+  measured from its own announcement to the next one, so a row that represents an
+  instant automatically reports the span that follows it, with no class of row
+  needing different treatment. `Starting Flutter` gets the startup gap because it
+  opens before Flutter speaks; `Application Running` is closed by the end of
+  the build, which is the only row without a successor. See 7.7.
 
 * **Failure State**: error summary, exit code, elapsed total, and which stage
   broke.
@@ -719,20 +784,40 @@ draw rather than estimated:
   SELECTED TARGET        14 rows   2 border + 1 title gap + 11 body
                                    body = banner + blank + 4 fields + blank
                                           + command + 3 separators
-  BUILD PHASE            10 rows   2 border + 1 title gap + bar + blank + 5 stages
+  BUILD PHASE            11 rows   2 border + 1 title gap + bar + blank + 6 stages
+                                   the stage count is live, so this is the tallest
+                                   case: a finished Android build. iOS ends at 10.
   footer                  1 row
   gaps between blocks     4 rows   blocks - 1, not a constant
   ────────────────────────────────
-  TOTAL                  41 rows
+  TOTAL                  42 rows
 ```
 
-At the 106x45 target that leaves the log window **4 rows**. A five-line Dart
+At the 106x45 target that leaves the log window **3 rows**. A five-line Dart
 exception, wrapped at 84 columns of message space, occupies **8 rows**. So a
 single error still would not fit on screen at the design's own target size, and
 the cards have to yield.
 
 It was 45 rows, leaving nothing at all, until the prompt bar and its gap were
 removed (3.6).
+
+**The tracker's height follows the number of rows it actually has.** `build_h`
+takes the count rather than assuming one, so the card is four rows tall while four
+phases have been announced and grows as the fifth opens.
+
+It was a fixed six, chosen so the card would never change height mid-build. That
+reserved space for phases nobody had announced yet: during `Starting Flutter` the
+card held one row of content and five blank ones, which reads as a rendering fault
+rather than as room. Growing costs the log window a row each time a phase opens,
+which is a visible reflow, and that is the better trade — the reflow is the build
+making progress, whereas the blank rows were describing nothing.
+
+Capped at eight (`MAX_STAGES`), so an unforeseen flood of phases cannot push the
+log window off the screen. Android's six plus CocoaPods and `pub get` is the most
+that has ever been observed.
+
+Charging exactly what is drawn is not optional here: this is trap one in 7.5, and
+a row past the charged height is clipped with no error at all.
 
 Two notes on the arithmetic, both learned by getting it wrong:
 
@@ -819,10 +904,13 @@ executed.
 | 3. `RELOAD_DROPPED` (11) | tested | needs Flutter to silently swallow a keypress, which is not reliably forceable |
 | 4. Boot, and `NO_DEVICES` (2) | live | AVD booted through `sys.boot_completed`, name mapped back to `emulator-5554`, picker skipped, straight into the build |
 | 5. Shell cutover | live | `frun` through the shim: flag passthrough, fatal path, exit codes 0 / 1 / 130 |
-| 7.6 Progress denominator | live + tested | `Stage 1/5` on a real build; a test walks a build and forbids the fraction decreasing |
+| 7.6 Progress denominator | live + tested | `Stage 1/5` on a real build, now `x/6`; a test walks a build and forbids the fraction decreasing |
+| One row always spinning | tested | iOS and Android transcripts replayed; `open == 1` asserted after every line, and `0` only once the build ends |
+| Closed rows never re-timed | tested | a row's duration is compared before and after two later lines arrive |
+| Live per-stage timer | tested | the `building` mock holds a row opened six seconds ago, so one frame proves it ticks |
 | 7.6 Log stream during build | live | on screen from the first frame of a real Gradle build |
 | 7.6 Merged picker | live | 16 rows on a real machine, running first, `Pixel_10_Pro_XL` de-duplicated against the running `emulator-5554` |
-| 7.6 Stage elapsed clock | tested | the `building` mock holds a stage started six seconds ago, so one frame proves it |
+
 | 7.6 Log scrolling | tested | rendered at a size where content overflows; asserts rows change and the offset was not clamped to zero |
 | 7.7 Zoom (`z`) | tested | fills the frame at the right width |
 | 7.7 Marker gap durations | tested | the gap fills on the next stage, and the final row stays blank |
@@ -844,11 +932,16 @@ can be.
 
 Two of the 7.6 fixes are covered by render tests rather than live runs, and that is
 a deliberate choice rather than a shortfall. Log scrolling does nothing unless the
-content overflows the window, and the stage clock appears only after three seconds
-— both are conditions that depend on how chatty the app happens to be at the
-moment a key is pressed. Tests can guarantee the condition; a live run can only
+content overflows the window, which depends on how chatty the app happens to be at
+the moment a key is pressed. Tests can guarantee the condition; a live run can only
 hope for it. Three attempts to catch scrolling live all landed on a window that was
 not full, which is exactly the false pass the tests are written to exclude.
+
+The same reasoning applies to the one-row-spinning invariant, for a sharper
+reason: the failure is a *gap between* two output lines, so no single frame can
+show it and no single line can be tested for it. Replaying whole transcripts is
+the only way to see it at all, which is why that check feeds an iOS and an Android
+transcript line by line rather than asserting on a rendered frame.
 
 `src/` layout:
 
@@ -1094,8 +1187,10 @@ and Python stays in the chain. Against that: the ack machine is 26 lines. Portin
 * **The twelve stage booleans are gone.** `frun-runner` tracks `pods_started`,
   `pods_completed`, `gradle_started` and nine more, plus a scratch string per
   stage for durations Flutter re-emits. Here the stage list *is* the state:
-  `start_stage` and `finish_stage` are keyed on an enum and idempotent, which is
-  what every `if not pods_started` guard was doing by hand.
+  `start_stage` is keyed on an enum and idempotent, which is what every
+  `if not pods_started` guard was doing by hand. It ended up being the only stage
+  operation there is: closing a row happens inside it, as the next row opens, so
+  there is nothing for a `finish_stage` to do (see 7.6).
 * **`FRUN_LOG_DELAY` is not ported.** The five-second hold before releasing app
   logs existed because the shell printed the build summary and the log stream into
   one scrolling region, so a chatty app scrolled the summary away. The tracker and
@@ -1104,7 +1199,7 @@ and Python stays in the chain. Against that: the ack machine is 26 lines. Portin
   session is ready, so they simply are not on screen yet.
 
 Also: stages time themselves when Flutter reports no duration. `Syncing files` and
-`Interactive session ready` never carry one, and measuring is both honest and
+`Application Running` never carry one, and measuring is both honest and
 smaller than special-casing them.
 
 **4. Boot.** `emulator -avd` with `sys.boot_completed` polling capped at 180
@@ -1199,6 +1294,19 @@ key events. `FRUN_NO_QUERY=1` skips the query and falls back to halfblocks.
 line was followed by `Error: Custom { kind: NotFound, .. }`. Print the message and
 `std::process::exit`.
 
+**Anything that can be done in two steps will eventually be done in one of them.**
+A stage row was closed by one trigger and charged by another, and both defects that
+came out of it — a tracker sitting idle mid-build, and a finished row whose number
+kept moving — are the same shape: two operations that must coincide, expressed as
+two things that can happen apart. The fix each time was not to synchronise them but
+to make it impossible to do one alone. `finish_stage` was deleted rather than
+corrected.
+
+The same shape is worth watching for elsewhere in this codebase: a row drawn
+without being charged in `budget.rs` (trap one), and a gutter drawn at one width
+while continuation rows indent to a constant (trap three) are both two expressions
+of one fact.
+
 ### 7.6 Defects found by running it, and their fixes
 
 All five were found by using it against a real project rather than by reading it.
@@ -1216,8 +1324,10 @@ becomes 1 of 2, so 50%.
 entirely — indeterminate while building, full on completion. That was wrong for a
 simpler reason than it looked: the total *is* knowable. The platform is chosen
 before the build starts, and 3.4's own trigger table is per-platform, so the stage
-set follows from the target. `Platform::stage_count` states it: five for iOS,
-Android and macOS, three for web.
+set follows from the target. `Platform::stage_count` states it: six for Android,
+five for iOS and macOS, four for web — Android being the one that installs the APK
+as a step of its own. CocoaPods and `pub get` are not counted, since both are
+skipped on most runs.
 
 It is an upper bound, never a floor, and that asymmetry is what makes it safe.
 Flutter skips stages it does not need — no `pod install` when `Podfile.lock` is
@@ -1228,7 +1338,7 @@ upper bound. `expected_stages` also floors the total at the number of stages
 already seen, so a platform that announces more than predicted still cannot
 overflow it.
 
-The bar now shows `Stage 3/5`, and the count of stages that actually ran on
+The bar now shows `Stage 4/5`, and the count of stages that actually ran on
 completion. A test walks a full build and asserts the fraction never decreases.
 
 **A placeholder occupies the space output should be in.** During `BUILDING` the
@@ -1246,16 +1356,26 @@ during `BUILDING` instead of the placeholder. The gap fills with real output and
 the placeholder disappears.
 
 Plus one thing `frun-runner` already had and that was not carried over: an
-elapsed clock on the stage currently running, appearing only after about three
-seconds (`ELAPSED_AFTER`). Its comment gives the reason, which still holds — a
-spinner alone cannot distinguish slow from stuck.
+elapsed clock on the stage currently running. Its reason still holds — a spinner
+alone cannot distinguish slow from stuck.
+
+It arrived with `frun-runner`'s three-second delay before the clock appeared, and
+that delay is now gone too. A row that has just opened reads `0ms` and starts
+moving. The delay existed so a fast stage never showed a number, but the effect was
+that the fast rows looked untimed, and it put a change of units in the middle of a
+row's life.
 
 **Done, all three.** `State::has_logs()` now includes `Building`, so the middle
 region carries the log stream from the moment the build starts, and
-`waiting_for_build` is deleted. The stage rows show a clock once a stage passes
-three seconds. One consequence worth noting: the `LOG_MIN` floor in 6.2 is now
-defended during `BUILDING` as well, so the build tracker keeps its detail and the
-separators are conceded instead.
+`waiting_for_build` is deleted. Every stage row carries a clock, ticking from zero
+while it is open.
+
+Two consequences worth noting. The `LOG_MIN` floor in 6.2 is now defended during
+`BUILDING` as well, so the build tracker keeps its detail and the separators are
+conceded instead. And the third item here — the unmarked startup gap — turned out
+not to be fixable by the log stream alone: output during the gap explains *what*
+is happening, but the tracker still showed no row for it. That needed a row frun
+opens itself, which is `Starting Flutter` above.
 
 **Auto-select traps you on the wrong platform.** With only the iPhone simulator
 up, `main.rs` finds exactly one attached device and launches on it. There is no
@@ -1354,35 +1474,48 @@ neither `z` nor `j`/`k`, and this is the second of the two places where frun cla
 a letter for the log window.
 
 **Marker stages show `0ms`, and blanking them is the wrong fix.** `Flutter
-started` and `Interactive session ready` are markers; nothing takes zero
+started` and `Application Running` are markers; nothing takes zero
 milliseconds. But emptying the column would remove the only place the eight-second
 startup gap could ever appear, since that gap happens immediately after `Flutter
 started`.
 
 So a marker row carries the time from itself until the next stage begins. Both
 timestamps are already known, so the figure is measured rather than invented, and
-the most meaningless number on the card becomes the most informative one:
+the most meaningless number on the card becomes the most informative one.
+
+**That was right about the fix and wrong about its scope, and the scope is what
+changed.** Two rows were treated as special cases while the rest kept Flutter's
+own figures. Applying the rule to *every* row instead — each one measured from its
+announcement to the next — removed the special case, removed the mixing of two
+time sources, and turned out to be the same change that fixes the idle-tracker
+defect above: a row that is charged at the next announcement can also be *closed*
+there, and then nothing ever stops spinning early.
+
+What it looks like now, with the two rows this question was about at either end:
 
 ```text
-  ✓ Flutter started                8.0s     fvm, Dart VM, flutter_tools, pub, daemon
-  ✓ Gradle task assembleDebug    2,834ms
-  ✓ Installing app               1,207ms
+  ✓ Starting Flutter               3.6s     fvm, Dart VM, flutter_tools
+  ✓ Launching lib/main.dart        1.1s     pub, Gradle daemon warmup
+  ✓ Gradle task assembleDebug      2.8s
+  ✓ Installing app                 1.2s
   ✓ Syncing files                   81ms
-  ✓ Interactive session ready              last row, nothing follows it
+  ✓ Application Running             0.9s     closed by the end of the build
 ```
 
-Rows that already carry a duration keep it. `2,834ms` is Flutter's own figure and
-matches what raw `fvm flutter run` prints, which is worth preserving; measuring
-those ourselves would make the card disagree with Flutter for no gain. Gap-to-next
-applies only to marker rows that have no duration of their own.
+`Starting Flutter` is opened by frun when the pty spawns, which is what gives the
+startup gap a row of its own rather than hiding it inside a marker's figure. The
+last row is closed by build completion, the one row with no successor to close it.
 
-A pleasant side effect: the column comes close to summing to `Build time` without
-adding an `other` row or renaming the label.
+The cost, stated plainly: `2.8s` is our measurement, not Flutter's `2,834ms`. The
+column now sums to the build total, which the mixed version could not, but it no
+longer agrees with what raw `fvm flutter run` prints for individual stages.
 
-**Done.** `StageKey::is_marker` names the two rows this applies to, `finish_stage`
-leaves a marker's duration empty instead of timing it, and `start_stage` fills the
-previous marker with the gap as it opens the next stage. The last row keeps a blank
-because nothing follows it, which is the honest answer rather than a zero.
+**Done, and it is mostly deletion.** `start_stage` closes the previous row and
+charges it, together, and is the only place either happens. `StageKey::is_marker`,
+`finish_stage`, `stage_duration`, `ELAPSED_AFTER` and the `waiting` branch in
+`build.rs` are all gone, along with every `if gradle_started && !gradle_completed`
+safety net — those existed because a close could be missed, and a close that cannot
+happen on its own cannot be missed.
 
 Both timestamps were already being recorded, so this added no measurement — only
 the arithmetic between two numbers that were sitting there unused.

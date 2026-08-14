@@ -91,31 +91,39 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
     // The bar is bounded; the row it sits on is not.
     let bar_w = area.width.saturating_sub(24).min(BAR_MAX) as usize;
 
-    let filled = if finished {
-        bar_w
+    // Which stage we are *on*, not how many have closed.
+    //
+    // It used to be the closed count, which read `Stage 0/6` for the whole of the
+    // first stage — a build that has been running for four seconds reporting that
+    // nothing has happened. The row that is currently spinning is the stage you
+    // are on, so it counts.
+    //
+    // On completion the denominator collapses to what actually ran, so the row
+    // reads `6/6` rather than `5/6`. The estimate is an upper bound and has done
+    // its job by then: iOS skips CocoaPods when `Podfile.lock` is current and
+    // finishes in five, and ending on `5/6` would report a build that stopped
+    // short of itself.
+    let (reached, denominator) = if finished {
+        let ran = app.stages.len();
+        (ran, ran)
     } else {
-        bar_w * done / total.max(1)
+        ((done + 1).min(total), total)
     };
 
-    let right = if finished {
-        vec![
-            // The count that actually ran, not the estimate.
-            strong(format!("{} stages", app.stages.len()), theme::EMERALD),
-            text("  complete", theme::MUTED),
-        ]
+    // Same two numbers the label shows, so the bar cannot disagree with it.
+    let filled = bar_w * reached / denominator.max(1);
+
+    let colour = if finished {
+        theme::EMERALD
     } else {
-        vec![
-            text("Stage ", theme::MUTED),
-            // Completed stages, so it reads 0 until the first one turns green.
-            //
-            // The denominator is back by request. It is an upper bound rather
-            // than a fact — iOS can show `/5` and then run four, because
-            // CocoaPods is skipped when Podfile.lock is current — and the row
-            // states the real count once the build ends.
-            strong(format!("{done}"), theme::AMBER),
-            text(format!("/{total}"), theme::MUTED),
-        ]
+        theme::AMBER
     };
+
+    let right = vec![
+        text("Stage ", theme::MUTED),
+        strong(format!("{reached}"), colour),
+        text(format!("/{denominator}"), theme::MUTED),
+    ];
 
     let line = spread(
         area.width,
