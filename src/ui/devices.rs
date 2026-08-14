@@ -251,7 +251,89 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     }
 }
 
+/// Gap between two things on a row. One value, so the width accounting below
+/// cannot disagree with the spans it is accounting for.
+const GAP: usize = 2;
+
+const ACTIVE: &str = " active ";
+const LAST_USED: &str = " last used ";
+
+// Uniformly `Run`. The Start/Run split existed to imply whether a boot was
+// coming, which the `active` chip now states outright, and two words for one
+// consequence read as two different consequences.
+const RUN: &str = " ▶ Run ";
+
+/// What a pill costs: its text plus the two cap columns `pill` adds.
+fn pill_width(label: &str) -> usize {
+    crate::widgets::width(label) + 2
+}
+
 fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits: &mut Vec<Hit>) {
+    let w = crate::widgets::width;
+
+    // Both chips, independently, because they are independent facts.
+    //
+    // `active` says what Enter costs: launch now, or boot first and wait.
+    // `last used` says which device you normally reach for. A device can be both,
+    // and suppressing the second then hid the answer to "is the one I usually use
+    // the one that is up?" — which is the question the pair exists to answer.
+    //
+    // `active` requires `needs_boot()`: macOS and Chrome are always available, so
+    // `active` would describe a state they do not have, and `▶ Run` says enough.
+    let active = device.boot.is_none() && device.platform.needs_boot();
+
+    let id = elide(&device.id, 16);
+
+    // Never dropped: the caret, the platform glyph, the name and the `▶ Run`
+    // badge. The first three are how you tell this row from the next one and the
+    // last is what pressing Enter does; a row missing either is not worth drawing.
+    let fixed = GAP
+        + w(device.platform.glyph())
+        + GAP
+        + w(&device.name)
+        + GAP
+        + pill_width(RUN)
+        // `spread` keeps at least one column between the two groups.
+        + 1;
+
+    // Everything else is charged against what is left, in falling order of what
+    // it tells you, because `spread` pads to fit and then silently clips: a row
+    // carrying both chips ran off the right edge at 70 columns and took `▶ Run`
+    // with it. Same reasoning as the footer's right-hand group in 3.7 — a row that
+    // truncates is worse than a short one, since you cannot tell a dropped span
+    // from a cut one.
+    //
+    // Once one span does not fit, nothing after it is drawn either. Letting a
+    // later, cheaper span through would print `virtual` on a row whose platform
+    // label had just been dropped for want of room.
+    let mut room = (area.width as usize).saturating_sub(fixed);
+    let mut stopped = false;
+
+    let mut fits = |wanted: bool, cost: usize| {
+        if !wanted {
+            return false;
+        }
+
+        if stopped || cost > room {
+            stopped = true;
+            return false;
+        }
+
+        room -= cost;
+        true
+    };
+
+    // `active` outranks `last used`: it is the one that changes the consequence
+    // of pressing Enter, where a preference costs nothing either way.
+    let show_active = fits(active, GAP + pill_width(ACTIVE));
+    let show_last_used = fits(device.last_used, GAP + pill_width(LAST_USED));
+    // The id is what Flutter and the boot tools actually address, and it is
+    // frequently the only way to tell two similarly named targets apart, so it
+    // outranks both descriptive tags.
+    let show_id = fits(!id.is_empty(), GAP + w(&id));
+    let show_label = fits(true, GAP + w(device.platform.label()));
+    let show_virtual = fits(device.virtual_device, GAP + w("virtual"));
+
     let mut left = vec![
         if selected {
             strong("❯ ", theme::CYAN)
@@ -268,36 +350,29 @@ fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits
         },
     ];
 
-    // Both chips, independently, because they are independent facts.
-    //
-    // `active` says what Enter costs: launch now, or boot first and wait.
-    // `last used` says which device you normally reach for. A device can be both,
-    // and suppressing the second then hid the answer to "is the one I usually use
-    // the one that is up?" — which is the question the pair exists to answer.
-    //
-    // `active` first, since it is the one that changes the consequence.
-    //
-    // It also requires `needs_boot()`: macOS and Chrome are always available, so
-    // `active` would describe a state they do not have, and `▶ Run` says enough.
-    if device.boot.is_none() && device.platform.needs_boot() {
+    if show_active {
         left.push(Span::raw("  "));
-        left.extend(pill(" active ", theme::EMERALD));
+        left.extend(pill(ACTIVE, theme::EMERALD));
     }
 
-    if device.last_used {
+    if show_last_used {
         left.push(Span::raw("  "));
-        left.extend(pill(" last used ", theme::PURPLE));
+        left.extend(pill(LAST_USED, theme::PURPLE));
     }
 
-    // The id is what Flutter and the boot tools actually address, and it is
-    // frequently the only way to tell two similarly named targets apart.
-    let mut right = vec![
-        text(elide(&device.id, 16), theme::BORDER),
-        Span::raw("  "),
-        text(device.platform.label(), theme::MUTED),
-    ];
+    let mut right = Vec::new();
 
-    if device.virtual_device {
+    if show_id {
+        right.push(Span::raw("  "));
+        right.push(text(id, theme::BORDER));
+    }
+
+    if show_label {
+        right.push(Span::raw("  "));
+        right.push(text(device.platform.label(), theme::MUTED));
+    }
+
+    if show_virtual {
         right.push(Span::raw("  "));
         right.push(text("virtual", theme::PURPLE));
     }
@@ -308,13 +383,8 @@ fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits
     // because a phone happened to be plugged in.
     right.push(Span::raw("  "));
 
-    // Uniformly `Run`. The Start/Run split existed to imply whether a boot was
-    // coming, which the `active` chip now states outright, and two words for one
-    // consequence read as two different consequences.
-    let label = " ▶ Run ";
-
     right.extend(pill(
-        label,
+        RUN,
         if selected { theme::CYAN } else { theme::MUTED },
     ));
 

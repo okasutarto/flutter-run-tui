@@ -144,7 +144,11 @@ devices answered.
    * Header banner: `◆ NO DEVICE RUNNING` with subtitle
      `Nothing is attached. These can be started:`.
    * Title section: `Start a Device`, no category filter tabs.
-   * Action trigger: `▶ Start` per row, transitioning to State 3.
+   * Action trigger: `▶ Run` per row, transitioning to State 3 when the row
+     needs booting first. Uniformly `▶ Run` and not a `Start`/`Run` split: the
+     split existed to imply whether a boot was coming, which the `active` chip
+     in mode 4 now states outright, and two words for one consequence read as
+     two different consequences.
 
    **Every target, not just mobile.** The existing implementation deliberately
    drops macOS, "Mac Designed for iPad" and Chrome, with the stated reason
@@ -186,8 +190,68 @@ devices answered.
 4. **`MULTIPLE_DEVICES`** (State 4): two or more devices answered.
    Interactive list, arrow keys (`↑↓`) and number hotkeys (`[1-N]`).
    The device from `.frun-last-device` is promoted to the top and carries a
-   visible `last used` marker, so the reordering is explained rather than
+   visible `last used` chip, so the reordering is explained rather than
    silent.
+
+   **Two chips, and both appear when both conditions hold.** They answer
+   different questions, so one cannot stand in for the other:
+
+   | Chip | Condition | What it says |
+   | :--- | :--- | :--- |
+   | `active` (emerald) | already running, and the platform boots at all | Enter launches now, no boot wait |
+   | `last used` (purple) | id matches `.frun-last-device` | this is the one you normally reach for, and why the row moved to the top |
+
+   ```text
+   ❯   Pixel 10 Pro XL   active   last used      emulator-5554  Android  virtual   ▶ Run
+        Pixel 8                                        Pixel_8  Android  virtual   ▶ Run
+        iPhone 17 Pro                           8A3F91C2-4D2E  iOS      virtual   ▶ Run
+   ```
+
+   One mutually-exclusive slot was tried first, with `active` winning. It hid the
+   answer to "is the device I always use the one that is up?", which is the single
+   question the pair exists to answer: suppressing `last used` on a running row
+   makes a booted favourite indistinguishable from a stranger that happens to be
+   attached, so the reason the top row is on top disappears exactly when the top
+   row is the good one.
+
+   `active` is printed first because it is the chip that changes the consequence
+   of pressing Enter. `last used` is a preference and costs nothing either way.
+
+   `active` additionally requires `Platform::needs_boot()`. macOS and Chrome are
+   always available, so "active" would describe a state they cannot be out of, and
+   `▶ Run` already says everything true about them.
+
+   Both chips are per-row properties rather than per-frame, which is why State 2
+   and State 4 share one row renderer: a shut-down simulator keeps its `last used`
+   chip and gets no `active` chip, in either frame, without the frame being
+   consulted.
+
+   **The row is budgeted, not truncated.** Two chips is the widest a row gets, and
+   at 70 columns the pair pushed the right-hand group past the edge and took
+   `▶ Run` with it — the one span that says what Enter does. Same failure the
+   footer has in 3.7, and the same fix: optional spans are charged against the
+   leftover columns in priority order, and once one does not fit nothing after it
+   is drawn either.
+
+   | Priority | Span | Survives down to |
+   | :--- | :--- | :--- |
+   | never dropped | caret, platform glyph, device name, `▶ Run` | any width |
+   | 1 | `active` chip | 58 and below |
+   | 2 | `last used` chip | 64 |
+   | 3 | device id | 79 |
+   | 4 | platform label | 88 |
+   | 5 | `virtual` tag | 97 |
+
+   Measured on the widest row the mock produces — `Pixel 10 Pro XL`, both chips —
+   so the figures move with the name's length. That is why one row can carry an id
+   while the row under it does not, and the raggedness is accepted: the right-hand
+   group is right-aligned rather than a fixed column grid, so the ids never lined
+   up anyway, and a dropped span is readable where a clipped one is not. You cannot
+   tell a span that was left out from one that was cut in half.
+
+   The pair survives to 64 columns, four above the `60x14` floor below which 6.2
+   refuses to draw at all. So the only widths that lose `last used` are 60 to 63,
+   and at that size `active` and `▶ Run` are the two things worth keeping.
 
 5. **`SINGLE_DEVICE`** (State 5): exactly one device answered.
    No picker is shown. The device is selected automatically and the flow
