@@ -314,13 +314,16 @@ fn is_artifact(text: &str) -> bool {
 
 /// Flutter's own interactive help, which the footer already carries.
 fn is_help(text: &str) -> bool {
-    const HEADS: [&str; 6] = [
+    const HEADS: [&str; 7] = [
         "r Hot reload",
         "R Hot restart",
         "h List all",
         "d Detach",
         "c Clear",
         "q Quit",
+        // The one line both runners print, and all the web one has: its `🔥 To hot
+        // restart...` line is taken as the end of the build, and this follows it.
+        "For a more detailed help message",
     ];
 
     HEADS.iter().any(|head| text.starts_with(head))
@@ -555,7 +558,24 @@ fn stage_line(app: &mut App, text: &str) -> bool {
         return true;
     }
 
-    if text.contains("Flutter run key commands") {
+    // The end of the build, as each runner announces it.
+    //
+    // `Flutter run key commands.` is `HotRunner.printHelp`, and it is the only
+    // signal this arm used to carry. `ResidentWebRunner` overrides `printHelp` and
+    // never prints that line, so on Chrome nothing ever ended the build: measured
+    // on a real run, `Preparing build` still spinning at 1m 7.9s with the app
+    // already up in the browser, `Stage 2/4` forever.
+    //
+    // Two web triggers, because neither covers every run on its own.
+    // `Debug service listening on ws://...` is printed from `attach()` and is the
+    // first word that the app is up, but only where there is a service protocol —
+    // a `--release` web build has none. The help line is printed in every mode.
+    // Whichever lands first ends the build: `start_stage` is keyed and
+    // `session_ready` returns once the build is done, so the second is a no-op.
+    if text.contains("Flutter run key commands")
+        || text.starts_with("Debug service listening on")
+        || text.contains("To hot restart changes while running")
+    {
         app.start_stage(StageKey::Ready, "Application Running".into());
         app.session_ready();
         return true;
@@ -1435,6 +1455,75 @@ mod tests {
                 "{platform}: the last row should carry no figure"
             );
         }
+    }
+
+    /// A web build ends. The reported defect: on Chrome it never did.
+    ///
+    /// `ResidentWebRunner` overrides `printHelp` and never prints `Flutter run key
+    /// commands.`, which was the only line that ended a build, so the tracker kept
+    /// `Preparing build` spinning behind an app that was already up in the browser
+    /// — observed at 1m 7.9s on `Stage 2/4`, with nothing left to arrive.
+    ///
+    /// Both modes, because they end on different lines: debug gets `Debug service
+    /// listening on`, and release has no service protocol at all, so the help line
+    /// is all it prints.
+    #[test]
+    fn a_web_build_ends_when_chrome_is_up() {
+        let transcripts: [(&str, &[&str]); 2] = [
+            (
+                "web debug",
+                &[
+                    "Launching lib/main.dart on Chrome in debug mode...",
+                    "Waiting for connection from debug service on Chrome...      59.9s",
+                    "Debug service listening on ws://127.0.0.1:52511/RcS8mn0Yzko=",
+                ],
+            ),
+            (
+                "web release",
+                &[
+                    "Launching lib/main.dart on Chrome in release mode...",
+                    "\u{1f525}  To hot restart changes while running, press \"r\" or \"R\".",
+                ],
+            ),
+        ];
+
+        for (mode, lines) in transcripts {
+            let mut app = App::new(State::Building);
+            app.begin_build();
+
+            for line in lines {
+                feed(&mut app, line);
+            }
+
+            assert!(
+                app.state.build_done(),
+                "{mode}: the build never ended, which is the defect itself"
+            );
+
+            assert_eq!(
+                app.stages.iter().filter(|s| !s.done).count(),
+                0,
+                "{mode}: a row is still spinning after the app is up"
+            );
+
+            assert!(
+                app.stages
+                    .last()
+                    .is_some_and(|s| s.key == StageKey::Ready),
+                "{mode}: the build should end on Application Running"
+            );
+        }
+    }
+
+    /// The rest of the web help block does not reach the log stream.
+    ///
+    /// The footer already carries the hotkeys, and this line is the only part of
+    /// `ResidentWebRunner`'s help that is not the line ending the build.
+    #[test]
+    fn the_shared_help_line_is_not_logged() {
+        assert!(is_help(
+            "For a more detailed help message, press \"h\". To quit, press \"q\"."
+        ));
     }
 
     /// Durations must not move once a row is marked done.

@@ -315,8 +315,25 @@ devices answered.
   | `Running Xcode build` | `Building with Xcode` | iOS |
   | `Running Gradle task '<task>'` | `Gradle task <task>` | Android |
   | `Installing build/...` | `Installing app` | Android |
-  | `Syncing files to device` | `Syncing files` | both |
-  | `Flutter run key commands` | `Application Running` | both |
+  | `Syncing files to device` | `Syncing files` | iOS, Android |
+  | `Flutter run key commands` | `Application Running` | iOS, Android |
+  | `Debug service listening on` / `To hot restart changes while running` | `Application Running` | Web |
+
+  **The end of the build is announced per runner, not once.**
+  `Flutter run key commands.` is `HotRunner.printHelp`; `ResidentWebRunner`
+  overrides `printHelp` and never prints it. While that line was the only trigger,
+  a Chrome run had nothing to end it: `Preparing build` kept spinning at
+  `Stage 2/4` with the app already up in the browser, measured at 1m 7.9s and with
+  nothing further to arrive. Web needs two triggers rather than one, because
+  `Debug service listening on ws://...` comes from `attach()` and only exists where
+  there is a service protocol, which a `--release` web build has none of, while the
+  help line is printed in every mode. Whichever arrives first ends the build; the
+  second is a no-op.
+
+  Web also has no `Syncing files`: `ResidentWebRunner` updates its devFS behind
+  `Waiting for connection from debug service on Chrome...`, which is a progress
+  message and so carries no newline until it stops. That is one row fewer than the
+  denominator expects, which is what an upper bound is for.
 
   **Every trigger opens a row. Nothing closes one.** A row is closed by the
   arrival of its successor, at the same instant it is charged its duration. That
