@@ -70,13 +70,39 @@ impl Budget {
 
     /// Turn off the next cheapest element. Returns false when nothing is left
     /// to give up.
-    fn concede(&mut self) -> bool {
-        for flag in [
-            &mut self.separators,
-            &mut self.roomy_devices,
-            &mut self.full_build,
-            &mut self.full_cards,
-        ] {
+    ///
+    /// The order is 6.2's table, with the one swap that table's own footnote
+    /// asks for: rung 3 is state-dependent, and once the build has finished it
+    /// is no longer the third-cheapest thing on screen but the first. Every row
+    /// the tracker then holds is static — five stage labels and their final
+    /// durations — while the separators are structure on two cards that are
+    /// still being read, and the log window below is the only region changing.
+    ///
+    /// Getting this wrong was visible rather than theoretical. At 46 to 51 rows,
+    /// which is an ordinary Ghostty window at 12px, the fixed order paid for the
+    /// log floor out of the separators and kept nine rows of finished timings, so
+    /// both cards lost their rules the instant the app started logging.
+    ///
+    /// During the build the original order stands, and for the same reason: the
+    /// stage list is the thing moving, so it is the last thing to give up.
+    fn concede(&mut self, state: State) -> bool {
+        let order = if state.build_done() {
+            [
+                &mut self.full_build,
+                &mut self.separators,
+                &mut self.roomy_devices,
+                &mut self.full_cards,
+            ]
+        } else {
+            [
+                &mut self.separators,
+                &mut self.roomy_devices,
+                &mut self.full_build,
+                &mut self.full_cards,
+            ]
+        };
+
+        for flag in order {
             if *flag {
                 *flag = false;
                 return true;
@@ -263,7 +289,7 @@ impl Budget {
         };
 
         while budget.chrome(state, stages) + floor > area.height {
-            if !budget.concede() {
+            if !budget.concede(state) {
                 break;
             }
         }
@@ -398,19 +424,73 @@ mod tests {
     fn concessions_happen_in_the_documented_order() {
         let mut b = Budget::full();
 
-        b.concede();
+        b.concede(State::Building);
         assert!(!b.separators, "separators go first");
 
-        b.concede();
+        b.concede(State::Building);
         assert!(!b.roomy_devices, "device rows go second");
 
-        b.concede();
+        b.concede(State::Building);
         assert!(!b.full_build, "the build tracker collapses third");
 
-        b.concede();
+        b.concede(State::Building);
         assert!(!b.full_cards, "the cards collapse last");
 
-        assert!(!b.concede(), "nothing left to give up");
+        assert!(!b.concede(State::Building), "nothing left to give up");
+    }
+
+    /// 6.2's footnote to the table: rung 3 is state-dependent.
+    #[test]
+    fn a_finished_build_pays_before_the_separators_do() {
+        let mut b = Budget::full();
+
+        b.concede(State::Running);
+        assert!(
+            !b.full_build,
+            "a finished tracker is static, so it goes first"
+        );
+        assert!(b.separators, "and the separators survive it");
+
+        b.concede(State::Running);
+        assert!(!b.separators, "separators are next");
+    }
+
+    /// The regression this order exists for: an ordinary Ghostty window at 12px
+    /// is 46 to 51 rows, and both cards used to lose their rules there the moment
+    /// the app started logging.
+    #[test]
+    fn separators_survive_a_short_window_once_the_app_is_logging() {
+        // Five stages: a finished iOS build, which is what the screenshot showed.
+        for h in 46..=51 {
+            let plan = Budget::solve(area(106, h), State::Running, 5);
+
+            assert!(
+                plan.separators,
+                "{h} rows dropped the separators: {}",
+                plan.describe()
+            );
+
+            assert!(
+                plan.full_cards,
+                "{h} rows collapsed the cards: {}",
+                plan.describe()
+            );
+
+            let log = h - plan.chrome(State::Running, 5);
+            assert!(log >= LOG_MIN, "{h} rows left the log window {log}");
+        }
+    }
+
+    /// The build is the exception: while it runs, its stage list outranks them.
+    ///
+    /// 42 rows rather than something shorter because `BUILDING` has no log window
+    /// yet, so it defends a floor of 3 and full chrome fits until 42.
+    #[test]
+    fn a_running_build_keeps_its_stage_list_instead() {
+        let plan = Budget::solve(area(106, 42), State::Building, 5);
+
+        assert!(plan.full_build, "the stage list is what is moving");
+        assert!(!plan.separators, "so the separators pay for the floor");
     }
 
     /// Every rung must actually reclaim rows in the state it applies to.

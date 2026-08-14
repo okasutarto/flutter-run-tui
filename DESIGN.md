@@ -867,6 +867,25 @@ size-dependent: after the build succeeds, every row the tracker occupies is
 static. It has no reason to hold nine rows while the only region still
 changing is starved.
 
+**So once the build has finished, step 3 becomes step 1.** The ladder is not one
+fixed order; `Budget::concede` takes the state and moves the tracker to the front
+of the queue as soon as `build_done` is true. Below that the order is unchanged,
+and during `BUILDING` the table above stands as written.
+
+This was ordered wrongly at first, and the symptom named the bug. An ordinary
+Ghostty window at 12px is 46 to 51 rows; a finished iOS build needs 40 rows of
+chrome and the log window claims 12, so six rows have to come from somewhere. The
+fixed order took them from the separators, so the moment `BUILD FINISHED` appeared
+and logs began, both cards lost every hairline rule — while nine rows of stage
+labels and frozen durations, which had stopped changing seconds earlier, kept
+theirs. The same window in a taller terminal never reached the rung and looked
+correct, which is what made it read as a terminal quirk rather than as a ladder
+that was paying with the wrong currency.
+
+The trade is explicit: between 45 and 51 rows you get the separators and a
+one-line build summary. At 56 rows and up both are on screen, and `--rows
+running` prints exactly where each rung lands.
+
 Nothing below `60x14` is drawable. At that point the app says so rather than
 rendering a broken grid.
 
