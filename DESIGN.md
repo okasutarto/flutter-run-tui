@@ -1165,7 +1165,7 @@ replaying those two bytes — 40 lines in `flutter::clean`, against implementing
 `vte::Perform` for a screen model this UI never reads. See 7.3.
 
 The third option was keeping `frun-runner` alive behind a JSON event stream, with
-frun-tui only rendering. Its appeal is real: zero risk of regressing the ack
+this project only rendering. Its appeal is real: zero risk of regressing the ack
 machine, the subtlest logic here. It was declined because parsing in that file is
 entangled with rendering — `process_line` does not return events, it calls
 `complete_spinner()` and `line()` directly. Reusing it as a process means first
@@ -1243,7 +1243,7 @@ built. What is left is only the shim, and only because `frun` is invoked as a
 command that `.zshrc` line 179 sources:
 
 ```zsh
-frun() { "$HOME/.config/zsh/frun-tui/target/release/frun-tui" "$@" }
+frun() { "$HOME/.config/zsh/flutter-run-tui/target/release/frun-tui" "$@" }
 ```
 
 Even that is optional. `frun` changes no shell state — no `cd`, no exports — so
