@@ -32,7 +32,6 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
     const SUBTITLE: usize = 0;
     const TITLE: usize = 2;
     const LIST: usize = 4;
-    const HINT: usize = 6;
 
     let rows = Layout::vertical([
         Constraint::Length(1), // subtitle
@@ -40,8 +39,6 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
         Constraint::Length(1), // "Start a Device"
         Constraint::Length(1), // blank
         Constraint::Min(2),    // the list
-        Constraint::Length(1), // blank
-        Constraint::Length(1), // hint
     ])
     .split(inner);
 
@@ -60,21 +57,16 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
 
     list(frame, rows[LIST], app, plan);
 
-    frame.render_widget(
-        Paragraph::new(spread(
-            rows[HINT].width,
-            vec![
-                strong(format!("{} ", theme::GLYPH_BOLT), theme::AMBER),
-                text("Use ↑↓ arrow keys & Enter to launch device", theme::MUTED),
-            ],
-            vec![
-                text("Press ", theme::MUTED),
-                strong("Enter", theme::TEXT),
-                text(" to launch", theme::MUTED),
-            ],
-        )),
-        rows[HINT],
-    );
+    // No hint row, and the blank above it went with it. It read
+    // `⚡ Use ↑↓ arrow keys & Enter to launch device` on the left and
+    // `Press Enter to launch` on the right — the same instruction twice in one
+    // row, and both of it a third time on the footer, which carries `↑↓ Move`,
+    // `⏎ Launch` and `Esc Cancel` in exactly this state.
+    //
+    // Unlike SELECT TARGET, there was nothing else on the row to keep: no
+    // ordering note, no status, so the whole slot is the list's now. This is the
+    // state with the most rows to show — every bootable target rather than the
+    // attached ones — so two rows back is two more targets before it scrolls.
 }
 
 /// State 4. Two or more answered, so pick one.
@@ -94,15 +86,22 @@ pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget
 
     list(frame, rows[0], app, plan);
 
+    // The keys used to sit on the left of this row: `↑↓ move  ⏎ run  Esc cancel`.
+    // The footer already carries all three (`↑↓ Move`, `⏎ Launch`, `Esc Cancel`)
+    // for exactly these two states, so the row was saying a second time, in a
+    // second wording, what the footer says once and everywhere.
+    //
+    // The ordering note stays. It is not a keybinding but a fact about the list
+    // above it, and nothing else on screen accounts for why the top row is the top
+    // row.
     frame.render_widget(
-        Paragraph::new(spread(
-            rows[1].width,
-            vec![text("↑↓ move   ⏎ run   Esc cancel", theme::MUTED)],
-            vec![text(
+        Paragraph::new(
+            Line::from(text(
                 "last used device is promoted to the top",
                 theme::MUTED,
-            )],
-        )),
+            ))
+            .right_aligned(),
+        ),
         rows[1],
     );
 }
