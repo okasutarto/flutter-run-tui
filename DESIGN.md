@@ -340,36 +340,40 @@ devices answered.
     `✔ Building with Xcode 11.1s` and silently become `14.5s` seconds afterwards.
     Measured on an iOS transcript: `0ms → 125ms`, `121ms → 241ms`,
     `124ms → 249ms`.
-  * **Flutter's own figures move the boundary between rows.** Its timers start
-    before its announcements reach us, and on iOS the lag is enormous. Measured
-    against a real build: it printed `Running Xcode build...` **16.3 seconds**
-    after its own Xcode timer had started, then closed with
-    `Xcode build done. 22.6s`. Timing the row from the announcement alone gave
-    `Building with Xcode 5.6s` for work Flutter said took 22.6s — wrong by four
-    times, with the missing 16 seconds sitting on the row above.
+  * **The first platform phase adopts the generic row rather than following it.**
+    `Preparing build` *becomes* `Building with Xcode` — one row that changes its
+    name, not two rows with a boundary between them.
 
-    So when Flutter states a figure, `rewind_stage` believes it and moves the
-    boundary between that row and the one before back to where the work actually
-    began. What one row gains the other gives up, so the total cannot change:
-    moving a shared boundary is not the same as editing a duration.
+    This is the second answer to the same problem, and the first one is worth
+    recording because it looked right. Flutter's timers start before its
+    announcements reach us, and on iOS the lag is enormous: measured against a real
+    build, it printed `Running Xcode build...` **16.3 seconds** after its own Xcode
+    timer had started, then closed with `Xcode build done. 22.6s`. Timing the row
+    from the announcement gave `Building with Xcode 5.6s` for work Flutter said took
+    22.6s — wrong by four times, with the missing 16 seconds on the row above.
 
-    The same mechanism fixes `Syncing files 0ms`. The sync really took 81ms, but
-    the line opening the row and the line closing it arrive in one read, so the
-    measured span is zero — and Flutter prints `81ms` right there on the line.
+    The first fix believed Flutter's figure and moved the boundary between the two
+    rows back to where the work began. It was accurate and unusable: a row already
+    reading `✔ Preparing build 10s` became `3.5s` seconds later, so the two figures
+    looked like they had swapped. Measured on a transcript: `405ms → 60ms`.
 
-    It only ever moves a boundary **earlier**. A figure that would push it later
-    would claim a phase started after it was announced, which cannot happen, and
-    would let a stray number on an unrelated line corrupt the column.
+    The mistake was deeper than the display. **The two phases overlap.** Xcode was
+    already building while frun still thought it was preparing, so two consecutive
+    rows were asserting a boundary that cannot be observed at all. Correcting an
+    unobservable boundary is not better than not claiming one. So the claim is
+    dropped: one row, one span, one figure, and nothing to revise afterwards.
 
-    How large the correction is depends on how cold the build is. On a warm run
-    Flutter announces almost promptly and the correction is nothing; on a cold one
-    it is 7 to 16 seconds. Two runs of the same project can therefore show
-    different shapes without either being wrong.
+    A label changing while a row spins is a far smaller surprise than a settled
+    number moving, and it is honest about what happened — *I am working, and now I
+    can tell you what this is.*
+
+  * **`Syncing files` takes Flutter's own figure.** Its opening line and the line
+    that closes it arrive in a single read, so the measured span is zero and
+    Flutter's `81ms` is the only evidence it took any time. Pinning one row's figure
+    touches no neighbour, so nothing can appear to swap.
 
   Note Flutter formats elapsed time through `NumberFormat`, so values carry a
-  group separator (`1,847ms`) and must not be matched with `[0-9]+`. That applies
-  to `duration_secs` as much as to the display: `1,234ms` is not a float until the
-  separator comes out.
+  group separator (`1,847ms`) and must not be matched with `[0-9]+`.
 
 * **Each row's timer runs while its phase runs.** It starts at zero the moment
   the row opens, ticks live, and freezes at its measured figure when the
@@ -404,9 +408,12 @@ devices answered.
 
   | Platform | Phases counted | Total |
   | :--- | :--- | :--- |
-  | Android | starting, launching, Gradle, install, syncing, running | 6 |
-  | iOS, macOS | starting, launching, Xcode, syncing, running | 5 |
-  | Web | starting, launching, syncing, running | 4 |
+  | Android | starting, Gradle, install, syncing, running | 5 |
+  | iOS, macOS | starting, Xcode, syncing, running | 4 |
+  | Web | starting, preparing, syncing, running | 4 |
+
+  There is no `launching` row in the first two: the platform phase adopts it. Web
+  keeps it, because nothing on web announces itself to do the adopting.
 
   Android is the one with six: it installs the APK as a step of its own, which iOS
   does not. And **CocoaPods is not counted**, for the same reason
@@ -861,19 +868,19 @@ draw rather than estimated:
                                    the logo shares these rows, it does not add any
   SELECTED TARGET        10 rows   2 border + 1 title gap + 7 body
                                    body = 4 fields + 3 separators
-  BUILD PHASE            11 rows   2 border + 1 title gap + bar + blank + 6 stages
+  BUILD PHASE            10 rows   2 border + 1 title gap + bar + blank + 5 stages
                                    the stage count is live, so this is the tallest
-                                   case: a finished Android build. iOS ends at 10.
+                                   case: a finished Android build. iOS ends at 9.
   footer                  1 row
   gaps between blocks     3 rows   blocks - 1, not a constant
   ────────────────────────────────
-  TOTAL                  37 rows
+  TOTAL                  36 rows
 ```
 
-At the 106x45 target that leaves the log window **8 rows**. A five-line Dart
+At the 106x45 target that leaves the log window **9 rows**. A five-line Dart
 exception, wrapped at 84 columns of message space, occupies **8 rows** — so one
-error fits exactly, with no context around it and nothing left for the next one.
-The cards still have to yield.
+error fits with a row to spare, and nothing left for the next one. The cards still
+have to yield.
 
 This total has come down twice, and both times the rows went to the log window
 rather than back to the layout. It was 45, leaving nothing at all, until the prompt
@@ -1000,7 +1007,7 @@ executed.
 | 3. `BUILD_FAILED` | live | `BUILD ERROR` card, exit code 1, retry action registered |
 | 3. `RELOAD_FAILED` (10) | tested | needs a Dart compile error introduced mid-session |
 | 3. `RELOAD_DROPPED` (11) | tested, not forceable | attempted live by sending `r` during a hot restart; Flutter queued the key and serviced it instead of dropping it. Three tests cover frun's half: a request with no ack resolves, an acked one is never dropped, and a late ack reopens it |
-| 4. Boot, and `NO_DEVICES` (2) | live | AVD booted through `sys.boot_completed`, name mapped back to `emulator-5554`, picker skipped, straight into the build |
+| 4. Boot, and `NO_DEVICES` (2) | live | AVD booted through `sys.boot_completed` on its own serial, picker skipped, straight into the build. Re-verified with a phone attached, which is the case that broke it (7.5) |
 | 5. Shell cutover | live | `frun` through the shim: flag passthrough, fatal path, exit codes 0 / 1 / 130 |
 | 7.6 Progress denominator | live + tested | `Stage 1/5` on a real build, now `x/6`; a test walks a build and forbids the fraction decreasing |
 | One row always spinning | tested | iOS and Android transcripts replayed; `open == 1` asserted after every line, and `0` only once the build ends |
@@ -1447,6 +1454,23 @@ archive nobody reads.
   dead columns. `flutter-trim.png` is the same artwork cropped to its content
   (3.1).
 
+**`adb` without `-s` asks whichever device happens to be attached.** With a phone
+on wireless adb and a freshly spawned emulator not yet registered, `adb shell
+getprop sys.boot_completed` was answered *by the phone* — instantly, with `1`. The
+boot was declared finished after about a second, the serial lookup then found
+nothing, and the run died with `booted, but adb never reported a serial for it`
+while the emulator carried on booting in plain sight.
+
+The fix was to establish the serial first and address everything after it with
+`-s`. The emulator is identified as the `emulator-*` serial that was **not** in
+`adb devices` before we spawned one, which also retired the old name lookup: a
+serial that appeared is the emulator we started, and no name has to match for that
+to be true.
+
+Worth noting how this hid: every boot test passed until a phone was attached. A
+command that reads correctly with one device and silently addresses the wrong one
+with two is invisible to any test run on a clean machine.
+
 **Anything that can be done in two steps will eventually be done in one of them.**
 A stage row was closed by one trigger and charged by another, and both defects that
 came out of it — a tracker sitting idle mid-build, and a finished row whose number
@@ -1477,10 +1501,11 @@ becomes 1 of 2, so 50%.
 entirely — indeterminate while building, full on completion. That was wrong for a
 simpler reason than it looked: the total *is* knowable. The platform is chosen
 before the build starts, and 3.4's own trigger table is per-platform, so the stage
-set follows from the target. `Platform::stage_count` states it: six for Android,
-five for iOS and macOS, four for web — Android being the one that installs the APK
+set follows from the target. `Platform::stage_count` states it: five for Android,
+four for iOS and macOS, four for web — Android being the one that installs the APK
 as a step of its own. CocoaPods and `pub get` are not counted, since both are
-skipped on most runs.
+skipped on most runs, and neither is the generic `Preparing build` row, which is
+adopted by the first platform phase rather than surviving beside it.
 
 It is an upper bound, never a floor, and that asymmetry is what makes it safe.
 Flutter skips stages it does not need — no `pod install` when `Podfile.lock` is

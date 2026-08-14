@@ -373,25 +373,6 @@ pub fn duration(text: &str) -> String {
     String::new()
 }
 
-/// The same token as `duration`, as a number of seconds.
-///
-/// Used to place a phase boundary, so it has to be arithmetic rather than text.
-/// The group separator has to come out before parsing: `1,234ms` is not a float.
-pub fn duration_secs(text: &str) -> Option<f64> {
-    let token = duration(text);
-
-    if token.is_empty() {
-        return None;
-    }
-
-    let (value, scale) = match token.strip_suffix("ms") {
-        Some(value) => (value, 0.001),
-        None => (token.strip_suffix('s')?, 1.0),
-    };
-
-    Some(value.replace(',', "").parse::<f64>().ok()? * scale)
-}
-
 /// The Gradle task name out of `Running Gradle task 'assembleDebug'...`.
 fn gradle_task(text: &str) -> String {
     text.split('\'').nth(1).unwrap_or_default().to_string()
@@ -529,34 +510,16 @@ fn stage_line(app: &mut App, text: &str) -> bool {
         return true;
     }
 
-    // Flutter animates most of these lines through CR and re-emits them with an
-    // elapsed figure attached. `rewind` believes that figure and moves the phase
-    // boundary back to where the work really began; it never closes the row, so a
-    // spinner stays on screen either way.
-    let rewind = |app: &mut App, key: StageKey| {
-        if let Some(secs) = duration_secs(text) {
-            app.rewind_stage(key, secs);
-        }
-    };
-
+    // The first platform phase adopts the generic row rather than opening a new
+    // one, so no boundary is claimed between "preparing" and work Flutter had
+    // already started without saying so.
     if text.contains("Running pod install") {
-        app.start_stage(StageKey::Pods, "Installing CocoaPods".into());
-        rewind(app, StageKey::Pods);
+        app.adopt_or_open(StageKey::Pods, "Installing CocoaPods".into());
         return true;
     }
 
     if text.contains("Running Xcode build") {
-        app.start_stage(StageKey::Xcode, "Building with Xcode".into());
-        rewind(app, StageKey::Xcode);
-        return true;
-    }
-
-    // `Xcode build done.  11.7s` is where Flutter finally states the figure. It
-    // does not close the row — the next announcement does — but it is the most
-    // valuable number on an iOS build, because it is the only evidence of the 16
-    // seconds Flutter spent building before saying so.
-    if text.contains("Xcode build done") {
-        rewind(app, StageKey::Xcode);
+        app.adopt_or_open(StageKey::Xcode, "Building with Xcode".into());
         return true;
     }
 
@@ -569,20 +532,26 @@ fn stage_line(app: &mut App, text: &str) -> bool {
             format!("Gradle task {task}")
         };
 
-        app.start_stage(StageKey::Gradle, label);
-        rewind(app, StageKey::Gradle);
+        app.adopt_or_open(StageKey::Gradle, label);
         return true;
     }
 
     if text.starts_with("Installing build/") {
         app.start_stage(StageKey::Install, "Installing app".into());
-        rewind(app, StageKey::Install);
         return true;
     }
 
     if text.contains("Syncing files to device") {
         app.start_stage(StageKey::Sync, "Syncing files".into());
-        rewind(app, StageKey::Sync);
+
+        // Flutter states this one on the line that opens the row, and the line that
+        // closes it arrives in the same read, so the measured span is zero. Its own
+        // figure is the only evidence the sync took any time at all — and taking it
+        // touches no other row, so nothing can appear to swap.
+        if let Some(token) = Some(duration(text)).filter(|t| !t.is_empty()) {
+            app.set_stage_duration(StageKey::Sync, token);
+        }
+
         return true;
     }
 
@@ -595,7 +564,8 @@ fn stage_line(app: &mut App, text: &str) -> bool {
     // Swallowed rather than logged: these are Flutter closing a phase it already
     // announced, so they carry nothing the row does not already say. They used to
     // be where a stage got closed, which is exactly what left the tracker idle.
-    if text.contains("Built build/")
+    if text.contains("Xcode build done")
+        || text.contains("Built build/")
         || text.starts_with("✓ Built")
         || text.contains("Compiling, linking and signing")
         || (app.stage_open(StageKey::Install) && is_bare_duration(text))
@@ -921,11 +891,15 @@ impl App {
         // build carried on, and was then still charged later at the next open, so
         // its number moved after it had been marked done.
         if let Some(previous) = self.stages.last_mut() {
-            previous.duration = elapsed(now.duration_since(previous.started));
+            if !previous.pinned {
+                previous.duration = elapsed(now.duration_since(previous.started));
+            }
+
             previous.done = true;
         }
 
         self.stages.push(Stage {
+            pinned: false,
             key,
             label,
             duration: String::new(),
@@ -947,46 +921,54 @@ impl App {
     // number alongside measured gaps double-counted, because its timers start
     // before its announcements reach us.
 
-    /// Flutter reported how long a phase took. Move its boundary to match.
+    /// Adopt the open row instead of opening a new one, when the open row is the
+    /// generic one.
     ///
-    /// Flutter's timers start before its announcements reach us, and on iOS the gap
-    /// is enormous: measured against a real build, it printed `Running Xcode
-    /// build...` **16.3 seconds** after its own Xcode timer had started, then closed
-    /// with `Xcode build done. 22.6s`. Timing the row from the announcement gave
-    /// `Building with Xcode 5.6s` for work Flutter said took 22.6s — wrong by four
-    /// times, and the missing 16 seconds sat on the row above it.
+    /// This is what replaced `rewind_stage`, and the reasoning is worth keeping.
     ///
-    /// So when Flutter states a figure, it is believed, and the boundary between
-    /// this row and the one before moves back to where the work actually began.
-    /// Both rows end up right and the column still sums, because moving a shared
-    /// boundary cannot change the total: what one row gains the other gives up.
+    /// Flutter's timers start before its announcements reach us. On a cold iOS
+    /// build it began the Xcode build **16.3 seconds** before printing `Running
+    /// Xcode build...`, then closed with `Xcode build done. 22.6s`. Timing the row
+    /// from the announcement gave `Building with Xcode 5.6s` for work Flutter said
+    /// took 22.6s, with the missing 16 seconds parked on the row above.
     ///
-    /// Only ever moves a boundary *earlier*. A figure that would push it later
-    /// would be claiming a phase started after it was announced, which cannot
-    /// happen, and would let a stray number on an unrelated line corrupt the column.
-    pub fn rewind_stage(&mut self, key: StageKey, secs: f64) {
-        let Some(i) = self.stages.iter().position(|s| s.key == key) else {
-            return;
-        };
-
-        let Some(began) = Instant::now().checked_sub(Duration::from_secs_f64(secs)) else {
-            return;
-        };
-
-        if began >= self.stages[i].started {
-            return;
-        }
-
-        self.stages[i].started = began;
-
-        // The row before ended where this one really began. Anything already shown
-        // for it was measuring Flutter's silence, not its own work.
-        if i > 0 {
-            let previous = self.stages[i - 1].started;
-
-            if began > previous {
-                self.stages[i - 1].duration = elapsed(began.duration_since(previous));
+    /// The first fix believed Flutter's figure and moved the boundary between the
+    /// two rows back to where the work began. It was accurate and it was wrong: a
+    /// row already shown as `✔ Preparing build 10s` became `3.5s` seconds later,
+    /// and the two figures looked like they had swapped. Measured: `405ms → 60ms`.
+    ///
+    /// The real problem is that the two phases **overlap**. Xcode was already
+    /// building while frun still thought it was preparing, so two consecutive rows
+    /// were claiming a boundary that cannot be observed. Rather than correcting a
+    /// boundary that does not exist, the claim is dropped: the row opened by
+    /// `Launching lib/main.dart` is the same row that becomes `Building with
+    /// Xcode` once Flutter says so. One row, one span, one figure, and nothing to
+    /// correct afterwards.
+    ///
+    /// A label changing while a row spins is a far smaller surprise than a settled
+    /// number moving. It is also honest about what happened: *I am working, and now
+    /// I can tell you what this is.*
+    fn adopt_or_open(&mut self, key: StageKey, label: String) {
+        match self.stages.last_mut() {
+            // The generic row is still open: rename it in place.
+            Some(open) if !open.done && open.key == StageKey::Launch => {
+                open.key = key;
+                open.label = label;
             }
+
+            _ => self.start_stage(key, label),
+        }
+    }
+
+    /// Pin a row's figure to what Flutter said, without touching its neighbours.
+    ///
+    /// Only used where Flutter's number is the only evidence a phase took any time,
+    /// which is the sync. It does not move a boundary, so no other row changes and
+    /// nothing can look like it swapped.
+    fn set_stage_duration(&mut self, key: StageKey, duration: String) {
+        if let Some(stage) = self.stages.iter_mut().find(|s| s.key == key) {
+            stage.duration = duration;
+            stage.pinned = true;
         }
     }
 
@@ -1166,8 +1148,11 @@ mod tests {
             feed(&mut app, line);
         }
 
-        assert_eq!(app.stages.len(), 4, "the skipped path should run four");
-        assert_eq!(app.expected_stages(), 5, "the estimate stays an upper bound");
+        // Three rows, not four: `Running Xcode build` adopts the generic row rather
+        // than opening its own, so `Preparing build` and `Building with Xcode` are
+        // one row that changed its name.
+        assert_eq!(app.stages.len(), 3, "the skipped path should run three");
+        assert_eq!(app.expected_stages(), 4, "the estimate stays an upper bound");
 
         assert!(
             app.state.build_done(),
@@ -1177,66 +1162,94 @@ mod tests {
         // What the row draws once finished: both numbers taken from what ran, so
         // the bar reads full instead of stopping short of itself.
         let ran = app.stages.len();
-        assert_eq!((ran, ran), (4, 4), "should read 4/4, not 4/5");
+        assert_eq!((ran, ran), (3, 3), "should read 3/3, not 3/5");
     }
 
-    #[test]
-    fn duration_tokens_parse_to_seconds() {
-        assert_eq!(duration_secs("Xcode build done.  11.7s"), Some(11.7));
-        assert_eq!(duration_secs("Syncing files... 62ms"), Some(0.062));
-
-        // The group separator has to be removed before parsing, or this is not a
-        // float at all.
-        assert_eq!(duration_secs("Restarted application in 1,234ms"), Some(1.234));
-
-        assert_eq!(duration_secs("Running Gradle task 'assembleDebug'..."), None);
-    }
-
-    /// Flutter's reported figure wins, and the row before it gives up the time.
+    /// No figure ever changes once it has been shown.
     ///
-    /// The numbers are from a real iOS build: Flutter printed `Running Xcode
-    /// build...` 16.3s after its own timer had started, then `Xcode build done.
-    /// 22.6s`. Timed from the announcement alone the row read 5.6s, which
-    /// understated the Xcode build fourfold and parked the missing 16s on the row
-    /// above.
+    /// This is the check the previous attempt failed. It believed Flutter's own
+    /// `Xcode build done. 22.6s` and moved the boundary back to where the work
+    /// really began, which was accurate and unusable: a row already reading
+    /// `✔ Preparing build 10s` became `3.5s` seconds later, so the two figures
+    /// looked like they had swapped. Measured on a transcript: `405ms → 60ms`.
+    ///
+    /// The old test for this passed only because its timings were too short for the
+    /// correction to land between two rows — a false pass, which is exactly why it
+    /// is rebuilt here with a gap wide enough for the correction to have applied.
     #[test]
-    fn a_reported_figure_moves_the_boundary_not_the_total() {
+    fn no_figure_changes_once_it_has_been_shown() {
+        let mut app = App::new(State::Building);
+        app.begin_build();
+
+        let mut shown: Vec<(String, String)> = Vec::new();
+
+        // The real sequence, with a gap where Flutter goes silent while already
+        // building. On a cold iOS build that stretch is 7 to 16 seconds.
+        let script: [(&str, u64); 5] = [
+            ("Launching lib/main.dart on iPhone 17 Pro in debug mode...", 400),
+            ("Running Xcode build...", 100),
+            ("Xcode build done.                      0.450s", 0),
+            ("Syncing files to device iPhone 17 Pro...     81ms", 0),
+            ("Flutter run key commands.", 0),
+        ];
+
+        for (line, pause) in script {
+            feed(&mut app, line);
+            std::thread::sleep(Duration::from_millis(pause));
+
+            for (label, figure) in &shown {
+                let now = app
+                    .stages
+                    .iter()
+                    .find(|s| s.label == *label)
+                    .map(|s| s.duration.clone())
+                    .unwrap_or_default();
+
+                assert_eq!(
+                    &now, figure,
+                    "{label:?} changed from {figure:?} to {now:?} after {line:?}"
+                );
+            }
+
+            // Remember every figure that is now on screen.
+            shown = app
+                .stages
+                .iter()
+                .filter(|s| !s.duration.is_empty())
+                .map(|s| (s.label.clone(), s.duration.clone()))
+                .collect();
+        }
+    }
+
+    /// The generic row becomes the platform phase rather than being followed by it.
+    ///
+    /// That is what removes the boundary nobody can observe: Flutter is already
+    /// building when it finally says `Running Xcode build...`, so a separate row
+    /// starting at that line would be claiming a split that did not happen.
+    #[test]
+    fn the_first_platform_phase_adopts_the_generic_row() {
         let mut app = App::new(State::Building);
         app.begin_build();
 
         feed(&mut app, "Launching lib/main.dart on iPhone 17 Pro in debug mode...");
 
-        // Stand in for the seconds Flutter spends silent before announcing Xcode.
-        std::thread::sleep(Duration::from_millis(120));
+        assert_eq!(app.stages.len(), 2);
+        assert_eq!(app.stages[1].label, "Preparing build");
+
         feed(&mut app, "Running Xcode build...");
 
-        let preparing_before = app.stages[1].started;
-
-        // Flutter now says the build took far longer than we have been watching it.
-        feed(&mut app, "Xcode build done.       0.100s");
-
-        let xcode = app.stages[2].started;
-
-        assert!(
-            xcode < app.stages[1].started + Duration::from_millis(120),
-            "the boundary should have moved back into the silent stretch"
+        assert_eq!(
+            app.stages.len(),
+            2,
+            "a new row was opened instead of adopting the generic one"
         );
 
-        assert!(
-            xcode > preparing_before,
-            "it must not move past the row before it"
-        );
+        assert_eq!(app.stages[1].label, "Building with Xcode");
+        assert!(!app.stages[1].done, "the adopted row must keep running");
 
-        // `Preparing build` gave up exactly what Xcode gained, so the two still
-        // partition the same span.
-        let preparing = xcode.duration_since(preparing_before);
-        assert_eq!(app.stages[1].duration, elapsed(preparing));
-
-        // A figure that would push the boundary later is refused: a phase cannot
-        // have started after it was announced.
-        let settled = app.stages[2].started;
-        feed(&mut app, "Xcode build done.       0.001s");
-        assert_eq!(app.stages[2].started, settled, "boundary moved forward");
+        // A second, genuinely distinct phase still gets its own row.
+        feed(&mut app, "Syncing files to device iPhone 17 Pro...");
+        assert_eq!(app.stages.len(), 3);
     }
 
     /// State 11: a keypress Flutter never acknowledged.

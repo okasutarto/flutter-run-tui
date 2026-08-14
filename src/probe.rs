@@ -669,6 +669,12 @@ fn boot_avd(name: &str) -> Result<String, String> {
     // arises when a human quits frun and keeps their window.
     //
     // stdio is null, so no `nohup.out` is written.
+    //
+    // Snapshot first: the emulator is identified by the serial that appears, so we
+    // have to know which ones were already there. Taking it after the spawn would
+    // race the emulator into the list.
+    let before = emulator_serials();
+
     Command::new("nohup")
         .args(["emulator", "-avd", name])
         .stdin(Stdio::null())
@@ -679,17 +685,45 @@ fn boot_avd(name: &str) -> Result<String, String> {
 
     let deadline = Instant::now() + BOOT_LIMIT;
 
-    // `sys.boot_completed`, not adb presence: adb answers well before Android
-    // will accept an APK. Polling `adb shell` is safe with nothing attached,
-    // where it fails fast rather than blocking the way `wait-for-device` would.
+    // The serial comes first, and everything after it is addressed with `-s`.
+    //
+    // This is not a refinement, it is the fix for a real failure. `adb shell` with
+    // no `-s` picks a device only when exactly one is attached: with a phone on
+    // wireless adb and the emulator not yet registered, `getprop
+    // sys.boot_completed` was answered *by the phone*, instantly and with `1`. The
+    // boot was declared finished after about a second, the serial lookup then found
+    // nothing, and the run died with `booted, but adb never reported a serial`
+    // while the emulator carried on booting in plain sight.
+    //
+    // Identifying by *which serial appeared* also retires the old name lookup, which
+    // asked every attached device `emu avd name` and compared the answer. A serial
+    // that was not there before we spawned an emulator is the emulator we spawned;
+    // no name has to match for that to be true.
+    let serial = loop {
+        if Instant::now() >= deadline {
+            return Err("never appeared in adb".to_string());
+        }
+
+        if let Some(serial) = emulator_serials().difference(&before).next() {
+            break serial.clone();
+        }
+
+        std::thread::sleep(Duration::from_secs(1));
+    };
+
+    // `sys.boot_completed`, not adb presence: adb answers well before Android will
+    // accept an APK.
     while Instant::now() < deadline {
-        let ready = run("adb", &["shell", "getprop", "sys.boot_completed"], QUICK)
-            .map(|out| out.trim().trim_end_matches('\r') == "1")
-            .unwrap_or(false);
+        let ready = run(
+            "adb",
+            &["-s", &serial, "shell", "getprop", "sys.boot_completed"],
+            QUICK,
+        )
+        .map(|out| out.trim().trim_end_matches('\r') == "1")
+        .unwrap_or(false);
 
         if ready {
-            return avd_serial(name)
-                .ok_or_else(|| "booted, but adb never reported a serial for it".to_string());
+            return Ok(serial);
         }
 
         std::thread::sleep(Duration::from_secs(1));
@@ -698,30 +732,24 @@ fn boot_avd(name: &str) -> Result<String, String> {
     Err("did not finish booting".to_string())
 }
 
-/// AVD name -> adb serial.
+/// Serials of every attached emulator, whatever state adb reports them in.
 ///
-/// The picker offers `Pixel_8`; Flutter wants `emulator-5554`. `adb emu avd
-/// name` already walks this mapping in the other direction, so this inverts it
-/// rather than paying for a second `flutter devices --machine`, which would
-/// cost another ten seconds of Dart VM startup.
-fn avd_serial(want: &str) -> Option<String> {
-    let out = run("adb", &["devices"], QUICK)?;
-    let wanted = pretty_avd(want);
+/// `offline` counts: an emulator appears that way for a few seconds after launch,
+/// and its identity is settled long before Android is ready. Waiting for `device`
+/// here would just move the race.
+fn emulator_serials() -> std::collections::HashSet<String> {
+    let Some(out) = run("adb", &["devices"], QUICK) else {
+        return std::collections::HashSet::new();
+    };
 
-    for line in out.lines().skip(1) {
-        let mut cols = line.split_whitespace();
-
-        let (Some(serial), Some("device")) = (cols.next(), cols.next()) else {
-            continue;
-        };
-
-        if avd_name(serial).as_deref() == Some(wanted.as_str()) {
-            return Some(serial.to_string());
-        }
-    }
-
-    None
+    out.lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|serial| serial.starts_with("emulator-"))
+        .map(str::to_string)
+        .collect()
 }
+
 
 // ============================================================
 // Last used device

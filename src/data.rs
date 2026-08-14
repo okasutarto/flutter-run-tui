@@ -186,19 +186,22 @@ impl Platform {
     /// avoiding.
     pub fn stage_count(self) -> usize {
         match self {
-            // Starting, launching, Xcode, syncing, running.
+            // Starting, Xcode, syncing, running.
             //
-            // Five, not six: iOS has no separate install step, and CocoaPods is
-            // skipped whenever `Podfile.lock` is current, which is most runs.
-            // Counting a phase that usually does not happen would leave the bar
-            // permanently one short; when pods does run, `expected_stages` raises
-            // the total to match.
-            Platform::Ios | Platform::Desktop => 5,
-            // Starting, launching, Gradle, install, syncing, running. The install
-            // step is the one Android has and iOS does not.
-            Platform::Android => 6,
-            // No native toolchain in the middle: starting, launching, syncing,
-            // running.
+            // Four, because the first platform phase adopts the generic row rather
+            // than following it: `Preparing build` *becomes* `Building with Xcode`,
+            // so they are one row, not two. CocoaPods is not counted either — it is
+            // skipped whenever `Podfile.lock` is current, which is most runs, and
+            // counting a phase that usually does not happen would leave the bar
+            // permanently one short. When pods does run it takes the adoption and
+            // Xcode opens its own row, and `expected_stages` raises the total to
+            // match.
+            Platform::Ios | Platform::Desktop => 4,
+            // Starting, Gradle, install, syncing, running. The install step is the
+            // one Android has and iOS does not.
+            Platform::Android => 5,
+            // Nothing to adopt: no native toolchain announces itself, so the generic
+            // row stays generic. Starting, preparing, syncing, running.
             Platform::Web => 4,
         }
     }
@@ -245,6 +248,13 @@ pub struct Stage {
     /// When the stage opened, so a duration Flutter never printed can still be
     /// reported honestly.
     pub started: Instant,
+
+    /// The figure came from Flutter, so measuring must not overwrite it.
+    ///
+    /// Only the sync sets this. Its opening and closing lines arrive in one read,
+    /// so the measured span is zero and Flutter's own `81ms` is the only evidence
+    /// it took any time.
+    pub pinned: bool,
 }
 
 // ============================================================
@@ -1089,6 +1099,7 @@ fn mock_stages(state: State) -> Vec<Stage> {
         .unwrap_or_else(Instant::now);
 
     let stage = |key, label: &str, duration: &str, done| Stage {
+        pinned: false,
         key,
         label: label.into(),
         duration: duration.into(),
@@ -1104,23 +1115,26 @@ fn mock_stages(state: State) -> Vec<Stage> {
     // flutter_tools, which is the span no Flutter output brackets.
     match state {
         // iOS: CocoaPods then Xcode. Gradle never appears here.
+        // No `Preparing build` row alongside `Installing CocoaPods`: that pairing
+        // cannot happen, because pods adopts the generic row rather than following
+        // it. Showing it would have the dumps verifying a shape the parser cannot
+        // produce.
         State::Building => vec![
             stage(StageKey::Start, "Starting Flutter", "3.6s", true),
-            stage(StageKey::Launch, "Preparing build", "1.1s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "", false),
         ],
 
         State::BuildFailed => vec![
             stage(StageKey::Start, "Starting Flutter", "3.6s", true),
-            stage(StageKey::Launch, "Preparing build", "1.1s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "11.1s", false),
         ],
 
+        // Five rows, not six: on the runs where CocoaPods appears it adopts the
+        // generic row, so `Preparing build` is not a row of its own.
         s if s.build_done() => vec![
             stage(StageKey::Start, "Starting Flutter", "3.6s", true),
-            stage(StageKey::Launch, "Preparing build", "1.1s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "14.5s", true),
             stage(StageKey::Sync, "Syncing files", "240ms", true),
