@@ -348,7 +348,7 @@ pub struct Device {
     pub platform: Platform,
     /// Flutter's `targetPlatform`, shown as `Platform ID`.
     pub target_platform: String,
-    /// Flutter's `sdk`, shown as `OS Version / Arch`.
+    /// Flutter's `sdk`, shown as `OS Version`.
     pub sdk: String,
     pub virtual_device: bool,
     pub last_used: bool,
@@ -402,12 +402,12 @@ pub fn devices(last_used: &str) -> Result<Vec<Device>, String> {
                 platform: Platform::from_target(&target_platform),
                 // `sdkNameAndVersion` is the field's name inside flutter_tools;
                 // the machine output calls it `sdk`. Accept either.
-                sdk: d
-                    .get("sdk")
-                    .or_else(|| d.get("sdkNameAndVersion"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("-")
-                    .to_string(),
+                sdk: sdk_name(
+                    d.get("sdk")
+                        .or_else(|| d.get("sdkNameAndVersion"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("-"),
+                ),
                 virtual_device: emulator,
                 last_used: !id.is_empty() && id == last_used,
                 boot: None,
@@ -422,6 +422,28 @@ pub fn devices(last_used: &str) -> Result<Vec<Device>, String> {
     devices.sort_by_key(|d| !d.last_used);
 
     Ok(devices)
+}
+
+/// `com.apple.CoreSimulator.SimRuntime.iOS-26-5` → `iOS-26-5`.
+///
+/// Not a Flutter bug being papered over: `IOSSimulator.sdkNameAndVersion` *is*
+/// `simulatorCategory` (`ios/simulators.dart:599`), and that is the key
+/// `simctl list --json` groups its devices under. So the field arrives as a
+/// runtime's reverse-DNS identifier, which is not an OS version at all — and the
+/// row it fills is labelled `OS Version`.
+///
+/// The prefix is 32 of the 43 columns it occupied, and all it said was "this is
+/// an Apple simulator runtime", which the iOS glyph on the same card and the
+/// `virtual` chip on the picker row already said twice.
+///
+/// Only the prefix goes. `iOS-26-5` is Apple's own spelling of the runtime, and
+/// anything that is not a simulator runtime is Flutter's own prose — `Android 17
+/// (API 37)`, `macOS 26.6.1 25G76 darwin-arm64` — which is already what the label
+/// promises and is passed through untouched.
+fn sdk_name(raw: &str) -> String {
+    const SIM_RUNTIME: &str = "com.apple.CoreSimulator.SimRuntime.";
+
+    raw.strip_prefix(SIM_RUNTIME).unwrap_or(raw).to_string()
 }
 
 fn str_field(value: &Value, key: &str) -> String {
@@ -517,6 +539,7 @@ pub fn targets(reported: Vec<Device>, last_used: &str) -> Vec<Device> {
                 avd,
                 &name,
                 Platform::Android,
+                "",
                 Boot::Avd(avd.to_string()),
             ));
         }
@@ -551,15 +574,20 @@ pub fn targets(reported: Vec<Device>, last_used: &str) -> Vec<Device> {
     targets
 }
 
-/// A bootable row. It has no `targetPlatform` or `sdk` because nothing has told
-/// us yet — the thing is not running.
-fn target(id: &str, name: &str, platform: Platform, boot: Boot) -> Device {
+/// A bootable row. It has no `targetPlatform` because nothing has told us yet —
+/// the thing is not running.
+///
+/// `sdk` is passed in rather than left blank, because for one of the two callers
+/// it is already known: `simctl` groups its devices under the runtime, and that
+/// runtime string is the whole of what Flutter would report for the same device
+/// once booted. An AVD has no equivalent, so it passes `""`.
+fn target(id: &str, name: &str, platform: Platform, sdk: &str, boot: Boot) -> Device {
     Device {
         id: id.to_string(),
         name: name.to_string(),
         platform,
         target_platform: String::new(),
-        sdk: String::new(),
+        sdk: sdk.to_string(),
         virtual_device: true,
         last_used: false,
         boot: Some(boot),
@@ -608,10 +636,16 @@ fn simulators() -> Vec<Device> {
                 continue;
             };
 
+            // The runtime is the key this device is filed under, so its version
+            // is known before it boots and without asking anything: the same
+            // string, through the same `sdk_name`, that Flutter reports once the
+            // simulator is up. A shut-down simulator therefore describes itself
+            // exactly as a running one does.
             targets.push(target(
                 udid,
                 name,
                 Platform::Ios,
+                &sdk_name(runtime),
                 Boot::Sim(udid.to_string()),
             ));
         }
@@ -631,17 +665,47 @@ fn simulators() -> Vec<Device> {
 /// spinner: three minutes of animation cannot be told apart from a wedge.
 const BOOT_LIMIT: Duration = Duration::from_secs(180);
 
-/// Boot a target and return the id Flutter will address it by.
+/// What a finished boot knows about the device it started.
+///
+/// More than the id, because the id is not enough to describe the device on the
+/// SelectedTargetCard and this is the only moment the facts are cheap. Discovery
+/// has already run and will not run again — 3.3 is explicit that the device is
+/// not to be looked up a second time — so anything not gathered here is a dash
+/// on the card for the rest of the session.
+///
+/// Both fields may be empty. That is not a failure: a booted simulator has
+/// nothing to add to what `simctl` said before it started, so it returns the id
+/// alone and the picked row supplies the rest.
+pub struct Booted {
+    /// The id Flutter will address the device by, which for Android is the
+    /// serial and not the AVD name it was started from.
+    pub id: String,
+    pub target_platform: String,
+    pub sdk: String,
+}
+
+impl Booted {
+    /// A boot that learned nothing beyond the id.
+    fn bare(id: String) -> Self {
+        Self {
+            id,
+            target_platform: String::new(),
+            sdk: String::new(),
+        }
+    }
+}
+
+/// Boot a target and return what Flutter will need to address it.
 ///
 /// Blocking, and meant to be called on a worker thread.
-pub fn boot(target: &Boot) -> Result<String, String> {
+pub fn boot(target: &Boot) -> Result<Booted, String> {
     match target {
         Boot::Sim(udid) => boot_sim(udid),
         Boot::Avd(name) => boot_avd(name),
     }
 }
 
-fn boot_sim(udid: &str) -> Result<String, String> {
+fn boot_sim(udid: &str) -> Result<Booted, String> {
     // Bring the window up first, or the device boots headless and there is
     // nothing to look at.
     let _ = run("open", &["-a", "Simulator"], QUICK);
@@ -649,11 +713,11 @@ fn boot_sim(udid: &str) -> Result<String, String> {
     // `bootstatus -b` boots if needed and blocks until the device is ready, so
     // there is no polling loop to write.
     run("xcrun", &["simctl", "bootstatus", udid, "-b"], BOOT_LIMIT)
-        .map(|_| udid.to_string())
+        .map(|_| Booted::bare(udid.to_string()))
         .ok_or_else(|| "did not finish booting".to_string())
 }
 
-fn boot_avd(name: &str) -> Result<String, String> {
+fn boot_avd(name: &str) -> Result<Booted, String> {
     // `nohup`, so the emulator ignores the hangup when frun exits.
     //
     // The emulator has to outlive frun: booting costs half a minute at best, and
@@ -723,13 +787,83 @@ fn boot_avd(name: &str) -> Result<String, String> {
         .unwrap_or(false);
 
         if ready {
-            return Ok(serial);
+            let (target_platform, sdk) = android_facts(&serial);
+
+            return Ok(Booted {
+                id: serial,
+                target_platform,
+                sdk,
+            });
         }
 
         std::thread::sleep(Duration::from_secs(1));
     }
 
     Err("did not finish booting".to_string())
+}
+
+/// `targetPlatform` and `sdk` for a booted emulator, asked of the emulator.
+///
+/// This is the fix for the dash. A device that frun booted itself never passed
+/// through `flutter devices`, so both fields were empty strings and the card
+/// showed `emulator-5554` with no platform and `-` for its version — for a device
+/// that was, by then, running and answering questions.
+///
+/// Asked of Android rather than of Flutter on purpose. `flutter devices` would
+/// answer both, and costs several seconds because it boots the Dart VM; these are
+/// three `getprop` calls over an adb connection that boot detection just finished
+/// using, and they return immediately.
+///
+/// Both values are built in Flutter's own spelling, so a device that arrives this
+/// way is indistinguishable on the card from one that was already attached. That
+/// is the point: two spellings of `android-arm64` would read as two different
+/// facts.
+///
+/// Either half may come back empty, and an empty half must not overwrite what is
+/// already known — see `booted_device` in main.rs.
+fn android_facts(serial: &str) -> (String, String) {
+    let target_platform = getprop(serial, "ro.product.cpu.abi")
+        .map(|abi| android_target_platform(&abi))
+        .unwrap_or_default();
+
+    // `AndroidDevice.sdkNameAndVersion` is `'Android $release (API $sdk)'`, from
+    // exactly these two properties, so this reproduces the string rather than
+    // inventing a format for it.
+    let sdk = match (
+        getprop(serial, "ro.build.version.release"),
+        getprop(serial, "ro.build.version.sdk"),
+    ) {
+        (Some(release), Some(api)) => format!("Android {release} (API {api})"),
+        (Some(release), None) => format!("Android {release}"),
+        _ => String::new(),
+    };
+
+    (target_platform, sdk)
+}
+
+fn getprop(serial: &str, property: &str) -> Option<String> {
+    let out = run("adb", &["-s", serial, "shell", "getprop", property], QUICK)?;
+
+    let value = out.trim().to_string();
+
+    (!value.is_empty()).then_some(value)
+}
+
+/// An Android ABI as Flutter names the same thing.
+///
+/// The four are the whole of Flutter's Android target list
+/// (`build_info.dart`), and the mapping is the one `AndroidDevice.targetPlatform`
+/// uses. An ABI outside them is passed through as it came: a wrong `android-*`
+/// triple would be read as fact, where an unfamiliar ABI reads as what it is.
+fn android_target_platform(abi: &str) -> String {
+    match abi {
+        "arm64-v8a" => "android-arm64",
+        "armeabi-v7a" => "android-arm",
+        "x86_64" => "android-x64",
+        "x86" => "android-x86",
+        other => other,
+    }
+    .to_string()
 }
 
 /// Serials of every attached emulator, whatever state adb reports them in.
@@ -749,7 +883,6 @@ fn emulator_serials() -> std::collections::HashSet<String> {
         .map(str::to_string)
         .collect()
 }
-
 
 // ============================================================
 // Last used device
@@ -791,6 +924,28 @@ mod tests {
         assert_eq!(Platform::from_target("fuchsia-arm64"), Platform::Desktop);
     }
 
+    /// A simulator runtime identifier is not an OS version.
+    ///
+    /// What the card showed: `com.apple.CoreSimulator.SimRuntime.iOS-26-5` under
+    /// `OS Version`, straight from Flutter, which passes the `simctl` JSON key
+    /// through as `sdkNameAndVersion`.
+    #[test]
+    fn a_simulator_runtime_loses_its_bundle_prefix() {
+        assert_eq!(
+            sdk_name("com.apple.CoreSimulator.SimRuntime.iOS-26-5"),
+            "iOS-26-5"
+        );
+
+        // Every other platform already answers the label, so nothing is touched.
+        assert_eq!(sdk_name("Android 17 (API 37)"), "Android 17 (API 37)");
+        assert_eq!(
+            sdk_name("macOS 26.6.1 25G76 darwin-arm64"),
+            "macOS 26.6.1 25G76 darwin-arm64"
+        );
+        assert_eq!(sdk_name("iOS 18.2 22C150"), "iOS 18.2 22C150");
+        assert_eq!(sdk_name("-"), "-");
+    }
+
     #[test]
     fn desktop_and_web_are_not_attachments() {
         let device = |platform| Device {
@@ -811,6 +966,22 @@ mod tests {
         assert!(device(Platform::Android).attached());
         assert!(!device(Platform::Desktop).attached());
         assert!(!device(Platform::Web).attached());
+    }
+
+    /// A booted emulator has to describe itself the way Flutter would.
+    ///
+    /// The card puts `Platform ID` one row above the version, so `arm64-v8a` and
+    /// `android-arm64` would sit where the other had been the run before and read
+    /// as a different device.
+    #[test]
+    fn an_abi_is_translated_into_flutters_target_triple() {
+        assert_eq!(android_target_platform("arm64-v8a"), "android-arm64");
+        assert_eq!(android_target_platform("armeabi-v7a"), "android-arm");
+        assert_eq!(android_target_platform("x86_64"), "android-x64");
+        assert_eq!(android_target_platform("x86"), "android-x86");
+
+        // Not mapped to a plausible-looking triple it might not be.
+        assert_eq!(android_target_platform("riscv64"), "riscv64");
     }
 
     #[test]

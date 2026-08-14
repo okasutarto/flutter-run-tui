@@ -549,13 +549,13 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
 
         Msg::Devices(Ok(targets)) => devices_answered(app, ctx, targets),
 
-        Msg::Booted(Ok(id)) => {
+        Msg::Booted(Ok(booted)) => {
             app.boot_started = None;
 
             // Straight to the run. The device is already known, so the picker is
             // skipped: 3.3 is explicit that asking again would name the same
             // device a third time in a row.
-            let device = booted_device(app, &id);
+            let device = booted_device(app, &booted);
 
             app.devices = Vec::new();
             launch(app, ctx, device);
@@ -630,23 +630,46 @@ fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
 }
 
 /// A device that was booted but is not in any list yet.
-fn booted_device(app: &App, id: &str) -> probe::Device {
-    let selected = app.selected();
-
-    probe::Device {
-        id: id.to_string(),
-        name: selected
-            .map(|d| d.name.clone())
-            .unwrap_or_else(|| id.to_string()),
-        platform: selected
-            .map(|d| d.platform)
-            .unwrap_or(probe::Platform::Android),
+///
+/// Assembled from two sources, because neither knows everything. The picked row
+/// has the name the user chose and, for a simulator, the runtime `simctl` filed
+/// it under; the boot has the serial Flutter will address and, for Android, what
+/// the running system says about itself. Discovery does not run again, so this is
+/// the last chance to combine them.
+fn booted_device(app: &App, booted: &probe::Booted) -> probe::Device {
+    // The row that was picked, or a bare shell if the list is somehow gone.
+    let mut device = app.selected().cloned().unwrap_or_else(|| probe::Device {
+        id: booted.id.clone(),
+        name: booted.id.clone(),
+        platform: probe::Platform::Android,
         target_platform: String::new(),
         sdk: String::new(),
         virtual_device: true,
         last_used: false,
         boot: None,
+    });
+
+    // An AVD row is keyed by the AVD name, and Flutter cannot run on that.
+    device.id = booted.id.clone();
+
+    // It is running now, so there is nothing left to start. Leaving `boot` set
+    // would make the run target look like a bootable row.
+    device.boot = None;
+    device.virtual_device = true;
+
+    // Only ever fills a blank. An Android boot answers both fields and the row it
+    // came from has neither; a simulator answers neither and the row it came from
+    // has its runtime. Overwriting unconditionally would trade the second for an
+    // empty string, which is the dash this change exists to remove.
+    if !booted.target_platform.is_empty() {
+        device.target_platform = booted.target_platform.clone();
     }
+
+    if !booted.sdk.is_empty() {
+        device.sdk = booted.sdk.clone();
+    }
+
+    device
 }
 
 /// Take a device as the target and start the build.

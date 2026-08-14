@@ -64,9 +64,22 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
         lines.push(separator(w));
     }
 
+    // `OS Version`, not `OS Version / Arch`, which is what DESIGN.md 3.2 asked
+    // for and what this row could not deliver.
+    //
+    // No mobile platform puts an architecture in this string. Flutter's
+    // `sdkNameAndVersion` is `Android 17 (API 37)` for Android and a runtime
+    // identifier for an iOS simulator; the arch lives in `targetPlatform`, which
+    // is the row directly above — `android-arm64 (emulator-5554)`. Only desktop
+    // carries one, inside Flutter's own prose (`macOS 26.6.1 25G76 darwin-arm64`),
+    // and it is still there.
+    //
+    // So the half-promise was either unfulfillable or a repeat of the line above
+    // it. Naming the row after the one fact it always holds costs nothing: the
+    // arch did not move and was never here.
     lines.push(field(
         w,
-        "OS Version / Arch",
+        "OS Version",
         vec![text(os_version(app), theme::TEXT)],
     ));
 
@@ -100,11 +113,17 @@ fn platform_id(app: &App) -> String {
     format!("{} ({})", device.target_platform, device.id)
 }
 
-/// Flutter's own `sdk` string, which is where the OS version and arch live.
+/// Flutter's own `sdk` string, which is where the OS version lives.
 ///
-/// A freshly booted device has none: it was launched from an AVD name or a UDID
-/// and Flutter has not been asked about it since. The dash is honest; inventing
-/// a version would not be.
+/// A device frun booted itself used to have none, and this read `-` for a device
+/// that was running and answerable. It is filled now from two places that both
+/// pre-date the run: an Android emulator is asked over adb once
+/// `sys.boot_completed` lands, and an iOS simulator carries the runtime `simctl`
+/// filed it under from the moment it appears in the picker.
+///
+/// The dash survives for the case it was right about all along: a device nothing
+/// has been able to tell us anything about. Inventing a version would not be
+/// better.
 fn os_version(app: &App) -> &str {
     match &app.target {
         Some(device) if !device.sdk.is_empty() => device.sdk.as_str(),

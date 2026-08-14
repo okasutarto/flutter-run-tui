@@ -362,8 +362,9 @@ pub enum Msg {
     Eof,
     /// Discovery finished: one merged, ordered list of everything runnable.
     Devices(Result<Vec<Device>, String>),
-    /// A boot finished, carrying the id Flutter will use.
-    Booted(Result<String, String>),
+    /// A boot finished, carrying the id Flutter will use and whatever else the
+    /// device could be asked while the connection to it was warm.
+    Booted(Result<probe::Booted, String>),
     /// The slow SDK version lookup landed.
     Versions(String, String),
 }
@@ -905,12 +906,17 @@ impl App {
         app.sync_time = "240ms".into();
         app.exit_code = 1;
 
+        // `iOS-26-5`, not `iOS 18.2 (arm64)`. The mock is what the layout is
+        // judged against, so a string Flutter cannot produce judges it against
+        // the wrong thing: an iOS simulator reports the runtime `simctl` filed it
+        // under, and the parenthesised arch was never in this field on any
+        // platform.
         app.target = Some(mock_device(
             "8A3F91C2-4D2E",
             "iPhone 16 Pro",
             Platform::Ios,
             "ios",
-            "iOS 18.2 (arm64)",
+            "iOS-26-5",
             true,
         ));
 

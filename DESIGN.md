@@ -140,7 +140,24 @@ already the component describing what is being run and where.
 
 ### 3.2 `SelectedTargetCard`
 * **Target Details Table**, and nothing else: `Device Target`, `Platform ID`,
-  `OS Version / Arch`, `Type` (Simulator / Hardware). Four rows, plus separators.
+  `OS Version`, `Type` (Simulator / Hardware). Four rows, plus separators.
+
+* **`OS Version`, not `OS Version / Arch`.** The row is Flutter's
+  `sdkNameAndVersion`, and no mobile platform puts an architecture in it:
+  `Android 17 (API 37)`, or a runtime identifier for an iOS simulator. The arch
+  lives in `targetPlatform` — `android-arm64` — which is `Platform ID`, the row
+  directly above. Desktop is the one platform that carries both, inside Flutter's
+  own prose (`macOS 26.6.1 25G76 darwin-arm64`), and it still does. So the second
+  half of the label was either unfulfillable or a repeat of the line above it.
+
+* **A device frun booted describes itself too.** It never passes through
+  `flutter devices` — 3.3 forbids asking twice — so both `Platform ID` and
+  `OS Version` used to be blank for exactly the device you had just waited three
+  minutes for. Each is now filled from a source that costs nothing: an Android
+  emulator is asked over adb the moment `sys.boot_completed` lands
+  (`ro.product.cpu.abi`, `ro.build.version.release`, `ro.build.version.sdk`,
+  spelled the way Flutter spells them), and an iOS simulator carries the runtime
+  `simctl` filed it under from the moment it appears in the picker, booted or not.
 
 * **The status banner is gone.** It read
   `✔ 1 device active: iPhone 17 Pro (emulator) (iOS)` in emerald, above a blank
