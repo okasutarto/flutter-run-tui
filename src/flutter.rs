@@ -382,6 +382,25 @@ pub fn duration(text: &str) -> String {
     String::new()
 }
 
+/// The same token as `duration`, as a number of seconds.
+///
+/// Used to place a phase boundary, so it has to be arithmetic rather than text.
+/// The group separator has to come out before parsing: `1,234ms` is not a float.
+pub fn duration_secs(text: &str) -> Option<f64> {
+    let token = duration(text);
+
+    if token.is_empty() {
+        return None;
+    }
+
+    let (value, scale) = match token.strip_suffix("ms") {
+        Some(value) => (value, 0.001),
+        None => (token.strip_suffix('s')?, 1.0),
+    };
+
+    Some(value.replace(',', "").parse::<f64>().ok()? * scale)
+}
+
 /// The Gradle task name out of `Running Gradle task 'assembleDebug'...`.
 fn gradle_task(text: &str) -> String {
     text.split('\'').nth(1).unwrap_or_default().to_string()
@@ -503,7 +522,12 @@ fn stage_line(app: &mut App, text: &str) -> bool {
         // Closes `Starting Flutter`, which was opened when the pty spawned and so
         // measures fvm, the Dart VM boot and flutter_tools startup — the one span
         // no Flutter output brackets.
-        app.start_stage(StageKey::Launch, "Launching lib/main.dart".into());
+        // Not labelled `Launching lib/main.dart`, which is what Flutter prints
+        // here. That is the announcement, and this row is the span that follows
+        // it — measured at 3.5s on Android and 20s on iOS, all of it unannounced.
+        // Naming a row after the line that opens it made an 18.7s figure look like
+        // a fault rather than like the toolchain working.
+        app.start_stage(StageKey::Launch, "Preparing build".into());
         return true;
     }
 
@@ -514,13 +538,34 @@ fn stage_line(app: &mut App, text: &str) -> bool {
         return true;
     }
 
+    // Flutter animates most of these lines through CR and re-emits them with an
+    // elapsed figure attached. `rewind` believes that figure and moves the phase
+    // boundary back to where the work really began; it never closes the row, so a
+    // spinner stays on screen either way.
+    let rewind = |app: &mut App, key: StageKey| {
+        if let Some(secs) = duration_secs(text) {
+            app.rewind_stage(key, secs);
+        }
+    };
+
     if text.contains("Running pod install") {
         app.start_stage(StageKey::Pods, "Installing CocoaPods".into());
+        rewind(app, StageKey::Pods);
         return true;
     }
 
     if text.contains("Running Xcode build") {
         app.start_stage(StageKey::Xcode, "Building with Xcode".into());
+        rewind(app, StageKey::Xcode);
+        return true;
+    }
+
+    // `Xcode build done.  11.7s` is where Flutter finally states the figure. It
+    // does not close the row — the next announcement does — but it is the most
+    // valuable number on an iOS build, because it is the only evidence of the 16
+    // seconds Flutter spent building before saying so.
+    if text.contains("Xcode build done") {
+        rewind(app, StageKey::Xcode);
         return true;
     }
 
@@ -534,16 +579,19 @@ fn stage_line(app: &mut App, text: &str) -> bool {
         };
 
         app.start_stage(StageKey::Gradle, label);
+        rewind(app, StageKey::Gradle);
         return true;
     }
 
     if text.starts_with("Installing build/") {
         app.start_stage(StageKey::Install, "Installing app".into());
+        rewind(app, StageKey::Install);
         return true;
     }
 
     if text.contains("Syncing files to device") {
         app.start_stage(StageKey::Sync, "Syncing files".into());
+        rewind(app, StageKey::Sync);
         return true;
     }
 
@@ -556,8 +604,7 @@ fn stage_line(app: &mut App, text: &str) -> bool {
     // Swallowed rather than logged: these are Flutter closing a phase it already
     // announced, so they carry nothing the row does not already say. They used to
     // be where a stage got closed, which is exactly what left the tracker idle.
-    if text.contains("Xcode build done")
-        || text.contains("Built build/")
+    if text.contains("Built build/")
         || text.starts_with("✓ Built")
         || text.contains("Compiling, linking and signing")
         || (app.stage_open(StageKey::Install) && is_bare_duration(text))
@@ -909,6 +956,49 @@ impl App {
     // number alongside measured gaps double-counted, because its timers start
     // before its announcements reach us.
 
+    /// Flutter reported how long a phase took. Move its boundary to match.
+    ///
+    /// Flutter's timers start before its announcements reach us, and on iOS the gap
+    /// is enormous: measured against a real build, it printed `Running Xcode
+    /// build...` **16.3 seconds** after its own Xcode timer had started, then closed
+    /// with `Xcode build done. 22.6s`. Timing the row from the announcement gave
+    /// `Building with Xcode 5.6s` for work Flutter said took 22.6s — wrong by four
+    /// times, and the missing 16 seconds sat on the row above it.
+    ///
+    /// So when Flutter states a figure, it is believed, and the boundary between
+    /// this row and the one before moves back to where the work actually began.
+    /// Both rows end up right and the column still sums, because moving a shared
+    /// boundary cannot change the total: what one row gains the other gives up.
+    ///
+    /// Only ever moves a boundary *earlier*. A figure that would push it later
+    /// would be claiming a phase started after it was announced, which cannot
+    /// happen, and would let a stray number on an unrelated line corrupt the column.
+    pub fn rewind_stage(&mut self, key: StageKey, secs: f64) {
+        let Some(i) = self.stages.iter().position(|s| s.key == key) else {
+            return;
+        };
+
+        let Some(began) = Instant::now().checked_sub(Duration::from_secs_f64(secs)) else {
+            return;
+        };
+
+        if began >= self.stages[i].started {
+            return;
+        }
+
+        self.stages[i].started = began;
+
+        // The row before ended where this one really began. Anything already shown
+        // for it was measuring Flutter's silence, not its own work.
+        if i > 0 {
+            let previous = self.stages[i - 1].started;
+
+            if began > previous {
+                self.stages[i - 1].duration = elapsed(began.duration_since(previous));
+            }
+        }
+    }
+
     pub fn stage_open(&self, key: StageKey) -> bool {
         self.stages.iter().any(|s| s.key == key && !s.done)
     }
@@ -925,7 +1015,17 @@ impl App {
         // Without this it would spin forever behind a finished build.
         if let Some(last) = self.stages.last_mut() {
             if !last.done {
-                last.duration = elapsed(last.started.elapsed());
+                // `Application Running` carries no figure. It is the destination,
+                // not a leg of the journey: it opens and closes on the same line
+                // Flutter prints, so any measurement of it is `0ms` — a number that
+                // looks like a broken clock rather than like the end of a build.
+                //
+                // Leaving it blank costs the column nothing, since zero adds
+                // nothing to a sum.
+                if last.key != StageKey::Ready {
+                    last.duration = elapsed(last.started.elapsed());
+                }
+
                 last.done = true;
             }
         }
@@ -1089,6 +1189,159 @@ mod tests {
         assert_eq!((ran, ran), (4, 4), "should read 4/4, not 4/5");
     }
 
+    #[test]
+    fn duration_tokens_parse_to_seconds() {
+        assert_eq!(duration_secs("Xcode build done.  11.7s"), Some(11.7));
+        assert_eq!(duration_secs("Syncing files... 62ms"), Some(0.062));
+
+        // The group separator has to be removed before parsing, or this is not a
+        // float at all.
+        assert_eq!(duration_secs("Restarted application in 1,234ms"), Some(1.234));
+
+        assert_eq!(duration_secs("Running Gradle task 'assembleDebug'..."), None);
+    }
+
+    /// Flutter's reported figure wins, and the row before it gives up the time.
+    ///
+    /// The numbers are from a real iOS build: Flutter printed `Running Xcode
+    /// build...` 16.3s after its own timer had started, then `Xcode build done.
+    /// 22.6s`. Timed from the announcement alone the row read 5.6s, which
+    /// understated the Xcode build fourfold and parked the missing 16s on the row
+    /// above.
+    #[test]
+    fn a_reported_figure_moves_the_boundary_not_the_total() {
+        let mut app = App::new(State::Building);
+        app.begin_build();
+
+        feed(&mut app, "Launching lib/main.dart on iPhone 17 Pro in debug mode...");
+
+        // Stand in for the seconds Flutter spends silent before announcing Xcode.
+        std::thread::sleep(Duration::from_millis(120));
+        feed(&mut app, "Running Xcode build...");
+
+        let preparing_before = app.stages[1].started;
+
+        // Flutter now says the build took far longer than we have been watching it.
+        feed(&mut app, "Xcode build done.       0.100s");
+
+        let xcode = app.stages[2].started;
+
+        assert!(
+            xcode < app.stages[1].started + Duration::from_millis(120),
+            "the boundary should have moved back into the silent stretch"
+        );
+
+        assert!(
+            xcode > preparing_before,
+            "it must not move past the row before it"
+        );
+
+        // `Preparing build` gave up exactly what Xcode gained, so the two still
+        // partition the same span.
+        let preparing = xcode.duration_since(preparing_before);
+        assert_eq!(app.stages[1].duration, elapsed(preparing));
+
+        // A figure that would push the boundary later is refused: a phase cannot
+        // have started after it was announced.
+        let settled = app.stages[2].started;
+        feed(&mut app, "Xcode build done.       0.001s");
+        assert_eq!(app.stages[2].started, settled, "boundary moved forward");
+    }
+
+    /// State 11: a keypress Flutter never acknowledged.
+    ///
+    /// This is the one state that cannot be provoked on a real device on demand.
+    /// Its trigger is Flutter silently discarding a keypress while busy — reported
+    /// only through `printTrace()`, which never reaches stdout — and an attempt to
+    /// force it by sending `r` during a hot restart failed: Flutter queued the key
+    /// and serviced it afterwards rather than dropping it.
+    ///
+    /// So what is checked here is the half that belongs to frun: a request with no
+    /// acknowledgement resolves, rather than spinning forever. That was the whole
+    /// reason the state exists.
+    #[test]
+    fn an_unacknowledged_keypress_resolves_instead_of_spinning_forever() {
+        let mut app = App::new(State::Running);
+
+        app.request_reload(Kind::Reload);
+
+        assert_eq!(app.state, State::ReloadInFlight);
+        assert!(
+            app.pending.as_ref().is_some_and(|p| !p.acked),
+            "a keypress starts unacknowledged: it is a request, not a fact"
+        );
+
+        // Nothing acknowledges it. Wind the deadline into the past rather than
+        // sleeping out ACK_TIMEOUT.
+        app.pending
+            .as_mut()
+            .expect("a pending reload")
+            .deadline = Some(Instant::now() - Duration::from_millis(1));
+
+        app.tick_pending();
+
+        assert_eq!(app.state, State::ReloadDropped);
+        assert!(app.pending.is_none(), "the stage has to be cleared");
+        assert!(
+            app.reload_note.contains("not picked up"),
+            "the row must say why: {:?}",
+            app.reload_note
+        );
+    }
+
+    /// An acknowledged operation has no deadline, because it may legitimately
+    /// take as long as it likes. Applying one would report a failure that has not
+    /// happened.
+    #[test]
+    fn an_acknowledged_reload_is_never_dropped() {
+        let mut app = App::new(State::Running);
+
+        app.request_reload(Kind::Reload);
+        feed(&mut app, "Performing hot reload...");
+
+        assert!(
+            app.pending.as_ref().is_some_and(|p| p.acked),
+            "Flutter's own progress line is the acknowledgement"
+        );
+
+        assert!(
+            app.pending.as_ref().is_some_and(|p| p.deadline.is_none()),
+            "an acknowledged stage must not carry a deadline"
+        );
+
+        app.tick_pending();
+        assert_eq!(app.state, State::ReloadInFlight, "it should still be running");
+
+        feed(&mut app, "Reloaded 3 of 1824 libraries in 212ms.");
+        assert_eq!(app.state, State::Running);
+    }
+
+    /// A late acknowledgement after a drop reopens the stage.
+    ///
+    /// This is why the timeout can afford to be wrong: `runSourceGenerators()`
+    /// runs before Flutter's progress line appears, so a slow accept looks
+    /// identical to a drop for a moment. Being self-correcting is what makes a
+    /// false timeout harmless.
+    #[test]
+    fn a_late_acknowledgement_reopens_a_dropped_stage() {
+        let mut app = App::new(State::Running);
+
+        app.request_reload(Kind::Reload);
+        app.pending
+            .as_mut()
+            .expect("a pending reload")
+            .deadline = Some(Instant::now() - Duration::from_millis(1));
+        app.tick_pending();
+
+        assert_eq!(app.state, State::ReloadDropped);
+
+        // Flutter took it after all.
+        feed(&mut app, "Performing hot reload...");
+
+        assert_eq!(app.state, State::ReloadInFlight);
+        assert!(app.pending.as_ref().is_some_and(|p| p.acked));
+    }
+
     /// The invariant: something is always visibly happening.
     ///
     /// A build must never reach a moment where every row is `✔` and none is
@@ -1162,8 +1415,20 @@ mod tests {
             );
 
             assert!(
-                app.stages.iter().all(|s| !s.duration.is_empty()),
-                "{platform}: a completed row has no duration"
+                app.stages
+                    .iter()
+                    .filter(|s| s.key != StageKey::Ready)
+                    .all(|s| !s.duration.is_empty()),
+                "{platform}: a completed phase has no duration"
+            );
+
+            // The destination is the exception, and deliberately so: it opens and
+            // closes on the same line, so a figure there could only ever be `0ms`.
+            assert!(
+                app.stages
+                    .last()
+                    .is_some_and(|s| s.key == StageKey::Ready && s.duration.is_empty()),
+                "{platform}: the last row should carry no figure"
             );
         }
     }

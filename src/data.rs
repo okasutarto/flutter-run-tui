@@ -1105,25 +1105,25 @@ fn mock_stages(state: State) -> Vec<Stage> {
         // iOS: CocoaPods then Xcode. Gradle never appears here.
         State::Building => vec![
             stage(StageKey::Start, "Starting Flutter", "3.6s", true),
-            stage(StageKey::Launch, "Launching lib/main.dart", "1.1s", true),
+            stage(StageKey::Launch, "Preparing build", "1.1s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "", false),
         ],
 
         State::BuildFailed => vec![
             stage(StageKey::Start, "Starting Flutter", "3.6s", true),
-            stage(StageKey::Launch, "Launching lib/main.dart", "1.1s", true),
+            stage(StageKey::Launch, "Preparing build", "1.1s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "11.1s", false),
         ],
 
         s if s.build_done() => vec![
             stage(StageKey::Start, "Starting Flutter", "3.6s", true),
-            stage(StageKey::Launch, "Launching lib/main.dart", "1.1s", true),
+            stage(StageKey::Launch, "Preparing build", "1.1s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "14.5s", true),
             stage(StageKey::Sync, "Syncing files", "240ms", true),
-            stage(StageKey::Ready, "Application Running", "0.9s", true),
+            stage(StageKey::Ready, "Application Running", "", true),
         ],
 
         _ => Vec::new(),

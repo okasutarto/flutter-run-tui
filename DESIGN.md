@@ -328,16 +328,36 @@ devices answered.
     `✔ Building with Xcode 11.1s` and silently become `14.5s` seconds afterwards.
     Measured on an iOS transcript: `0ms → 125ms`, `121ms → 241ms`,
     `124ms → 249ms`.
-  * **Flutter's own figures are not used.** Its timers start before its
-    announcements reach us, so mixing them with measured spans double-counts.
-    The cost is that `Building with Xcode` reads ~14s where raw `flutter run`
-    says `11.1s`: Flutter's figure is the truer measure of the Xcode build alone,
-    ours is the truer measure of where the wall clock went, and only one of the
-    two can add up to the total.
+  * **Flutter's own figures move the boundary between rows.** Its timers start
+    before its announcements reach us, and on iOS the lag is enormous. Measured
+    against a real build: it printed `Running Xcode build...` **16.3 seconds**
+    after its own Xcode timer had started, then closed with
+    `Xcode build done. 22.6s`. Timing the row from the announcement alone gave
+    `Building with Xcode 5.6s` for work Flutter said took 22.6s — wrong by four
+    times, with the missing 16 seconds sitting on the row above.
 
-  Flutter's durations are still parsed, for the log stream and the reload rows.
-  Note it formats elapsed time through `NumberFormat`, so values carry a group
-  separator (`1,847ms`) and must not be matched with `[0-9]+`.
+    So when Flutter states a figure, `rewind_stage` believes it and moves the
+    boundary between that row and the one before back to where the work actually
+    began. What one row gains the other gives up, so the total cannot change:
+    moving a shared boundary is not the same as editing a duration.
+
+    The same mechanism fixes `Syncing files 0ms`. The sync really took 81ms, but
+    the line opening the row and the line closing it arrive in one read, so the
+    measured span is zero — and Flutter prints `81ms` right there on the line.
+
+    It only ever moves a boundary **earlier**. A figure that would push it later
+    would claim a phase started after it was announced, which cannot happen, and
+    would let a stray number on an unrelated line corrupt the column.
+
+    How large the correction is depends on how cold the build is. On a warm run
+    Flutter announces almost promptly and the correction is nothing; on a cold one
+    it is 7 to 16 seconds. Two runs of the same project can therefore show
+    different shapes without either being wrong.
+
+  Note Flutter formats elapsed time through `NumberFormat`, so values carry a
+  group separator (`1,847ms`) and must not be matched with `[0-9]+`. That applies
+  to `duration_secs` as much as to the display: `1,234ms` is not a float until the
+  separator comes out.
 
 * **Each row's timer runs while its phase runs.** It starts at zero the moment
   the row opens, ticks live, and freezes at its measured figure when the
@@ -942,7 +962,7 @@ executed.
 | 3. Hot reload / restart | live | `Reloaded 0 libraries in 90ms`, `Restarted application in 4,072ms` |
 | 3. `BUILD_FAILED` | live | `BUILD ERROR` card, exit code 1, retry action registered |
 | 3. `RELOAD_FAILED` (10) | tested | needs a Dart compile error introduced mid-session |
-| 3. `RELOAD_DROPPED` (11) | tested | needs Flutter to silently swallow a keypress, which is not reliably forceable |
+| 3. `RELOAD_DROPPED` (11) | tested, not forceable | attempted live by sending `r` during a hot restart; Flutter queued the key and serviced it instead of dropping it. Three tests cover frun's half: a request with no ack resolves, an acked one is never dropped, and a late ack reopens it |
 | 4. Boot, and `NO_DEVICES` (2) | live | AVD booted through `sys.boot_completed`, name mapped back to `emulator-5554`, picker skipped, straight into the build |
 | 5. Shell cutover | live | `frun` through the shim: flag passthrough, fatal path, exit codes 0 / 1 / 130 |
 | 7.6 Progress denominator | live + tested | `Stage 1/5` on a real build, now `x/6`; a test walks a build and forbids the fraction decreasing |
@@ -957,11 +977,25 @@ executed.
 | 7.7 Marker gap durations | tested | the gap fills on the next stage, and the final row stays blank |
 | Mouse capture | unrun | `m` toggles it; only the geometry is covered, by `--hits` |
 
-Two of these are worth naming as gaps rather than leaving in a table. States 10
-and 11 are the subtlest logic in the parser — the ack/timeout machine — and
-neither has run against real Flutter output. Both are ported line for line from
-`frun-runner`, where they have been in daily use, which is the argument for
-believing them; it is not the same as having seen them.
+One of these is worth naming as a gap rather than leaving in a table. State 10
+(`RELOAD_FAILED`) has not run against real Flutter output; it needs a Dart compile
+error introduced while the app is live. It is ported line for line from
+`frun-runner`, where it has been in daily use, which is the argument for believing
+it — not the same as having seen it.
+
+**State 11 is a different case, and worth being precise about.** Its trigger is not
+frun's to produce: Flutter has to silently discard a keypress. An attempt to force
+that by sending `r` during a hot restart failed — Flutter queued the key and
+serviced it when the restart finished, rather than dropping it. So the trigger
+remains unobserved here, and the reference comment describing it (7.5) is the only
+evidence it happens at all.
+
+What *is* covered is frun's half, which is the half that can go wrong: a request
+that is never acknowledged resolves instead of spinning forever, an acknowledged
+one carries no deadline and so cannot be falsely dropped, and a late acknowledgement
+reopens a stage already declared dropped. That last one is why a wrong timeout is
+harmless: `runSourceGenerators()` runs before Flutter's progress line appears, so a
+slow accept and a drop look identical for a moment.
 
 What the live runs covered, for the record: a merged picker with 16 rows, a
 `NO_DEVICES` screen, a booted AVD and an attached-emulator run, a Gradle build
@@ -1334,6 +1368,39 @@ key events. `FRUN_NO_QUERY=1` skips the query and falls back to halfblocks.
 **`main` returning `Err` prints the `Debug` form.** A carefully formatted `✖ FATAL`
 line was followed by `Error: Custom { kind: NotFound, .. }`. Print the message and
 `std::process::exit`.
+
+**Findings about Flutter and the platform, not about this code.** Harvested from
+the comments in `reference/`, which is the snapshot of the shell implementation
+this replaced. None of them are derivable from Flutter's documentation and each
+was paid for once already, so they are recorded here rather than left in an
+archive nobody reads.
+
+* **Flutter formats elapsed time through `NumberFormat`.** Durations carry a
+  group separator, so `Restarted application in 1,234ms` clips to `234ms` if
+  matched with `[0-9]+`. There is a test pinning this (3.4).
+* **Flutter re-emits its progress lines with partial elapsed values.** The
+  `Running Gradle task '<task>'` line is animated through CR and each redraw
+  carries a longer figure, so treating the first one seen as completion reports a
+  far too short build. `Built build/...` is the unambiguous finished signal.
+
+  This is survivable for the tracker, which uses those figures to place a phase
+  *boundary* rather than to decide a phase has ended (3.4). A partial value is
+  still an honest elapsed-so-far, so `now - partial` lands on the same start
+  either way; what it must never do is close a row.
+* **Flutter's timers start before its announcements arrive.** On a cold iOS build
+  it began the Xcode build 16.3 seconds before printing `Running Xcode build...`.
+  Any attempt to time a phase from the line that announces it will understate that
+  phase and overstate whatever came before (3.4).
+* **Flutter discards terminal input while it is busy, and says so only through
+  `printTrace()`**, which never reaches stdout. A keypress is a request, not a
+  fact. This is the entire reason `HOT_RELOAD_DROPPED` (state 11) exists: without
+  a deadline the spinner it starts has no terminating condition and runs forever.
+* **macOS has no `timeout(1)`.** The Android boot wait is a bounded counter rather
+  than a wrapped command, and `probe::run` carries its own deadline for the same
+  reason.
+* **`flutter.png` has ~79px of transparent padding per side**, which renders as
+  dead columns. `flutter-trim.png` is the same artwork cropped to its content
+  (3.1).
 
 **Anything that can be done in two steps will eventually be done in one of them.**
 A stage row was closed by one trigger and charged by another, and both defects that
