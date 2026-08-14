@@ -29,7 +29,10 @@ pub fn pill<'a>(text: impl Into<Cow<'a, str>>, color: Color) -> Vec<Span<'a>> {
 
 /// Square badge, for log levels. Deliberately not a pill: these repeat on
 /// every row and the caps would add visual noise at that density.
-pub fn badge(text: &str, color: Color) -> Vec<Span<'_>> {
+///
+/// Owned or borrowed, like `pill` and `text`, so a caller can pad a badge to a
+/// fixed width without hoisting a binding above the `vec![]` that uses it.
+pub fn badge<'a>(text: impl Into<Cow<'a, str>>, color: Color) -> Vec<Span<'a>> {
     vec![Span::styled(
         text,
         Style::new().bg(color).fg(theme::INK).bold(),

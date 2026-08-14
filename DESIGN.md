@@ -462,15 +462,29 @@ devices answered.
   an absent one.
 
 ### 3.5 `TerminalLogsView`
-* **18-Column Strict Gutter System**:
+* **Strict Gutter System**, one width per frame:
   ```
-  01 14:32:01 [INF] Log content message line...
-  02 14:32:02 [ OK] ⚡ Reloaded 125 of 1824 libraries in 148ms.
-  03 14:32:04 [ERR] The following assertion was thrown building
-                    CheckoutScreen(dirty, dependencies: [_Inherited…
+  1 14:32:01 INF Log content message line...
+  2 14:32:02  ⚡  Reloaded 125 of 1824 libraries in 148ms.
+  3 14:32:04 ERR The following assertion was thrown building
+                 CheckoutScreen(dirty, dependencies: [_Inherited…
   ```
-  `01␣14:32:01␣[INF]␣` measures 18 columns, not 16. Continuation rows leave
-  the gutter empty and indent to the message column (see 6.1).
+  `1␣14:32:01␣INF␣` is 15 columns and `4000␣14:32:01␣INF␣` is 18. Continuation
+  rows leave the gutter empty and indent to the message column (see 6.1).
+
+  **The width is computed from the entry count, not fixed.** It was a constant 18,
+  sized for a four-digit number, which meant the first nine entries of every
+  session were right-aligned into a column that was three quarters empty and the
+  stream began three columns adrift of the card holding it. What has to be constant
+  is that *one* number describes the gutter — the drawn width and the continuation
+  indent are the same expression — and that survives being computed. The cost is a
+  one-column shift as the log crosses 10, 100 and 1000 entries; three reflows in a
+  session against a hole on screen at the start of every one.
+
+  The level badge is padded to three cells for the same reason. `INF`, `WRN` and
+  `ERR` are three; the reload bolt is one, so reload rows drew a 16-column gutter
+  while everything around them drew 18, and a wrapped reload line indented to a
+  column its own first row never reached.
 
 * **Clean Header**: section title (`◆ APP LOGS STREAM`) and a count
   (`[N entries]`). No search bar and no filter toggles.
@@ -795,7 +809,7 @@ controls are wanted; the footer shows which state it is in.
 ### 6.1 Long log lines wrap
 
 Real Flutter output runs 80-130 characters per line. At a 100-column canvas,
-after borders, padding and the 18-column gutter, roughly 78 columns remain,
+after borders, padding and a full 18-column gutter, roughly 78 columns remain,
 so a framework assertion loses about 50 characters off the end.
 
 Those lines **wrap**, continuation rows indented to the message column with
@@ -807,7 +821,8 @@ Two consequences to design around:
 * A single Dart exception can occupy 6-10 rows once wrapped, so the log
   window must be sized on the assumption that one entry is not one row.
 * Consecutive lines from the same source share a timestamp and level. Those
-  repeat the 18-column gutter for no information. Continuation rows omit it.
+  repeat the gutter for no information. Continuation rows omit it and indent to
+  the same width the first row drew (3.5).
 
 ### 6.2 Responsive degradation
 
@@ -1047,9 +1062,9 @@ clipped row draws no error, and a device query that answers wrongly still answer
 `--probe` is the counterpart to `--dump`: that one checks the layout without a
 device, this one checks discovery without a terminal.
 
-34 tests. The ones that matter most: no row in any state at any size exceeds its
+53 tests. The ones that matter most: no row in any state at any size exceeds its
 width budget (measured in cells, not bytes), every state fills exactly the height
-it was given, the log gutter is the same width at every entry count, and every
+it was given, the drawn log gutter matches the continuation indent at every entry count and level, and every
 rung of the degradation ladder reclaims rows where it applies.
 
 Crates: `ratatui`, `textwrap`, `unicode-width`, `ratatui-image`, `image`,
@@ -1354,6 +1369,14 @@ drawn with a two-column entry number and indented by a constant 18. Both were
 right up to 99 entries. The first real run reached 908 and every wrapped line sat
 a column off its own first line. Any constant that describes something drawn
 elsewhere needs a test that measures what is drawn.
+
+The first fix for that was a wider constant, and it bought a second defect with the
+same shape: the test measured one level, `INF`, so the one-cell reload bolt went on
+drawing a 16-column gutter under an 18-column indent, and eight entries reserved
+four columns for one digit. A width that describes drawn output has to be *derived*
+from the output — the count and the padded badge — and the test has to walk every
+input that can change it. Both are now the same expression, and 3.5 records what
+that costs.
 
 **Dropping the master pty handle kills the child.** `pair.master` has to live as
 long as the session. Letting it fall out of scope at the end of `Session::spawn`

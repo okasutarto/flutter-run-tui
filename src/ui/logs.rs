@@ -9,20 +9,43 @@ use crate::data::{App, State};
 use crate::theme;
 use crate::widgets::{badge, card, spread, strong, text, wrap};
 
-/// `0001␣14:32:01␣INF␣` measures 18 columns.
+/// Columns the level badge occupies, on every row.
 ///
-/// The spec called this 16; it is 18. Worth being exact about, because it is
-/// subtracted from every log line and a two-column error compounds across a
-/// wrapped stack trace.
-const GUTTER: u16 = 18;
+/// `INF`, `WRN` and `ERR` are three cells. The reload bolt is one, so it is
+/// padded to match rather than left to shrink the gutter on its own rows — which
+/// it did: a `Reloaded 125 of 1824 libraries` line started two columns left of
+/// every line around it, and any continuation of it indented to a column its own
+/// first row did not use.
+const BADGE_W: usize = 3;
 
-/// Columns the entry number gets, which is what makes the gutter a constant.
+/// `HH:MM:SS`, which `probe::Clock` guarantees.
+const TIME_W: usize = 8;
+
+/// Columns the entry number gets: as many as the largest number on screen needs,
+/// and no more.
 ///
-/// It was `{:>2}`, so the gutter silently grew a column at entry 100 and another
-/// at 1000 while the continuation rows kept indenting to 18 — the first real run
-/// hit 908 entries and every wrapped line sat one column off its own first line.
-/// Four columns covers the 4000-entry cap in `App::log`.
-const INDEX_W: usize = 4;
+/// A fixed four used to sit here, on the grounds that a constant gutter is what
+/// keeps a wrapped row aligned with its own first line. The constant was the right
+/// idea and the wrong constant: at eight entries it right-aligned `1` into four
+/// columns, so every log line began three columns adrift of the card it is inside
+/// while the space stood empty. The invariant is that *one* number describes the
+/// gutter, not that the number never changes, so it is computed from the count and
+/// both rows read it from `gutter`.
+///
+/// The cost is a one-column shift of the message column as the log crosses 10, 100
+/// and 1000 entries. That is three reflows in a session, against a hole on screen
+/// for the first nine entries of every session.
+fn index_w(count: usize) -> usize {
+    count.max(1).to_string().len()
+}
+
+/// Width of `1␣14:32:01␣INF␣` at this entry count.
+///
+/// Subtracted from every message and used as the continuation indent, so the two
+/// cannot disagree.
+fn gutter(count: usize) -> u16 {
+    (index_w(count) + 1 + TIME_W + 1 + BADGE_W + 1) as u16
+}
 
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     // Says so when the window is not at the live tail. Without it, scrolling back
@@ -69,7 +92,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_stream(frame: &mut Frame, area: Rect, app: &mut App) {
-    let msg_w = area.width.saturating_sub(GUTTER).max(8) as usize;
+    let index_w = index_w(app.logs.len());
+    let gutter = gutter(app.logs.len());
+
+    let msg_w = area.width.saturating_sub(gutter).max(8) as usize;
 
     // Build every visual row first, then keep the tail. Wrapping means one
     // entry is not one row, so the count cannot be known before wrapping.
@@ -79,12 +105,15 @@ fn draw_stream(frame: &mut Frame, area: Rect, app: &mut App) {
         for (i, chunk) in wrap(&log.message, msg_w).into_iter().enumerate() {
             if i == 0 {
                 let mut spans = vec![
-                    text(format!("{:>INDEX_W$} ", index + 1), theme::BORDER),
+                    text(format!("{:>index_w$} ", index + 1), theme::BORDER),
                     text(log.time.as_str(), theme::MUTED),
                     Span::raw(" "),
                 ];
 
-                spans.extend(badge(log.level.badge(), log.level.color()));
+                spans.extend(badge(
+                    format!("{:^BADGE_W$}", log.level.badge()),
+                    log.level.color(),
+                ));
                 spans.push(Span::raw(" "));
                 spans.push(text(chunk, message_color(log.level)));
 
@@ -94,7 +123,7 @@ fn draw_stream(frame: &mut Frame, area: Rect, app: &mut App) {
                 // consecutive rows of one exception share a timestamp and a
                 // level, so reprinting them spends 18 columns on nothing.
                 rows.push(Line::from(vec![
-                    Span::raw(" ".repeat(GUTTER as usize)),
+                    Span::raw(" ".repeat(gutter as usize)),
                     text(chunk, message_color(log.level)),
                 ]));
             }
@@ -183,29 +212,50 @@ mod tests {
     use super::*;
     use crate::widgets::width;
 
-    /// The drawn gutter must be exactly `GUTTER` wide, at any entry count.
+    /// What the drawn gutter measures and what a continuation row indents by must
+    /// be the same number, at every entry count and for every level.
     ///
-    /// Two numbers described the same column before this: the spans that draw the
-    /// gutter, and the constant the continuation rows indent by. They agreed up to
-    /// 99 entries and then quietly stopped — a real run reached 908 and every
-    /// wrapped line was a column out.
+    /// Two numbers described this column before: the spans that draw it, and the
+    /// constant the continuation rows indent by. They agreed up to 99 entries and
+    /// then quietly stopped — a real run reached 908 and every wrapped line was a
+    /// column out. They also disagreed on reload rows at any count, where the
+    /// one-cell bolt made the drawn gutter two columns short.
     #[test]
-    fn the_gutter_is_the_same_width_at_every_entry_count() {
-        for index in [0usize, 9, 99, 999, 3999] {
-            let drawn = format!(
-                "{:>INDEX_W$} {} {} ",
-                index + 1,
-                "14:32:01",
-                crate::data::Level::Inf.badge()
-            );
+    fn the_drawn_gutter_matches_the_continuation_indent() {
+        use crate::data::Level;
 
-            assert_eq!(
-                width(&drawn),
-                GUTTER as usize,
-                "entry {} draws a {}-column gutter, budget is {GUTTER}: {drawn:?}",
-                index + 1,
-                width(&drawn),
-            );
+        for count in [1usize, 9, 10, 99, 100, 999, 1000, 4000] {
+            for level in [Level::Inf, Level::Wrn, Level::Err, Level::Reload] {
+                let w = index_w(count);
+
+                let drawn = format!(
+                    "{:>w$} {} {:^BADGE_W$} ",
+                    count,
+                    "14:32:01",
+                    level.badge(),
+                );
+
+                assert_eq!(
+                    width(&drawn),
+                    gutter(count) as usize,
+                    "{count} entries at {level:?} draw {} columns, the indent is {}: {drawn:?}",
+                    width(&drawn),
+                    gutter(count),
+                );
+            }
         }
+    }
+
+    /// The point of computing it: the first entry of a session starts against the
+    /// card's content edge rather than three columns inside it.
+    #[test]
+    fn a_short_log_does_not_reserve_columns_it_cannot_use() {
+        assert_eq!(index_w(1), 1);
+        assert_eq!(gutter(1), 15, "three columns narrower than the old constant");
+
+        // And it still grows to the 18 that a four-digit count needs, which is
+        // what the fixed constant was.
+        assert_eq!(index_w(4000), 4);
+        assert_eq!(gutter(4000), 18);
     }
 }
