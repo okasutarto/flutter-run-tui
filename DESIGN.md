@@ -1,7 +1,7 @@
 # 🖥️ Flutter CLI Terminal UI (TUI) - Architecture & Design Specification (`design.md`)
 
-Document Version: `1.6.0`  
-Last Updated: `2026-08-13`  
+Document Version: `1.7.0`  
+Last Updated: `2026-08-14`  
 Design System: **Monospace Character Grid TUI (Terminal User Interface)**  
 Target Font: `JetBrains Mono`, `Fira Code`, or `ui-monospace` (12px base)  
 Canvas Dimensions: `106x45` character matrix target, widening to `142` columns
@@ -136,7 +136,9 @@ already the component describing what is being run and where.
   pushed `Runtime (FVM)` to the border and cut it off from the two values it
   belongs with, and not one left-aligned group, which left two thirds of the row
   empty.
-* **Header Bar**: Includes path tag `~/cwclub` and a metadata `[COPY]` button.
+* **Header Bar**: Right-aligned path tag `~/cwclub`, nothing else. A `[COPY]`
+  button was drawn there and removed: it was never wired to a clipboard, and a
+  control that does nothing on click is worse than no control.
 
 ### 3.2 `SelectedTargetCard`
 * **Target Details Table**, and nothing else: `Device Target`, `Platform ID`,
@@ -1731,3 +1733,206 @@ happen on its own cannot be missed.
 
 Both timestamps were already being recorded, so this added no measurement — only
 the arithmetic between two numbers that were sitting there unused.
+---
+
+## 🧭 8. Proposed: target-card controls and concurrent runs
+
+**Nothing in this section is implemented.** Sections 1-7 describe code that
+exists; this one is a plan, recorded before any of it is written so the costs are
+argued once here rather than discovered one at a time in the diff. Each item below
+carries what has to change and what it is paid for with, because in this layout
+every new row is taken from the log window (6.2) and every new letter is taken
+from Flutter (5.1).
+
+### 8.1 What was asked for
+
+Four points, as stated:
+
+1. **Controls exclusive to the `SelectedTargetCard`.** Starting an additional
+   device and changing the current target are offered only inside the active
+   target card. No launcher controls in the header, the device list, or the
+   footer.
+2. **No dialog, modal or overlay.** Pressing the control opens a settings panel
+   *inline*, inside the card's own borders, drawn with the same box characters as
+   everything else.
+3. **Terminal tabs for additional devices.** A tab bar above the log window. `➕
+   Run another device` opens a new tab with its own independent runtime — its own
+   build stages, its own log buffer, its own hot reload, its own prompt. Tabs are
+   switchable and closable.
+4. **Reuse the session when changing target.** `🔄 Change target (this session)`
+   retargets the *current* tab without opening a new one, keeping the interface
+   and the history that is already there.
+
+The wording those points arrived in — modal, backdrop, "when the button is
+clicked" — is DOM wording. There is no overlay primitive in this codebase to
+remove: ratatui draws into a cell buffer, and an overlay is something you would
+have to build with `Clear` and hand-computed geometry. So point 2 is not a
+cleanup, it is a constraint on what gets built. It is also the only sane shape
+here, and it is recorded as a rule rather than as a change.
+
+### 8.2 Verdict
+
+| Point | Possible | Cost | Blocked on |
+| :--- | :--- | :--- | :--- |
+| 1 — controls only in the target card | Yes | Small | A key that is not Flutter's |
+| 2 — inline, no overlay | Yes, already the only option | Small-medium | A variable-height card in the `Budget` |
+| 3 — terminal tabs | Yes | **Large — architectural** | `Msg` identity, splitting `App`, quit semantics |
+| 4 — retarget the current session | Yes, but not as described | Small | Correcting the promise the label makes |
+
+Point 4 is the cheapest and the most mis-described. Point 3 is the only one that
+is not an addition to the existing shape but a change of it.
+
+### 8.3 Controls in the card, and the panel inside it
+
+`ui/target.rs` is read-only today: `render` takes `&App` and every field is read
+off `app.target`. Two things follow from putting controls in it.
+
+* It needs `&mut App`, to push into `app.hits` the way `chrome.rs` and
+  `devices.rs` already do. Hit regions are rebuilt every frame on purpose (7.5) —
+  a stale list leaves invisible buttons at coordinates a card no longer occupies —
+  so nothing about that changes, only which module contributes.
+* `Action` grows the two verbs, and `apply()` grows the two arms. One path for
+  keys and clicks, as now.
+
+**Clicking cannot be the only way to reach them.** Mouse capture is off by
+default and deliberately so (5.2); a control that only answers the mouse is dead
+in every session where `m` was never pressed. So each verb needs a key, and the
+key budget is the hard part: `q m r R e z j k` and the digits are frun's, and
+every other letter is Flutter's and has to arrive unchanged. `j`, `k` and `z` were
+already justified one at a time and that argument does not extend a fourth and
+fifth time.
+
+The way out is modifiers. Flutter's interactive commands are all bare single
+bytes, so `Ctrl-T` (new tab) and `Ctrl-D` (retarget) take nothing from it, and
+crossterm reports the modifier separately, so no ambiguity has to be resolved.
+That is the proposal: **the two new verbs are the first frun keys that are not
+plain letters, and that is why they are affordable.**
+
+The panel itself, inline, inside the card's bottom border:
+
+```text
+╭─ SELECTED TARGET ─────────────────────────────────────────────────╮
+│ Device Target                                       iPhone 17 Pro │
+│ Platform ID                               ios (2C4A8B1E-...-9F3D) │
+│ OS Version                                               iOS 26.0 │
+│ Type                                                    Simulator │
+│ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ │
+│  ➕ ^T Run another device (new tab)                               │
+│  🔄 ^D Change target (rebuilds, keeps this tab)                   │
+╰───────────────────────────────────────────────────────────────────╯
+```
+
+and once one of them is chosen, the target list opens in the same place, under the
+same border, with the same rows `devices.rs` already knows how to draw.
+
+**What it is paid for with.** `Budget::target_h()` is a constant today: four
+fields, three optional separators, two borders, plus the title gap.
+`Budget::solve(area, state, stages)` has no idea a panel exists. Both have to take
+the panel into account, and the rows come from the one flexible region in the
+frame — the log window, which is `Constraint::Min(3)`. That is the honest trade
+and it should be stated in the UI's terms: opening the panel shortens the log.
+
+**The collapsed case has to be answered, not discovered.** Below the `full_cards`
+rung of the ladder (6.2) this card is *one row* — `collapsed()`, a name, an id and
+a version. A panel cannot open inside one row. Three options, and the middle one
+is the proposal: refuse the panel at that size and say so; raise `MIN_H` so the
+rung cannot be reached with the panel open; or let the panel take over the middle
+region instead of the card, which is a device picker with extra steps and
+contradicts point 1. Whichever is chosen, a row drawn past its charged height is
+clipped in silence (7.5), so this cannot be left to chance.
+
+### 8.4 Terminal tabs
+
+Possible, and it is the one item here that is a refactor rather than a feature.
+What stands in the way, in the order it will be hit:
+
+* **`Msg` has no identity.** `Line`, `Partial`, `Eof`, `Booted`, `Versions` all
+  arrive on one `mpsc` shared by every worker, and the receiving end assumes there
+  is one of everything. With two tabs, tab B's output lands in tab A's log. The
+  fix is to tag the message with the tab it came from; `std::sync::mpsc` has no
+  `select`, so a channel per tab is not the alternative it looks like.
+* **`App` mixes two lifetimes.** Project, branch, SDK versions, the logo,
+  `mouse_on` and `hits` belong to the process. `state`, `stages`, `logs`,
+  `target`, `pending`, `log_scroll`, `failure`, `exit_code` and `fatal` belong to
+  one run. Tabs mean splitting those: a shell that owns the chrome, and
+  `tabs: Vec<Tab>` plus an active index. This touches `data.rs`, `main.rs`, every
+  `ui/*` module, and `dump.rs` — the whole `--dump/--all/--hits/--rows` harness
+  builds an `App::new(state)`, and that harness is the verification story (7.5),
+  so it cannot be allowed to rot.
+* **`Session` is already fine.** `portable-pty` holds no global state and
+  `Session::spawn` takes its device as an argument, so N children is not a code
+  problem. It is a machine problem: each tab is another Dart VM plus another
+  Gradle or Xcode. Two tabs is reasonable, four is not, and nothing should pretend
+  otherwise.
+* **Keys route to the active tab only.** Straightforward — `forward()` already
+  goes through one place. Background tabs keep filling their own buffers without
+  help, because their pump threads never stopped.
+* **Three semantics have to be decided, not inferred.** `q` and `^C` end the
+  process today; with tabs they either close a tab or end everything, and the
+  footer has to say which. `run()` returns one exit code — whose? And it replays
+  one transcript into the shell's scrollback on the way out — whose, or all of
+  them, separated how?
+* **A tab bar is a permanent row**, and `MIN_H` (14) goes up by it.
+
+```text
+  TABS  [ 1 iPhone 17 Pro ✕ ]  [ 2 Pixel 9 · building ✕ ]  [ + ^T ]
+```
+
+**The alternative that has to be turned down deliberately.** Do not build tabs;
+run a second `frun` in another tmux pane or terminal window. One process, one run,
+the design untouched, and the OS does the multiplexing it is already good at. The
+case *for* tabs is a shared project card and one place to watch two devices
+reload; that is a real case, but it should be chosen with the price above in view.
+
+### 8.5 Retargeting the current tab
+
+**The description is wrong in a way that matters.** `flutter run` is bound to its
+device at spawn — `Session::spawn` builds `flutter run -d <id>` — and Flutter has
+no interactive command to move a live session to another device. There is nothing
+to "change" on a running session.
+
+So "reuse the session" can only mean reuse the **tab**: its position, its scroll,
+and its log history. The Flutter process is killed, reaped and respawned.
+
+That mechanism already exists and is already load-bearing. `Action::RetryBuild`
+kills, reaps, resets stage state and respawns, and it deliberately *keeps* the
+previous log rather than clearing it, because comparing the two runs is the point
+(3.4). Retargeting is that same path with one extra step in front of it: set
+`app.target` to the newly chosen device first. Kill-then-respawn is also why it
+cannot be a forwarded keypress — a respawn racing an unreaped child is how two
+Gradle daemons end up fighting over a lock.
+
+**The label must not lie about this.** `Change target (this session)` reads like a
+switch and is a full rebuild. Whatever the panel says, it says the rebuild out
+loud, because the alternative is a user who thinks the tool has hung.
+
+### 8.6 What none of this includes
+
+The request mentions custom targets and wireless ADB as things the panel would
+offer. Neither exists. `probe::Boot` has exactly two variants, `Avd(String)` and
+`Sim(String)`, and discovery is `flutter devices --machine` plus `simctl` plus
+`adb devices`. Entering a device id or an `adb connect host:port` by hand is a new
+feature in `probe.rs` with its own failure modes, and it is not a consequence of
+any of the four points above. It is listed here only so it is not mistaken for
+one.
+
+Typed input is also the one thing 3.6 removed on purpose. A field for an
+`adb connect` address is a much smaller claim than the command prompt was — it is
+frun's own input, not a line forwarded to Flutter, which is what made the prompt
+unworkable — but it is still an input in an application that currently has none,
+and it should be argued on its own.
+
+### 8.7 Decisions still needed
+
+1. **Tabs in-app, or a second process in another pane?** Everything in 8.4 hangs
+   on this.
+2. **If tabs: what does `q` mean, and whose exit code and transcript survive?**
+3. **Where the inline panel's rows come from** — the log window is the only
+   answer available — **and what the panel does at the collapsed rung.**
+4. **`Ctrl-T` / `Ctrl-D`, or another pair.** They only have to avoid Flutter's
+   bare letters and each other.
+
+Suggested order, cheapest first, so the expensive decision is made with the panel
+already on screen: 8.5 (retargeting, which is mostly an existing path), then 8.3
+(the card's controls and its inline panel, which is where points 1 and 2 land
+together), then 8.4 on its own once 8.7.1 is answered.

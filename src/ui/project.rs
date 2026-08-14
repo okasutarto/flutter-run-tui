@@ -69,8 +69,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
         Line::from(vec![
             Span::raw(" "),
             text(app.cwd.as_str(), theme::MUTED),
-            Span::raw("  "),
-            text("[COPY]", theme::MUTED),
             Span::raw(" "),
         ])
         .right_aligned(),
