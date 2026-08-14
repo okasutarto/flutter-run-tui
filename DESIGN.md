@@ -93,6 +93,28 @@ already the component describing what is being run and where.
   scales to whichever dimension binds first, so at five rows the height binds and
   extra width goes unused.
 
+  **The box is fixed in cells, and the encoding has to follow the cell.** Eleven
+  by five cells is the mark's size relative to the text beside it, which is the
+  ratio worth holding; the terminal decides what a cell is worth in pixels. That
+  makes the artwork's pixel size a function of the font size, and `Cmd -` in
+  Ghostty changes it under a running process.
+
+  Nothing was following it. `Picker::from_query_stdio` measures the cell once,
+  before the alternate screen is entered, and exposes no setter; the encoded
+  protocol was cached against the cell *box*, which is a constant, so it was built
+  exactly once per process and never rebuilt. Text reflowed around a mark still
+  drawn for the font the process started with.
+
+  `Logo::follow_cell_size` re-measures every 200ms from `TIOCGWINSZ` and rebuilds
+  the picker and the protocol when the answer changes, which under kitty is also
+  what re-transmits the image. `TIOCGWINSZ` and not a second escape-sequence query:
+  the query reads its reply off the input loop's stdin, which is the contention
+  `FRUN_NO_QUERY` exists for, while the ioctl asks the kernel. Halfblocks are
+  exempt — their 10x20 cell is a fiction that fixes the aspect ratio of a
+  block-glyph render — and so is a terminal that reports no pixel size, since
+  `ws_xpixel` is optional and inventing a cell there would replace a stale mark
+  with no mark.
+
   The `Flutter Engine` and `Cross-Platform CLI` labels this section used to
   specify are gone. Both restated what the mark and the metadata column beside
   it already said, and `Flutter Engine` was inaccurate as well: the versions
