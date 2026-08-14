@@ -6,9 +6,9 @@ use ratatui::widgets::{Padding, Paragraph};
 use ratatui::Frame;
 
 use crate::budget::Budget;
-use crate::data::{Action, App, Hit, State};
+use crate::data::{App, State};
 use crate::theme;
-use crate::widgets::{alert_card, card, keycap, spread, strong, text};
+use crate::widgets::{alert_card, card, spread, strong, text};
 
 /// Widest the filled bar itself may grow.
 ///
@@ -338,42 +338,16 @@ pub fn render_failure(frame: &mut Frame, area: Rect, app: &mut App) {
     lines.push(Line::default());
     lines.push(Line::from(text(failure.note.as_str(), theme::AMBER)));
 
-    lines.push(Line::default());
-
-    // The action row follows the message rather than being pinned to the bottom
-    // of the card. Pinning it put the card's slack in the middle, between the
-    // verdict and the only thing that acts on it, which reads as a rendering
-    // fault; below the action row the same slack reads as room.
+    // No in-card action row. `[r] Retry Build  [q] Quit` used to close this card,
+    // costing two rows — the row itself and the blank above it — and reserving a
+    // third by truncating the message to leave room for it. The footer already
+    // carries both keys in `BUILD_FAILED`, with the same clickable region behind
+    // `[r]`, so the card was competing with the cheatsheet for the one screen
+    // whose whole job is showing as much of the compiler's output as will fit.
     //
-    // Truncated to leave it a row: whatever is cut is the oldest build output,
-    // and a Retry the layout swallowed is worse than a line of Gradle noise.
-    let action_row = Rect {
-        y: inner.y + lines.len().min(inner.height.saturating_sub(1) as usize) as u16,
-        height: 1,
-        ..inner
-    };
-
-    lines.truncate(inner.height.saturating_sub(1) as usize);
-
-    // Retry is a pty restart, not a keypress forwarded to Flutter: kill the
-    // child, reap it, respawn with stage state reset. `r` is free here because
-    // there is no live session to hot reload.
-    let mut actions = keycap("r", theme::ROSE);
-    actions.push(Span::raw(" "));
-    actions.push(strong("Retry Build", theme::TEXT));
-    actions.push(Span::raw("    "));
-    actions.extend(keycap("q", theme::MUTED));
-    actions.push(Span::raw(" "));
-    actions.push(text("Quit", theme::MUTED));
-
-    app.hits.push(Hit {
-        area: Rect {
-            width: 20,
-            ..action_row
-        },
-        action: Action::RetryBuild,
-    });
+    // The message now gets the full card. What used to be cut was the oldest build
+    // output, which on a Gradle failure is where the actual cause usually is.
+    lines.truncate(inner.height as usize);
 
     frame.render_widget(Paragraph::new(lines), inner);
-    frame.render_widget(Paragraph::new(Line::from(actions)), action_row);
 }

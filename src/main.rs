@@ -651,7 +651,7 @@ fn booted_device(app: &App, id: &str) -> probe::Device {
 
 /// Take a device as the target and start the build.
 fn launch(app: &mut App, ctx: &mut Ctx, device: probe::Device) {
-    app.choose(device, &ctx.extra);
+    app.choose(device);
     spawn_session(app, ctx);
 }
 

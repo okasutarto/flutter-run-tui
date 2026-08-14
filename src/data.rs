@@ -453,7 +453,6 @@ pub struct App {
     /// from it rather than copied out, so the card cannot describe a device that
     /// is not the one being run.
     pub target: Option<Device>,
-    pub command: String,
 
     /// What is booting, and since when. The clock matters: Android waits on
     /// `sys.boot_completed` for up to three minutes and a spinner alone cannot
@@ -547,7 +546,6 @@ impl App {
             log_scroll: 0,
 
             target: None,
-            command: String::new(),
 
             boot_name: String::new(),
             boot_started: None,
@@ -649,10 +647,14 @@ impl App {
     }
 
     /// Adopt a device as the run target.
-    pub fn choose(&mut self, device: Device, extra: &[String]) {
+    ///
+    /// The Flutter arguments are not taken here any more. They were used to build
+    /// a display string for the SelectedTargetCard's `❯ fvm flutter run -d ...`
+    /// row, which 3.2 no longer has; `Session::spawn` builds the argv it runs from
+    /// `ctx.extra` directly, so nothing else read it.
+    pub fn choose(&mut self, device: Device) {
         probe::remember_device(&device.id);
 
-        self.command = crate::flutter::command_line(&device.id, extra);
         self.target = Some(device);
     }
 
@@ -892,7 +894,6 @@ impl App {
         app.build_time = "3.4s".into();
         app.sync_time = "240ms".into();
         app.exit_code = 1;
-        app.command = "fvm flutter run -d ios-sim".into();
 
         app.target = Some(mock_device(
             "8A3F91C2-4D2E",

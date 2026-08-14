@@ -56,19 +56,10 @@ pub struct Session {
     _master: Box<dyn MasterPty + Send>,
 }
 
-/// The invocation, as shown on the SelectedTargetCard.
-pub fn command_line(device: &str, extra: &[String]) -> String {
-    let mut parts = vec![
-        "fvm".to_string(),
-        "flutter".into(),
-        "run".into(),
-        "-d".into(),
-        device.into(),
-    ];
-
-    parts.extend(extra.iter().cloned());
-    parts.join(" ")
-}
+// `command_line` used to live here, building `fvm flutter run -d <id>` as a string
+// for the SelectedTargetCard to print. The card dropped that row (3.2) and nothing
+// else read it: `Session::spawn` assembles its own argv, so the string was never
+// the command, only a description of one.
 
 impl Session {
     /// Spawn Flutter on a pty and start pumping its output into `tx`.

@@ -20,11 +20,15 @@ pub const LOG_MIN: u16 = 12;
 
 /// Rows the compiler-error card must keep.
 ///
-/// Summary, location, three lines of code frame, the caret note, the closing
-/// error line and the action row. Without a floor of its own this card was
-/// clipped at the design's target size, losing both the final error line and
-/// the in-card Retry action — on the one screen where reading the whole message
-/// is the entire point.
+/// Border and padding take four; the rest is summary, location, blank, three
+/// lines of code frame, the caret, blank, and the closing note. Without a floor
+/// of its own this card was clipped at the design's target size, losing the final
+/// error line — on the one screen where reading the whole message is the entire
+/// point.
+///
+/// Unchanged at 14 now that the in-card action row is gone. The two rows it held
+/// go to the message rather than back to the layout: what was being cut is the
+/// oldest build output, which on a Gradle failure is usually where the cause is.
 pub const FAIL_MIN: u16 = 14;
 
 /// Cards stop widening here so a very wide window cannot stretch a label to
@@ -172,19 +176,22 @@ impl Budget {
     /// SelectedTargetCard.
     ///
     /// ```text
-    ///   ✔ 1 device active: ...                    1
-    ///   blank                                     1
     ///   Device Target / Platform ID / OS / Type   4
-    ///   blank                                     1
-    ///   ❯ fvm flutter run -d ...                  1
     ///   separators between the four fields        3   (optional)
     /// ```
+    ///
+    /// Four rows of content, down from eight. The active-status banner and the
+    /// `❯ fvm flutter run -d ...` row went, with the blank each of them needed:
+    /// every fact on the banner is in the table under it and the count it added is
+    /// one by construction, and the command string was a description of an argv
+    /// that `Session::spawn` builds for itself. Four rows, handed to the log
+    /// window.
     pub fn target_h(&self) -> u16 {
         if !self.full_cards {
             return 1;
         }
 
-        let mut body = 8;
+        let mut body = 4;
 
         if self.separators {
             body += 3;
@@ -334,12 +341,15 @@ pub fn clamp_width(area: Rect) -> Rect {
 mod tests {
     use super::*;
 
-    /// Stage rows a finished Android build leaves on the tracker: starting,
-    /// launching, Gradle, install, syncing, running.
+    /// Stage rows a finished Android build leaves on the tracker: starting, Gradle,
+    /// install, syncing, running.
+    ///
+    /// Five, not six — the Gradle phase adopts the generic `Preparing build` row
+    /// rather than following it.
     ///
     /// The tracker's height follows this now, so it has to be stated rather than
-    /// assumed — that is the whole point of passing it in.
-    const DONE: usize = 6;
+    /// assumed; that is the whole point of passing it in.
+    const DONE: usize = 5;
 
     fn area(w: u16, h: u16) -> Rect {
         Rect::new(0, 0, w, h)
@@ -348,37 +358,37 @@ mod tests {
     #[test]
     fn full_chrome_matches_the_spec_arithmetic() {
         // Enumerated from the rows the cards actually draw, not estimated:
-        // project 12, target 14, build 10, footer 1, four gaps.
+        // project 12, target 10, build 11, footer 1, three gaps.
         let chrome = Budget::full().chrome(State::Running, DONE);
 
         assert_eq!(
-            chrome, 41,
+            chrome, 36,
             "enumerated from the rows each card actually draws"
         );
     }
 
-    /// The prompt bar is gone, so the log window keeps the four rows it cost.
+    /// Everything cut from the static cards lands in the log window, and this is
+    /// the arithmetic that says so.
     ///
-    /// A command line that forwarded nothing to Flutter and could not safely
-    /// forward anything (typing `quit` would have sent `q`) spent three rows plus
-    /// a gap on the one region that is always short of them.
+    /// Three removals, eight rows: the prompt bar and its gap (four), and the
+    /// target card's status banner and command string with the blank each needed
+    /// (four).
     #[test]
-    fn the_log_window_keeps_what_the_prompt_bar_used_to_cost() {
+    fn the_log_window_keeps_what_the_static_cards_gave_up() {
         let log_rows = |h: u16| {
             let plan = Budget::solve(area(106, h), State::Running, DONE);
             h - plan.chrome(State::Running, DONE)
         };
 
-        // At the design target, full chrome leaves 4 rows rather than 0: three from
-        // dropping the prompt bar, and a fourth from the footer no longer taking a
-        // blank row above it.
-        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 4);
+        // At the design target, full chrome now leaves 8 rows where it once left
+        // none at all.
+        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 9);
         assert!(log_rows(45) >= LOG_MIN, "{} rows", log_rows(45));
 
-        // A window tall enough to keep everything still gains what the prompt cost.
+        // And a window tall enough to keep everything gains the same eight.
         let plan = Budget::solve(area(106, 60), State::Running, DONE);
         assert_eq!(plan, Budget::full());
-        assert_eq!(60 - plan.chrome(State::Running, DONE), 19);
+        assert_eq!(60 - plan.chrome(State::Running, DONE), 24);
     }
 
     /// Guards the failure mode that adding the title gap caused: the Layout is
@@ -393,12 +403,12 @@ mod tests {
         // 6 content + 2 border + 1 title gap.
         assert_eq!(flat.project_h(), 9);
 
-        // 8 content + 2 border + 1 title gap.
-        assert_eq!(flat.target_h(), 11);
+        // 4 content + 2 border + 1 title gap.
+        assert_eq!(flat.target_h(), 7);
 
         // Separators add three rows to each.
         assert_eq!(full.project_h(), 12);
-        assert_eq!(full.target_h(), 14);
+        assert_eq!(full.target_h(), 10);
     }
 
     #[test]
@@ -483,11 +493,11 @@ mod tests {
 
     /// The build is the exception: while it runs, its stage list outranks them.
     ///
-    /// 42 rows rather than something shorter because `BUILDING` has no log window
-    /// yet, so it defends a floor of 3 and full chrome fits until 42.
+    /// 38 rows rather than something shorter because `BUILDING` has no log window
+    /// yet, so it defends a floor of 3 and full chrome (36) fits until 39.
     #[test]
     fn a_running_build_keeps_its_stage_list_instead() {
-        let plan = Budget::solve(area(106, 42), State::Building, 5);
+        let plan = Budget::solve(area(106, 38), State::Building, 5);
 
         assert!(plan.full_build, "the stage list is what is moving");
         assert!(!plan.separators, "so the separators pay for the floor");

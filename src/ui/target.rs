@@ -6,7 +6,7 @@
 //! it exists to get right.
 
 use ratatui::layout::Rect;
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
@@ -31,33 +31,24 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
 
     let w = inner.width;
 
-    // `iPhone 16 Pro (emulator) (iOS)`, which is the wording DESIGN.md 3.2
-    // specifies. Two bracketed facts, not one nested inside the other.
-    let mut banner = vec![
-        strong("✔ 1 device active: ", theme::EMERALD),
-        strong(device.name.as_str(), theme::EMERALD),
-    ];
-
-    if device.virtual_device {
-        banner.push(strong(" (emulator)", theme::EMERALD));
-    }
-
-    banner.push(strong(
-        format!(" ({})", device.platform.label()),
-        theme::EMERALD,
-    ));
-
-    let mut lines = vec![
-        // Active status banner. Emerald, and it names the device, because this
-        // is the line that answers "am I about to run on the right thing".
-        Line::from(banner),
-        Line::default(),
-        field(
-            w,
-            "Device Target",
-            pill(format!(" {} ", device.name), theme::CYAN),
-        ),
-    ];
+    // No active-status banner, and no command string. Both were in DESIGN.md 3.2
+    // and both are gone, for four rows.
+    //
+    // The banner read `✔ 1 device active: iPhone 17 Pro (emulator) (iOS)`. Every
+    // fact in it is already in the table below: the name is the `Device Target`
+    // pill, `(emulator)` is `Type`, and the platform is the head of `Platform ID`.
+    // What it added was the count, and the count is one by construction — this
+    // card only exists once a device has been chosen.
+    //
+    // The command string read `❯ fvm flutter run -d <udid>`. It was display only:
+    // `Session::spawn` builds its own argv, so nothing depended on it, and the
+    // device it names is the row directly above it. Two rows plus its blank
+    // separator, in the state where the log window is hungriest.
+    let mut lines = vec![field(
+        w,
+        "Device Target",
+        pill(format!(" {} ", device.name), theme::CYAN),
+    )];
 
     if plan.separators {
         lines.push(separator(w));
@@ -88,14 +79,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
         "Type",
         vec![strong(app.target_kind(), theme::PURPLE)],
     ));
-
-    // The command string, which lived in the header bar before that was removed.
-    // It belongs here: this card already describes what runs and where.
-    lines.push(Line::default());
-    lines.push(Line::from(vec![
-        text("❯ ", theme::MUTED),
-        text(app.command.as_str(), theme::MUTED),
-    ]));
 
     frame.render_widget(Paragraph::new(lines), inner);
 }

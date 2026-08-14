@@ -139,13 +139,25 @@ already the component describing what is being run and where.
 * **Header Bar**: Includes path tag `~/cwclub` and a metadata `[COPY]` button.
 
 ### 3.2 `SelectedTargetCard`
-* **Active Status Banner**: green box header
-  `✔ 1 device active: iPhone 16 Pro (emulator) (iOS)`.
-* **Target Details Table**: `Device Target`, `Platform ID`,
-  `OS Version / Arch`, `Type` (Simulator / Hardware).
-* **Command String**: the invocation being run, e.g.
-  `fvm flutter run -d 8A3F91C2-4D2E`. This lands here now that the header bar
-  is gone; this card is already the component describing what runs and where.
+* **Target Details Table**, and nothing else: `Device Target`, `Platform ID`,
+  `OS Version / Arch`, `Type` (Simulator / Hardware). Four rows, plus separators.
+
+* **The status banner is gone.** It read
+  `✔ 1 device active: iPhone 17 Pro (emulator) (iOS)` in emerald, above a blank
+  row. Every fact on it is in the table beneath it — the name is the `Device
+  Target` pill, `(emulator)` is `Type`, the platform is the head of `Platform ID`
+  — and what it added on top of that was a count that is one by construction,
+  since this card only exists once a device has been chosen.
+
+* **The command string is gone.** It read `❯ fvm flutter run -d <udid>`, also
+  above a blank row. It was display only: `Session::spawn` assembles its own argv
+  from the forwarded flags, so the string described a command rather than being
+  one, and the device it named was the row directly above it. `App::command` and
+  `flutter::command_line` went with it rather than being left as state nothing
+  reads.
+
+  Together that is four rows, in the state where the log window is hungriest. See
+  6.2 for where they went.
 
   Implementation note: `flutter devices --machine` does supply
   `sdkNameAndVersion`, `targetPlatform` and an `emulator` flag, so every field
@@ -445,10 +457,19 @@ devices answered.
   either side is usually the difference between recognising the mistake and
   opening the editor.
 
-  **Single action: `[r] Retry Build`.** This is not a keypress forwarded to
-  Flutter. It kills the child in the pty, waits for it to be reaped, and
-  spawns a fresh `fvm flutter run -d <id>` with all stage state reset. Hot
+  **Single action: `[r] Retry Build`, on the footer only.** This is not a keypress
+  forwarded to Flutter. It kills the child in the pty, waits for it to be reaped,
+  and spawns a fresh `fvm flutter run -d <id>` with all stage state reset. Hot
   restart is not a build retry and cannot substitute for one.
+
+  The card used to close with its own `[r] Retry Build  [q] Quit` row. That row is
+  gone: the footer advertises both keys in this state, with the same clickable
+  region behind `[r]`, so the card was repeating the cheatsheet in the one place
+  where every row belongs to the compiler's output. It cost three — the row, the
+  blank above it, and a third reserved by truncating the message to leave room —
+  and what the truncation cut was the oldest build output, which on a Gradle
+  failure is usually where the cause is. `FAIL_MIN` stays at 14, so those rows go
+  to the message rather than back to the layout.
 
   Two notes. The Gradle daemon survives the kill, so a retry is usually much
   faster than the first build. And the failed build's log is kept rather than
@@ -685,7 +706,7 @@ with one exception noted at the end.
                ├── failure ──► ┌──────────────────────┐
                │               │ 7  BUILD_FAILED      │
                │               │ summary + stack trace│
-               │               │ [Retry Build]        │
+               │               │ r retries, on footer │
                │               └──────────────────────┘
                │
                ▼  "Flutter run key commands" → interactive session ready
@@ -838,25 +859,26 @@ draw rather than estimated:
   PROJECT INFO           12 rows   2 border + 1 title gap + 9 body
                                    body = metadata 6 + separators 3
                                    the logo shares these rows, it does not add any
-  SELECTED TARGET        14 rows   2 border + 1 title gap + 11 body
-                                   body = banner + blank + 4 fields + blank
-                                          + command + 3 separators
+  SELECTED TARGET        10 rows   2 border + 1 title gap + 7 body
+                                   body = 4 fields + 3 separators
   BUILD PHASE            11 rows   2 border + 1 title gap + bar + blank + 6 stages
                                    the stage count is live, so this is the tallest
                                    case: a finished Android build. iOS ends at 10.
   footer                  1 row
-  gaps between blocks     4 rows   blocks - 1, not a constant
+  gaps between blocks     3 rows   blocks - 1, not a constant
   ────────────────────────────────
-  TOTAL                  42 rows
+  TOTAL                  37 rows
 ```
 
-At the 106x45 target that leaves the log window **3 rows**. A five-line Dart
-exception, wrapped at 84 columns of message space, occupies **8 rows**. So a
-single error still would not fit on screen at the design's own target size, and
-the cards have to yield.
+At the 106x45 target that leaves the log window **8 rows**. A five-line Dart
+exception, wrapped at 84 columns of message space, occupies **8 rows** — so one
+error fits exactly, with no context around it and nothing left for the next one.
+The cards still have to yield.
 
-It was 45 rows, leaving nothing at all, until the prompt bar and its gap were
-removed (3.6).
+This total has come down twice, and both times the rows went to the log window
+rather than back to the layout. It was 45, leaving nothing at all, until the prompt
+bar and its gap were removed (3.6). It was 41 until the target card gave up its
+status banner and its command string, with the blank each of them needed (3.2).
 
 **The tracker's height follows the number of rows it actually has.** `build_h`
 takes the count rather than assuming one, so the card is four rows tall while four
