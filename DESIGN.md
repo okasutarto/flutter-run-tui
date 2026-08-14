@@ -450,6 +450,22 @@ is the default spends a permanent slot on a non-event; capture is worth naming,
 because it takes text selection away from the terminal and the only other
 symptom is that copying a stack trace quietly stops working.
 
+**What the layout gave up is reported only when the layout decided something.**
+The expanded log view (`e`, 7.7) bypasses the ladder rather than solving it, so
+there are no concessions to name there — and naming them anyway printed
+`[separators, dense devices, build collapsed, cards collapsed]` about cards that
+are not on screen, spending 56 columns of this row to do it. That is what
+collapsed the spacing between the keys when the log window was expanded: the keys
+were spaced across what was left after a 56-column lie.
+
+**The keys are spaced across the whole row, remainder included.** Slack divided
+by gap count discards the remainder, which left up to `keys - 1` columns unused
+against the right edge — five at 106 columns with seven keys — so the row read as
+left-aligned with a ragged tail rather than spaced. The leftover columns are
+handed out one each to the leftmost gaps, and the two columns reserved to keep
+the last key clear of the diagnostics are only reserved when there are
+diagnostics.
+
 `Flutter <version> CLI` was here and is gone. The version is already on the
 ProjectCard, it changed no decision taken from the footer, and it cost 18
 columns on the one row that must never truncate.

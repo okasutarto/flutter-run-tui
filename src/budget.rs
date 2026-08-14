@@ -102,6 +102,9 @@ impl Budget {
     /// lost its `Type` field and its command string.
     const TITLE_GAP: u16 = 1;
 
+    /// Stage rows the tracker is sized for. See `build_h`.
+    const MAX_STAGES: u16 = 6;
+
     /// ProjectCard.
     ///
     /// Content rows, enumerated so the number can be checked against the code
@@ -171,12 +174,21 @@ impl Budget {
     ///   blank                                     1
     ///   one row per stage                         5 finished / 3 mid-build
     /// ```
-    pub fn build_h(&self, state: State) -> u16 {
+    pub fn build_h(&self) -> u16 {
         if !self.full_build {
             return 1;
         }
 
-        let stages = if state.build_done() { 5 } else { 3 };
+        // The full set, always, rather than the number currently drawn.
+        //
+        // Charging fewer rows than are drawn clips the extras in silence, which is
+        // trap one in 7.5, and the list grows during a build so any figure taken
+        // from its current length is stale the moment a stage opens. A fixed
+        // height also stops the log window below jumping each time a row appears.
+        //
+        // Six: starting, launching, the platform's two, syncing, ready. `pub get`
+        // is not counted, since it appears on few runs.
+        let stages = Self::MAX_STAGES;
 
         1 + 1 + stages + 2 + Self::TITLE_GAP
     }
@@ -215,7 +227,7 @@ impl Budget {
         }
 
         if state.has_build() {
-            rows += self.build_h(state);
+            rows += self.build_h();
         }
 
         // Footer, always present.
@@ -297,7 +309,7 @@ mod tests {
         let chrome = Budget::full().chrome(State::Running);
 
         assert_eq!(
-            chrome, 41,
+            chrome, 42,
             "enumerated from the rows each card actually draws"
         );
     }
@@ -314,16 +326,16 @@ mod tests {
             h - plan.chrome(State::Running)
         };
 
-        // At the design target, full chrome now leaves 4 rows rather than 0, and
-        // after the separators go the window clears its floor without having to
-        // collapse the build tracker as well.
-        assert_eq!(45 - Budget::full().chrome(State::Running), 4);
+        // At the design target, full chrome now leaves 3 rows rather than 0. It was
+        // 4 until the tracker was sized for six stage rows instead of five, which
+        // is the row that keeps `Starting Flutter` from being clipped.
+        assert_eq!(45 - Budget::full().chrome(State::Running), 3);
         assert!(log_rows(45) >= LOG_MIN, "{} rows", log_rows(45));
 
-        // A window tall enough to keep everything gains the same four rows.
+        // A window tall enough to keep everything still gains what the prompt cost.
         let plan = Budget::solve(area(106, 60), State::Running);
         assert_eq!(plan, Budget::full());
-        assert_eq!(60 - plan.chrome(State::Running), 19);
+        assert_eq!(60 - plan.chrome(State::Running), 18);
     }
 
     /// Guards the failure mode that adding the title gap caused: the Layout is

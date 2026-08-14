@@ -24,7 +24,14 @@ use crate::widgets::{keycap, strong, text};
 ///
 /// Contents follow the active state, because advertising a key that does
 /// nothing here is worse than not advertising it.
-pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
+///
+/// `plan` is `None` when the degradation ladder never ran, which is the expanded
+/// log view: it bypasses the `Budget` because there is no ladder to solve when one
+/// block owns the frame. Reporting a plan there described concessions that were
+/// never made — `[separators, dense devices, build collapsed, cards collapsed]`
+/// about cards that are not on screen — and it cost 56 columns of the one row that
+/// must never truncate, which collapsed the spacing between the keys.
+pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget>) {
     // Hints as groups, so they can be spaced across the row rather than run
     // together at the left edge. A group carries its Action when frun owns the
     // key, which is what earns it a clickable region.
@@ -69,6 +76,30 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         }
     };
 
+    // Rendered before anything is measured, so the width the layout reserves for
+    // the keys is the width the keys actually occupy.
+    //
+    // This used to be estimated as `key.len() + label.len() + 4`, which is bytes
+    // and not columns: `↑↓` is six bytes and two cells, so the estimate ran four
+    // columns over on every state that shows the arrows and dropped diagnostics
+    // that would have fitted.
+    let rendered: Vec<Vec<Span>> = hints
+        .iter()
+        .map(|(key, label, color, _)| {
+            let mut spans = keycap(key, *color);
+            spans.push(text(" ", theme::MUTED));
+            spans.push(text(*label, theme::MUTED));
+            spans
+        })
+        .collect();
+
+    let natural: Vec<usize> = rendered
+        .iter()
+        .map(|s| s.iter().map(Span::width).sum())
+        .collect();
+
+    let content: usize = natural.iter().sum();
+
     // Diagnostics keep their slot at the right edge, and the hints are spaced
     // across whatever is left. Ordered lowest priority first; the tail survives a
     // narrow window.
@@ -90,9 +121,12 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     }
 
     // What the layout gave up, so a missing element reads as a decision rather
-    // than as a glitch.
-    if plan.describe() != "full" {
-        optional.push(vec![text(format!("[{}]", plan.describe()), theme::BORDER)]);
+    // than as a glitch. Only when a layout decision was actually taken: see the
+    // note on `plan` above.
+    if let Some(plan) = plan {
+        if plan.describe() != "full" {
+            optional.push(vec![text(format!("[{}]", plan.describe()), theme::BORDER)]);
+        }
     }
 
     // Only when capture is on, which is not the default. Printing `mouse off`
@@ -100,8 +134,6 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     if app.mouse_on {
         optional.push(vec![strong("mouse on", theme::EMERALD)]);
     }
-
-    let hint_w: usize = hints.iter().map(|(k, l, _, _)| k.len() + l.len() + 4).sum();
 
     // Highest priority first, stopping at the first group that will not fit.
     // `continue` here would be a bin-packing search, keeping a low-priority group
@@ -112,7 +144,9 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     for group in optional.into_iter().rev() {
         let group_w: usize = group.iter().map(Span::width).sum();
 
-        if hint_w + used + group_w + 4 > area.width as usize {
+        // Four columns held back: the two the Layout spaces the groups apart by,
+        // and two so the last key does not butt against the diagnostics.
+        if content + used + group_w + 4 > area.width as usize {
             break;
         }
 
@@ -135,8 +169,13 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     let cols =
         // Spaced, so the last hint cannot butt against the diagnostics:
         // `[Esc] Cancelproto 4/11` was the result of them being adjacent.
+        //
+        // Only when there are diagnostics to keep clear of. The gap was
+        // unconditional, so a row with nothing on its right still gave up two
+        // columns to separate the keys from an empty group, and the last key
+        // stopped two short of the edge on every state that reports nothing.
         Layout::horizontal([Constraint::Min(10), Constraint::Length(right_w as u16)])
-            .spacing(2)
+            .spacing(if right.is_empty() { 0 } else { 2 })
             .split(area);
 
     // True space-between: each hint keeps its natural width and the leftover is
@@ -146,25 +185,16 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // across ninety columns gives thirteen each, and `[r] Hot reload` needs
     // fourteen. Forcing equal widths on unequal content truncates the longest,
     // which on a cheatsheet is the worst thing it can do.
-    let rendered: Vec<Vec<Span>> = hints
-        .iter()
-        .map(|(key, label, color, _)| {
-            let mut spans = keycap(key, *color);
-            spans.push(text(" ", theme::MUTED));
-            spans.push(text(*label, theme::MUTED));
-            spans
-        })
-        .collect();
-
-    let natural: Vec<usize> = rendered
-        .iter()
-        .map(|s| s.iter().map(Span::width).sum())
-        .collect();
-
-    let content: usize = natural.iter().sum();
-    let gaps = hints.len().saturating_sub(1).max(1);
+    let gaps = hints.len().saturating_sub(1);
     let slack = (cols[0].width as usize).saturating_sub(content);
-    let gap = slack / gaps;
+
+    // The remainder is handed out one column at a time to the leftmost gaps
+    // rather than discarded. `slack / gaps` alone left up to `gaps - 1` columns
+    // unused against the right edge — five of them at 106 columns with seven
+    // hints — so the last key stopped short and the row read as left-aligned with
+    // a ragged tail instead of spaced across the width.
+    let gap = slack.checked_div(gaps).unwrap_or(0);
+    let mut extra = slack.checked_rem(gaps).unwrap_or(0);
 
     let mut x = cols[0].x;
 
@@ -186,6 +216,11 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         frame.render_widget(Paragraph::new(Line::from(spans)), slot);
 
         x += (*width + gap) as u16;
+
+        if extra > 0 {
+            x += 1;
+            extra -= 1;
+        }
     }
 
     if !right.is_empty() {

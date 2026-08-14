@@ -22,12 +22,6 @@ use crate::widgets::{alert_card, card, keycap, spread, strong, text};
 /// every duration stopped at column 66.
 const BAR_MAX: u16 = 44;
 
-/// How long a stage runs before its row starts showing a clock.
-///
-/// The same three seconds `frun-runner` used. Short enough to catch a stall,
-/// long enough that a stage which finishes normally never shows a number.
-const ELAPSED_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
-
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     if !plan.full_build {
         collapsed(frame, area, app);
@@ -147,7 +141,6 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
 fn stages(frame: &mut Frame, area: Rect, app: &App) {
     // Full width, so durations right-align to the card border.
     let w = area.width;
-    let finished = app.state.build_done();
 
     let lines: Vec<Line> = app
         .stages
@@ -180,16 +173,21 @@ fn stages(frame: &mut Frame, area: Rect, app: &App) {
             // So the last completed row keeps counting until the next stage
             // opens, then freezes at the gap it measured. That is the same rule
             // 7.7 sets for marker stages, applied while it is still running.
-            let waiting = stage.done && last && !finished;
-
-            let right = if waiting && stage.started.elapsed() >= ELAPSED_AFTER {
-                crate::flutter::clock(stage.started.elapsed())
-            } else if stage.done || failed {
+            // Ticks from zero while the row is open, freezes at its measured
+            // figure once the next stage closes it. One formatter for both, so
+            // `1.8s` running becomes `1.9s` frozen without switching units
+            // mid-life.
+            //
+            // The `waiting` case this replaces — a completed bottom row that kept
+            // counting — is unreachable now: a row is not closed until its
+            // successor opens, so the bottom row of a running build is never
+            // `done`. The three-second delay before a clock appeared went with it;
+            // a stage that has just opened reads `0ms` and starts moving, which is
+            // what "the timer runs while the phase runs" means.
+            let right = if stage.done || failed {
                 stage.duration.clone()
-            } else if stage.started.elapsed() >= ELAPSED_AFTER {
-                crate::flutter::clock(stage.started.elapsed())
             } else {
-                String::new()
+                crate::flutter::elapsed(stage.started.elapsed())
             };
 
             spread(

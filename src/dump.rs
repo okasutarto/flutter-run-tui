@@ -291,8 +291,10 @@ mod tests {
         let mut app = App::new(State::Building);
         let frame = strip_sgr(&dump(&mut app, 106, 45));
 
+        // `6.0s`, not `6s`: the running row uses the same formatter as the frozen
+        // one, so the number does not change units when the stage closes.
         assert!(
-            frame.contains("6s") || frame.contains("7s"),
+            frame.contains("6.0s") || frame.contains("6.1s"),
             "no clock on the running stage:\n{frame}"
         );
     }

@@ -186,13 +186,14 @@ impl Platform {
     /// correctly, where the reverse would reach 100% and keep working.
     pub fn stage_count(self) -> usize {
         match self {
-            // Launching, CocoaPods, Xcode, Syncing, ready. macOS builds through
-            // CocoaPods and Xcode as well, so it counts the same.
-            Platform::Ios | Platform::Desktop => 5,
-            // Launching, Gradle, install, Syncing, ready.
-            Platform::Android => 5,
-            // No native toolchain in the middle: launching, Syncing, ready.
-            Platform::Web => 3,
+            // Starting, launching, CocoaPods, Xcode, syncing, ready. macOS builds
+            // through CocoaPods and Xcode as well, so it counts the same.
+            Platform::Ios | Platform::Desktop => 6,
+            // Starting, launching, Gradle, install, syncing, ready.
+            Platform::Android => 6,
+            // No native toolchain in the middle: starting, launching, syncing,
+            // ready.
+            Platform::Web => 4,
         }
     }
 }
@@ -207,7 +208,16 @@ impl Platform {
 /// is not stable across the lines that open and close the stage.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StageKey {
+    /// Opened when the pty spawns, before Flutter has said anything.
+    ///
+    /// Covers `fvm` resolving the pinned SDK, the Dart VM booting flutter_tools,
+    /// and flutter_tools starting up. Nothing in Flutter's output brackets this
+    /// span — its first line is what *ends* it — so without a row opened by frun
+    /// itself these seconds have no indicator at all.
+    Start,
     Launch,
+    /// `pub get`, on the runs where Flutter decides it is needed.
+    Pub,
     Pods,
     Xcode,
     Gradle,
@@ -796,6 +806,10 @@ impl App {
     // ========================================================
 
     /// Start, or restart, a build.
+    ///
+    /// Opens the first stage immediately. The build clock and the first row have
+    /// to start together, or the seconds before Flutter's first line belong to
+    /// nothing on screen.
     pub fn begin_build(&mut self) {
         self.stages.clear();
         self.failure = None;
@@ -806,6 +820,8 @@ impl App {
         self.pending = None;
         self.reload_note.clear();
         self.goto(State::Building);
+
+        self.start_stage(StageKey::Start, "Starting Flutter".into());
     }
 
     /// Elapsed build time: counting while it builds, frozen once it stops.
@@ -1073,26 +1089,35 @@ fn mock_stages(state: State) -> Vec<Stage> {
         started: if done { Instant::now() } else { waiting_since },
     };
 
+    // Exactly one row open in every building state, because that is the invariant
+    // the parser now guarantees and the mock has to show the same shape or the
+    // dumps verify a layout the live flow cannot produce.
+    //
+    // `Starting Flutter` is charged the startup gap: fvm, the Dart VM and
+    // flutter_tools, which is the span no Flutter output brackets.
     match state {
         // iOS: CocoaPods then Xcode. Gradle never appears here.
         State::Building => vec![
-            stage(StageKey::Launch, "Starting Flutter", "0.4s", true),
+            stage(StageKey::Start, "Starting Flutter", "3.6s", true),
+            stage(StageKey::Launch, "Launching lib/main.dart", "1.1s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "", false),
         ],
 
         State::BuildFailed => vec![
-            stage(StageKey::Launch, "Starting Flutter", "0.4s", true),
+            stage(StageKey::Start, "Starting Flutter", "3.6s", true),
+            stage(StageKey::Launch, "Launching lib/main.dart", "1.1s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "11.1s", false),
         ],
 
         s if s.build_done() => vec![
-            stage(StageKey::Launch, "Starting Flutter", "0.4s", true),
+            stage(StageKey::Start, "Starting Flutter", "3.6s", true),
+            stage(StageKey::Launch, "Launching lib/main.dart", "1.1s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
-            stage(StageKey::Xcode, "Building with Xcode", "11.1s", true),
+            stage(StageKey::Xcode, "Building with Xcode", "14.5s", true),
             stage(StageKey::Sync, "Syncing files", "240ms", true),
-            stage(StageKey::Ready, "Interactive session ready", "0.1s", true),
+            stage(StageKey::Ready, "Interactive session ready", "0.9s", true),
         ],
 
         _ => Vec::new(),

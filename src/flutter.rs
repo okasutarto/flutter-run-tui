@@ -477,53 +477,52 @@ pub fn feed(app: &mut App, raw: &str) {
 /// Platform-dependent by construction rather than by branching on the target:
 /// iOS emits the CocoaPods and Xcode lines, Android the Gradle and install
 /// ones, and a stage that never appears is simply never created.
+/// Every arm here opens a stage and nothing closes one.
+///
+/// A row is closed by the arrival of its successor, inside `start_stage`, which
+/// is the same moment it is charged its duration. That is the whole rule, and it
+/// is what guarantees a spinner is on screen for every second of the build:
+/// closing a row *is* opening the next one, so there is no instant in between.
+///
+/// What this replaced: triggers that only closed a row — `Xcode build done`,
+/// `Built build/...`, a bare duration line, and the `finish_stage` that used to
+/// sit on `Launching` and `pod install`. Each of them stopped the spinner while
+/// the build carried on, and because the charge still happened later, at the next
+/// open, the row's number kept moving after it had been marked done: measured on
+/// an iOS transcript, `0ms → 125ms`, `121ms → 241ms`, `124ms → 249ms`.
+///
+/// Their safety nets went too — every `if gradle_started && !gradle_completed`
+/// existed because a close could be missed, and a close that cannot happen
+/// separately cannot be missed.
+///
+/// Platform-dependence needs no branch: iOS emits the CocoaPods and Xcode lines,
+/// Android the Gradle and install ones, and a stage nobody announces is never
+/// created.
 fn stage_line(app: &mut App, text: &str) -> bool {
     if text.starts_with("Launching ") && text.contains(".dart") {
-        app.start_stage(StageKey::Launch, "Starting Flutter".into());
-        app.finish_stage(StageKey::Launch, String::new());
+        // Closes `Starting Flutter`, which was opened when the pty spawned and so
+        // measures fvm, the Dart VM boot and flutter_tools startup — the one span
+        // no Flutter output brackets.
+        app.start_stage(StageKey::Launch, "Launching lib/main.dart".into());
         return true;
     }
 
-    // --------------------------------------------------------
-    // CocoaPods
-    // --------------------------------------------------------
+    // Dependency resolution, when Flutter decides it is needed. Absent from most
+    // runs, which is why it is not counted in `Platform::stage_count`.
+    if text.contains("flutter pub get") || text.starts_with("Resolving dependencies") {
+        app.start_stage(StageKey::Pub, "Resolving dependencies".into());
+        return true;
+    }
 
     if text.contains("Running pod install") {
-        // Flutter re-emits this line through CR with the elapsed time appended
-        // once pods finish, so a duration on it is the completion signal.
-        let d = duration(text);
-
         app.start_stage(StageKey::Pods, "Installing CocoaPods".into());
-
-        if !d.is_empty() {
-            app.finish_stage(StageKey::Pods, d);
-        }
-
         return true;
     }
 
-    // --------------------------------------------------------
-    // Xcode
-    // --------------------------------------------------------
-
     if text.contains("Running Xcode build") {
-        app.finish_stage(StageKey::Pods, String::new());
         app.start_stage(StageKey::Xcode, "Building with Xcode".into());
         return true;
     }
-
-    if text.contains("Xcode build done") {
-        app.finish_stage(StageKey::Xcode, duration(text));
-        return true;
-    }
-
-    if text.contains("Compiling, linking and signing") {
-        return true;
-    }
-
-    // --------------------------------------------------------
-    // Gradle
-    // --------------------------------------------------------
 
     if text.contains("Running Gradle task") {
         let task = gradle_task(text);
@@ -535,71 +534,34 @@ fn stage_line(app: &mut App, text: &str) -> bool {
         };
 
         app.start_stage(StageKey::Gradle, label);
-
-        // Flutter animates this line and every redraw carries a longer elapsed
-        // time, so the value is recorded without closing the stage. Treating the
-        // first one seen as completion reported a far too short build.
-        let d = duration(text);
-
-        if !d.is_empty() {
-            app.stage_duration(StageKey::Gradle, d);
-        }
-
         return true;
     }
-
-    if text.contains("Built build/") || text.starts_with("✓ Built") {
-        // The unambiguous "Gradle finished" signal, so whatever elapsed time the
-        // Gradle line last carried is final.
-        app.finish_stage(StageKey::Gradle, String::new());
-        return true;
-    }
-
-    // --------------------------------------------------------
-    // Install
-    // --------------------------------------------------------
 
     if text.starts_with("Installing build/") {
-        app.finish_stage(StageKey::Gradle, String::new());
         app.start_stage(StageKey::Install, "Installing app".into());
-
-        let d = duration(text);
-
-        if !d.is_empty() {
-            app.stage_duration(StageKey::Install, d);
-        }
-
         return true;
     }
-
-    // Some versions emit the install duration on a line of its own.
-    if app.stage_open(StageKey::Install) && is_bare_duration(text) {
-        app.finish_stage(StageKey::Install, text.to_string());
-        return true;
-    }
-
-    // --------------------------------------------------------
-    // Sync
-    // --------------------------------------------------------
 
     if text.contains("Syncing files to device") {
-        // Safety net for builds that skip both `Built build/...` and the install
-        // step, as happens when attaching to an already-installed app.
-        app.finish_stage(StageKey::Gradle, String::new());
-        app.finish_stage(StageKey::Install, String::new());
         app.start_stage(StageKey::Sync, "Syncing files".into());
         return true;
     }
 
-    // --------------------------------------------------------
-    // Interactive session
-    // --------------------------------------------------------
-
     if text.contains("Flutter run key commands") {
-        app.finish_stage(StageKey::Sync, String::new());
         app.start_stage(StageKey::Ready, "Interactive session ready".into());
-        app.finish_stage(StageKey::Ready, String::new());
         app.session_ready();
+        return true;
+    }
+
+    // Swallowed rather than logged: these are Flutter closing a phase it already
+    // announced, so they carry nothing the row does not already say. They used to
+    // be where a stage got closed, which is exactly what left the tracker idle.
+    if text.contains("Xcode build done")
+        || text.contains("Built build/")
+        || text.starts_with("✓ Built")
+        || text.contains("Compiling, linking and signing")
+        || (app.stage_open(StageKey::Install) && is_bare_duration(text))
+    {
         return true;
     }
 
@@ -915,8 +877,14 @@ impl App {
         // `flutter run` says 11.2s. Flutter's figure is the truer measure of the
         // Xcode build alone; ours is the truer measure of where the wall clock
         // went, and only one of the two can add up.
+        // Closing the previous row and charging it happen here, together, and this
+        // is the only place either happens. Splitting them is what produced both
+        // defects: a row closed by its own trigger stopped spinning while the
+        // build carried on, and was then still charged later at the next open, so
+        // its number moved after it had been marked done.
         if let Some(previous) = self.stages.last_mut() {
             previous.duration = elapsed(now.duration_since(previous.started));
+            previous.done = true;
         }
 
         self.stages.push(Stage {
@@ -928,45 +896,18 @@ impl App {
         });
     }
 
-    /// Record an elapsed time without closing the stage.
-    pub fn stage_duration(&mut self, key: StageKey, duration: String) {
-        if let Some(stage) = self.stages.iter_mut().find(|s| s.key == key && !s.done) {
-            stage.duration = duration;
-        }
-    }
-
-    /// Close a stage. An empty `duration` keeps whatever the stage already had,
-    /// and falls back to wall time when Flutter reported nothing.
-    ///
-    /// Measuring it ourselves is what gives `Syncing files` and `Interactive
-    /// session ready` an honest number: Flutter prints no duration for either.
-    pub fn finish_stage(&mut self, key: StageKey, duration: String) {
-        let Some(stage) = self.stages.iter_mut().find(|s| s.key == key && !s.done) else {
-            return;
-        };
-
-        // Flutter's reported figure is deliberately ignored, see `start_stage`:
-        // its timers start before its announcements arrive, so mixing it with
-        // measured gaps double-counts. Kept as a parameter because the call sites
-        // read better naming what Flutter said, even where we do not use it.
-        let _ = duration;
-
-        // Every stage that completes without a figure gets the time from when it
-        // opened until now, markers included. The comment that used to sit here
-        // said markers are left empty on purpose because start_stage fills them
-        // with the gap to the next stage, and the last row keeps a blank because
-        // nothing follows it.
-        //
-        // That was the defect. The last row is `Interactive session ready`, and
-        // leaving it blank lost the time from that announcement until the build is
-        // declared done. A measured run showed 11.3s + 7.1s + 0ms + blank = 18.4s
-        // against a 21.6s total, 3.2s unaccounted for.
-        if stage.duration.is_empty() {
-            stage.duration = elapsed(stage.started.elapsed());
-        }
-
-        stage.done = true;
-    }
+    // `finish_stage` and `stage_duration` used to live here and are gone.
+    //
+    // Closing a row is not a separate operation any more: `start_stage` closes the
+    // previous row as it opens the next, which is the only way to guarantee a
+    // spinner is on screen for every second of the build. A public method that can
+    // close a row without opening one is exactly how the idle gaps got in, so
+    // there no longer is one.
+    //
+    // `stage_duration` recorded Flutter's own figure without closing the row. It
+    // has no caller now that every row is measured open-to-open; keeping Flutter's
+    // number alongside measured gaps double-counted, because its timers start
+    // before its announcements reach us.
 
     pub fn stage_open(&self, key: StageKey) -> bool {
         self.stages.iter().any(|s| s.key == key && !s.done)
@@ -979,6 +920,15 @@ impl App {
         }
 
         self.end_build();
+
+        // The last row has no successor to close it, so the end of the build does.
+        // Without this it would spin forever behind a finished build.
+        if let Some(last) = self.stages.last_mut() {
+            if !last.done {
+                last.duration = elapsed(last.started.elapsed());
+                last.done = true;
+            }
+        }
 
         self.sync_time = self
             .stages
@@ -1101,45 +1051,132 @@ mod tests {
             assert!(fraction <= 1.0, "{fraction} exceeds full at {label}");
 
             previous = fraction;
-            app.finish_stage(key, "1s".into());
         }
     }
 
-    /// A marker row shows the gap to the next stage, which is where the
-    /// eight-second startup delay after `Launching lib/main.dart` becomes visible.
+    /// The invariant: something is always visibly happening.
+    ///
+    /// A build must never reach a moment where every row is `✔` and none is
+    /// spinning, because that is a tracker that looks finished while Flutter is
+    /// still working. Replaying real transcripts is the only way to check it —
+    /// the failure is a *gap between* two lines, so it cannot be seen by testing
+    /// either line alone.
+    ///
+    /// Both platforms, because the close-only triggers that used to break this
+    /// were platform-specific: `Xcode build done` on iOS, `Built build/...` and a
+    /// bare duration line on Android.
     #[test]
-    fn a_marker_stage_carries_the_gap_to_the_next_one() {
-        let mut app = App::new(State::Building);
-        app.stages.clear();
+    fn exactly_one_stage_is_open_at_every_point_in_a_build() {
+        let transcripts: [(&str, &[&str]); 2] = [
+            (
+                "ios",
+                &[
+                    "Launching lib/main.dart on iPhone 17 Pro in debug mode...",
+                    "Running pod install...",
+                    "Running pod install...                              1,204ms",
+                    "Running Xcode build...",
+                    "Xcode build done.                                   11.1s",
+                    "Compiling, linking and signing...",
+                    "Syncing files to device iPhone 17 Pro...",
+                ],
+            ),
+            (
+                "android",
+                &[
+                    "Launching lib/main.dart on Pixel 10 Pro XL in debug mode...",
+                    "Running Gradle task 'assembleDebug'...",
+                    "Running Gradle task 'assembleDebug'...              2,834ms",
+                    "✓ Built build/app/outputs/flutter-apk/app-debug.apk",
+                    "Installing build/app/outputs/flutter-apk/app-debug.apk...",
+                    "693ms",
+                    "Syncing files to device Pixel 10 Pro XL...",
+                ],
+            ),
+        ];
 
-        app.start_stage(StageKey::Launch, "Starting Flutter".into());
-        app.finish_stage(StageKey::Launch, String::new());
+        for (platform, lines) in transcripts {
+            let mut app = App::new(State::Building);
+            app.begin_build();
 
-        assert!(
-            app.stages[0].duration.is_empty(),
-            "a marker must not time itself, that is the 0ms defect"
-        );
+            let open = |app: &App| app.stages.iter().filter(|s| !s.done).count();
 
-        std::thread::sleep(Duration::from_millis(20));
-        app.start_stage(StageKey::Gradle, "Gradle".into());
+            assert_eq!(
+                open(&app),
+                1,
+                "{platform}: nothing was spinning before Flutter printed anything"
+            );
 
-        assert!(
-            !app.stages[0].duration.is_empty(),
-            "the gap to the next stage should have filled it"
-        );
+            for line in lines {
+                feed(&mut app, line);
 
-        // The last row has nothing after it, but leaving it blank loses the time
-        // from its announcement until the build finishes. A measured run showed
-        // 11.3s + 7.1s + 0ms + blank = 18.4s against 21.6s, 3.2s unaccounted for.
-        app.start_stage(StageKey::Ready, "Interactive session ready".into());
-        std::thread::sleep(Duration::from_millis(20));
-        app.finish_stage(StageKey::Ready, String::new());
+                assert_eq!(
+                    open(&app),
+                    1,
+                    "{platform}: {} rows open after {line:?}",
+                    open(&app)
+                );
+            }
 
-        assert!(
-            !app.stages.last().expect("a stage").duration.is_empty(),
-            "the last stage must account for the gap to build completion"
-        );
+            // Only the end of the build closes the final row.
+            feed(&mut app, "Flutter run key commands.");
+
+            assert_eq!(
+                open(&app),
+                0,
+                "{platform}: a row is still spinning after the build finished"
+            );
+
+            assert!(
+                app.stages.iter().all(|s| !s.duration.is_empty()),
+                "{platform}: a completed row has no duration"
+            );
+        }
     }
+
+    /// Durations must not move once a row is marked done.
+    ///
+    /// The old split — closed by its own trigger, charged at the next open — let a
+    /// row show `✔ Building with Xcode 11.1s` and then silently become `14.5s`
+    /// seconds later. Measured on an iOS transcript: `0ms → 125ms`,
+    /// `121ms → 241ms`, `124ms → 249ms`.
+    #[test]
+    fn a_closed_stage_never_changes_its_duration() {
+        let mut app = App::new(State::Building);
+        app.begin_build();
+
+        feed(&mut app, "Launching lib/main.dart on iPhone 17 Pro in debug mode...");
+        feed(&mut app, "Running Xcode build...");
+
+        let settled: Vec<(String, String)> = app
+            .stages
+            .iter()
+            .filter(|s| s.done)
+            .map(|s| (s.label.clone(), s.duration.clone()))
+            .collect();
+
+        assert!(!settled.is_empty(), "nothing had closed yet");
+
+        std::thread::sleep(Duration::from_millis(30));
+        feed(&mut app, "Xcode build done.            11.1s");
+        feed(&mut app, "Syncing files to device iPhone 17 Pro...");
+
+        for (label, duration) in settled {
+            let now = app
+                .stages
+                .iter()
+                .find(|s| s.label == label)
+                .map(|s| s.duration.clone())
+                .expect("the row should still exist");
+
+            assert_eq!(now, duration, "{label} changed after being marked done");
+        }
+    }
+
+    // The marker test that used to sit here is gone with the concept. Every row
+    // is now measured from its own announcement to the next one, so there is no
+    // class of row that needs a special rule for its duration — which is what the
+    // marker was. `exactly_one_stage_is_open_at_every_point_in_a_build` covers
+    // what it was really protecting: that no span of the build goes unaccounted.
 
     #[test]
     fn a_paused_isolate_notice_is_recognised() {

@@ -46,7 +46,12 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
             .split(full);
 
         logs::render(frame, rows[0], app);
-        chrome::footer(frame, rows[1], app, &plan);
+
+        // No plan to report: the ladder was bypassed, so there is nothing this
+        // layout gave up. Passing `plan` here printed the concessions the *card*
+        // layout would have made, naming cards that are not on screen, and spent
+        // 56 columns of the footer doing it.
+        chrome::footer(frame, rows[1], app, None);
 
         return;
     }
@@ -60,7 +65,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     }
 
     if app.state.has_build() {
-        rows.push(Constraint::Length(plan.build_h(app.state)));
+        rows.push(Constraint::Length(plan.build_h()));
     }
 
     // The flexible middle: device list, failure card, or log stream depending
@@ -113,7 +118,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         }
     }
 
-    chrome::footer(frame, chunks[i], app, &plan);
+    chrome::footer(frame, chunks[i], app, Some(&plan));
 }
 
 fn too_small(frame: &mut Frame, area: Rect) {
