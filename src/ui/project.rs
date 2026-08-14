@@ -24,6 +24,41 @@ const BRANCH_MAX: usize = 30;
 const ART_W: u16 = 11;
 const ART_H: u16 = 5;
 
+/// The wordmark under the artwork.
+///
+/// The mark alone says Flutter, not which tool is drawing it, which matters on a
+/// screenshot and in a tmux pane full of other Flutter output.
+const LABEL: &str = "flutter-run-tui";
+const LABEL_W: u16 = LABEL.len() as u16;
+
+/// Content width of the logo column: whichever of the artwork and its wordmark
+/// is wider.
+///
+/// Taken from the label rather than fixed at `ART_W`, because the wordmark is
+/// four columns wider than the artwork and a column sized to the artwork would
+/// clip it — silently, which is how the target card lost fields before (7.5).
+const LOGO_W: u16 = if ART_W > LABEL_W { ART_W } else { LABEL_W };
+
+/// Blank columns either side of the logo block, measured from the card border.
+///
+/// Both sides, which is the point: the gap between the logo and the metadata
+/// beside it is the same as the gap between the logo and the card edge, so the
+/// column reads as centred rather than shoved against the border. It was one
+/// column on the right against three on the left, because the slack was left to
+/// two `Fill`s and whatever they rounded to.
+const GUTTER: u16 = 3;
+
+/// The card's own horizontal padding, which `card()` has already taken out of
+/// `inner`.
+///
+/// Subtracted from the left gutter rather than ignored: the padding is blank
+/// space that counts toward the gap the eye sees, so charging `GUTTER` again on
+/// top of it is what would put the logo off-centre in the other direction.
+const CARD_PAD: u16 = 1;
+
+/// Total width the logo column claims out of the card body.
+const LOGO_COL: u16 = (GUTTER - CARD_PAD) + LOGO_W + GUTTER;
+
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut Logo) {
     if !plan.full_cards {
         collapsed(frame, area, app);
@@ -49,15 +84,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
     // nothing — see `Budget::project_h`. It goes when the whole card collapses,
     // which is the branch above.
     //
-    // Sized to the artwork plus a margin, nothing more. It was 20 columns to fit
-    // an 18-cell `Cross-Platform CLI` subtitle; that label is gone, so the
-    // columns it was holding belong to the metadata.
+    // Sized to the wordmark plus a symmetric gutter, nothing more. It was 20
+    // columns to fit an 18-cell `Cross-Platform CLI` subtitle; that label is
+    // gone, so the columns it was holding belong to the metadata.
     //
-    // Dropped on a narrow window, where 14 columns of artwork is the difference
+    // Dropped on a narrow window, where the artwork column is the difference
     // between a value fitting and being elided.
-    let body = if inner.width >= ART_W + 3 + 30 {
+    let body = if inner.width >= LOGO_COL + 30 {
         let split =
-            Layout::horizontal([Constraint::Length(ART_W + 3), Constraint::Min(30)]).split(inner);
+            Layout::horizontal([Constraint::Length(LOGO_COL), Constraint::Min(30)]).split(inner);
 
         logo(frame, split[0], art);
         split[1]
@@ -215,14 +250,35 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// The Flutter mark, drawn by `logo::Logo` through a real graphics protocol.
+/// The Flutter mark, drawn by `logo::Logo` through a real graphics protocol, with
+/// the tool's wordmark under it.
 ///
-/// Nine rows, which is what `Budget::LOGO_H` charges for: seven for the artwork,
-/// a blank, and the wordmark. The two label lines the design shows cost a row
-/// each and have to be paid for in the budget, or the card clips them in
-/// silence.
+/// Seven rows: five of artwork, a blank, and the wordmark. Not charged in
+/// `Budget`, and it does not need to be — the metadata beside it is never shorter
+/// than six rows, so the card's body height is still the metadata's.
 fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
-    // Centred on both axes inside the left column.
+    // Explicit gutters rather than `Fill` on both sides. The artwork and the
+    // label are centred inside the same content column, which keeps them on one
+    // axis, and the column's own margins are stated so the gap to the metadata
+    // matches the gap to the card edge instead of being whatever the layout
+    // rounded to.
+    let cols = Layout::horizontal([
+        Constraint::Length(GUTTER - CARD_PAD),
+        Constraint::Length(LOGO_W),
+        Constraint::Fill(1),
+    ])
+    .split(area);
+
+    // A blank row between the mark and the wordmark, conceded when the column is
+    // too short to hold one.
+    //
+    // Not unconditional: with the separators given up the card's body is six
+    // rows, and a fixed gap makes the block seven. Over-constraining a vertical
+    // Layout does not error, it squeezes — and what gets squeezed to nothing is
+    // the wordmark, so the gap would cost the very thing it is spacing.
+    let gap = u16::from(area.height >= ART_H + 2);
+
+    // Centred vertically, with the label row travelling with the artwork.
     //
     // `Fill` on both sides, not one. A single leading Fill absorbs the whole
     // remainder and pins the artwork to the opposite edge, which is how the mark
@@ -231,9 +287,11 @@ fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
     let rows = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(ART_H),
+        Constraint::Length(gap),
+        Constraint::Length(1),
         Constraint::Fill(1),
     ])
-    .split(area);
+    .split(cols[1]);
 
     // `Resize::Fit` scales to whichever dimension binds first, so at five rows
     // the height binds and any extra width goes unused. Bounding the box makes
@@ -241,9 +299,14 @@ fn logo(frame: &mut Frame, area: Rect, art: &mut Logo) {
     let art_cols = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(ART_W),
-        Constraint::Fill(2),
+        Constraint::Fill(1),
     ])
     .split(rows[1]);
 
     art.render(frame, art_cols[1]);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(text(LABEL, theme::MUTED)).centered()),
+        rows[3],
+    );
 }
