@@ -1,7 +1,7 @@
 # 🖥️ Flutter CLI Terminal UI (TUI) - Architecture & Design Specification (`design.md`)
 
-Document Version: `1.7.0`  
-Last Updated: `2026-08-14`  
+Document Version: `1.8.0`  
+Last Updated: `2026-08-15`  
 Design System: **Monospace Character Grid TUI (Terminal User Interface)**  
 Target Font: `JetBrains Mono`, `Fira Code`, or `ui-monospace` (12px base)  
 Canvas Dimensions: `106x45` character matrix target, widening to `142` columns
@@ -197,11 +197,14 @@ devices answered.
    * Header banner: `◆ NO DEVICE RUNNING` with subtitle
      `Nothing is attached. These can be started:`.
    * Title section: `Start a Device`, no category filter tabs.
-   * Action trigger: `▶ Run` per row, transitioning to State 3 when the row
-     needs booting first. Uniformly `▶ Run` and not a `Start`/`Run` split: the
-     split existed to imply whether a boot was coming, which the `active` chip
-     in mode 4 now states outright, and two words for one consequence read as
-     two different consequences.
+   * Action trigger: `Enter`, transitioning to State 3 when the row needs booting
+     first. **No per-row verb.** This carried `▶ Run` on every row, first as a
+     `Start`/`Run` split and then uniformly, and it ended up saying what the footer
+     says once: `[⏎] Launch` here, `[⏎] Switch` in State 12. Seven columns per row
+     repeated down the list for one shared answer, which is the same duplication
+     that took the hint row out of this card. The one row that keeps a verb is the
+     one where `Enter` does *not* build — ` ⏎ Keep ` on the running row in State 12
+     (8.5).
 
    **Every target, not just mobile.** The existing implementation deliberately
    drops macOS, "Mac Designed for iPad" and Chrome, with the stated reason
@@ -214,8 +217,8 @@ devices answered.
    | `flutter devices --machine` | macOS desktop, Chrome, and any other platform Flutter reports |
 
    Note the asymmetry: emulators and simulators need booting, whereas desktop
-   and web are always available and need no `▶ Start` at all. Those rows go
-   straight to launch, skipping State 3.
+   and web are always available. Those rows go straight to launch, skipping
+   State 3.
 
    **Row height: roomy.** One row per target plus a separator, and no blank
    between them: the separator already divides one target from the next, so a
@@ -255,9 +258,9 @@ devices answered.
    | `last used` (purple) | id matches `.frun-last-device` | this is the one you normally reach for, and why the row moved to the top |
 
    ```text
-   ❯   Pixel 10 Pro XL   active   last used      emulator-5554  Android  virtual   ▶ Run
-        Pixel 8                                        Pixel_8  Android  virtual   ▶ Run
-        iPhone 17 Pro                           8A3F91C2-4D2E  iOS      virtual   ▶ Run
+   ❯   Pixel 10 Pro XL   active   last used      emulator-5554  Android  virtual
+        Pixel 8                                        Pixel_8  Android  virtual
+        iPhone 17 Pro                           8A3F91C2-4D2E  iOS      virtual
    ```
 
    One mutually-exclusive slot was tried first, with `active` winning. It hid the
@@ -271,8 +274,7 @@ devices answered.
    of pressing Enter. `last used` is a preference and costs nothing either way.
 
    `active` additionally requires `Platform::needs_boot()`. macOS and Chrome are
-   always available, so "active" would describe a state they cannot be out of, and
-   `▶ Run` already says everything true about them.
+   always available, so "active" would describe a state they cannot be out of.
 
    Both chips are per-row properties rather than per-frame, which is why State 2
    and State 4 share one row renderer: a shut-down simulator keeps its `last used`
@@ -280,15 +282,16 @@ devices answered.
    consulted.
 
    **The row is budgeted, not truncated.** Two chips is the widest a row gets, and
-   at 70 columns the pair pushed the right-hand group past the edge and took
-   `▶ Run` with it — the one span that says what Enter does. Same failure the
-   footer has in 3.7, and the same fix: optional spans are charged against the
-   leftover columns in priority order, and once one does not fit nothing after it
-   is drawn either.
+   at 70 columns the pair used to push the right-hand group past the edge and take
+   the row's verb with it. Same failure the footer has in 3.7, and the same fix:
+   optional spans are charged against the leftover columns in priority order, and
+   once one does not fit nothing after it is drawn either. Dropping the verb gave
+   every row nine of those columns back, so the figures below are the floor rather
+   than the ceiling now.
 
    | Priority | Span | Survives down to |
    | :--- | :--- | :--- |
-   | never dropped | caret, platform glyph, device name, `▶ Run` | any width |
+   | never dropped | caret, platform glyph, device name | any width |
    | 1 | `active` chip | 58 and below |
    | 2 | `last used` chip | 64 |
    | 3 | device id | 79 |
@@ -304,7 +307,7 @@ devices answered.
 
    The pair survives to 64 columns, four above the `60x14` floor below which 6.2
    refuses to draw at all. So the only widths that lose `last used` are 60 to 63,
-   and at that size `active` and `▶ Run` are the two things worth keeping.
+   and at that size `active` is the one worth keeping.
 
 5. **`SINGLE_DEVICE`** (State 5): exactly one device answered.
    No picker is shown. The device is selected automatically and the flow
@@ -490,6 +493,40 @@ devices answered.
   opens before Flutter speaks; `Application Running` is closed by the end of
   the build, which is the only row without a successor. See 7.7.
 
+* **The card closes when the build does.** Everything above describes a card that
+  exists for the length of a build. When the build ends, the whole of it collapses
+  to one borderless row:
+
+  ```text
+  ✔ BUILD FINISHED                               Build time 20.2s   Sync 68ms
+  ```
+
+  Not a size concession. At any height, in `RUNNING`, `STOPPED` and the three
+  reload frames, this is the tracker. `BUILD_FAILED` is the exception and keeps the
+  full card, because there the stage list is what the error is read against.
+
+  Every row it replaces had stopped moving: five labels, five frozen durations,
+  and a progress bar reading `Stage 5/5` in emerald sitting directly beneath a
+  title already saying `BUILD FINISHED` in emerald. Nine rows asserting one fact
+  that the row above states in three words, over a log window pinned to its floor.
+  6.2 has the arithmetic and the two attempts it took to get the mechanism right.
+
+  The words and the colour are the card's own title, and the two figures are the
+  card's own title bar, unchanged in wording and near enough in position. The
+  collapse should read as the card closing, not as a different component arriving,
+  and both halves come from one function each (`status`, `timings`) so the card and
+  the row cannot drift apart — they did once, when the card said `BUILD FINISHED`
+  and the row beneath it said `build finished`.
+
+  **The per-stage breakdown is gone, and that is the cost.** The tracker is the
+  only place it ever existed: the `BLD` and `OK` log levels were removed on the
+  grounds that the tracker owned those facts, so `Building with Xcode 14.5s` is
+  unreadable for the rest of the session. Accepted rather than mitigated. That
+  figure is watched while its row is spinning, which is exactly when the full card
+  is on screen, and the total it rolls up into is kept. The `5 stages` count the
+  earlier one-line summary carried is dropped with it; it answered nothing the
+  build being over does not.
+
 * **Failure State**: error summary, exit code, elapsed total, and which stage
   broke.
 
@@ -622,7 +659,27 @@ dimensions were all decoration: none of them change a decision you are about
 to make, and the row is more useful spent on the keys that do.
 
 Contents adapt to the active state, since a key that does nothing here should
-not be advertised: `↑↓ Enter Esc` during discovery, `r R q ^C` while running.
+not be advertised: `↑↓ Enter ⇧Enter Esc` during discovery, `r R q ^C` while running.
+
+The discovery and switch rows read, in full:
+
+```text
+  [↑↓] Move     [⏎] Launch     [⇧⏎] Launch in new tab     [Esc] Cancel
+  [↑↓] Move     [⏎] Switch     [⇧⏎] Launch in new tab     [Esc] Back
+```
+
+`[⇧⏎] Launch in new tab` is the same words in both, deliberately. `⏎` changes
+meaning between the two rows and has to say which it means (8.5), but `⇧⏎` does not:
+it launches, in a new tab, whether or not this tab has a run behind it (8.4).
+
+**It fits at the floor, which is the question a fourth hint raises.** Labelled, the
+keycaps and words measure 53 columns plus 3 single-column gaps on the picker row and
+51 plus 3 on the switch row, against the 60 of `MIN_W`. Below that the row does what
+it already does for the seven-hint running state: it drops every *word* and keeps
+every *key*, since `[^C]` alone is still a key you can press and a truncated `[^C`
+is not. So the new hint cannot cost another hint its place — the failure mode it
+brings closer is a wordless row, not a missing key.
+
 The right-hand group is optional and priority-ordered, dropped whole until it
 fits: mouse state, then what the layout gave up, then the prototype position.
 Keys are never dropped. `spread` pads to fit and silently truncates past that,
@@ -643,13 +700,33 @@ are not on screen, spending 56 columns of this row to do it. That is what
 collapsed the spacing between the keys when the log window was expanded: the keys
 were spaced across what was left after a 56-column lie.
 
-**The keys are spaced across the whole row, remainder included.** Slack divided
-by gap count discards the remainder, which left up to `keys - 1` columns unused
-against the right edge — five at 106 columns with seven keys — so the row read as
-left-aligned with a ragged tail rather than spaced. The leftover columns are
-handed out one each to the leftmost gaps, and the two columns reserved to keep
-the last key clear of the diagnostics are only reserved when there are
-diagnostics.
+**The keys sit on the right edge, two columns apart, and degrade in three tiers.**
+
+They used to be spaced across the whole row, the slack divided into equal gaps
+with the remainder handed out one column at a time so the row spanned the full
+width. That kept every key in the same place at any size, and it also pulled them
+apart as the window grew, until reading the row meant crossing ninety columns of
+blank to find the next key. Fixed spacing keeps the group readable *as a group*,
+and the right edge keeps it beside the diagnostics rather than leaving a gulf
+between the two.
+
+The tiers, in the order they are given up, because this row must never truncate:
+
+| Tier | Given up | Running row needs |
+| :--- | :--- | :--- |
+| 1 | nothing — two columns between keys | 86 columns |
+| 2 | one column between keys | 80 |
+| 3 | the words; keycaps only | 26 |
+
+`[^C]` on its own is still a key you can press. A `[^C` that was cut off is not,
+and nothing on screen would have said it had been — which is what the row did
+below 80 columns before the tiers existed, and it dropped the stop keys first
+because they sit last.
+
+The gaps count as content in every fit test, including the one that decides
+whether the diagnostics group is kept. Leaving them out is how the row overflowed
+at 106 columns: seven keys measured 84 against 87 available, and the missing six
+columns were the gaps.
 
 `Flutter <version> CLI` was here and is gone. The version is already on the
 ProjectCard, it changed no decision taken from the footer, and it cost 18
@@ -776,15 +853,16 @@ with one exception noted at the end.
            └────────────────────────────────────────────┤ ⚠ press r again  │
                                                         └──────────────────┘
 
-  ^D from any of 6-11
-       │
-       ▼
-┌──────────────────────────────┐
-│ 12 SWITCH  (8.5)             │  the same target list, over the live run
-│ ⏎ other  → kill, reap, 6     │  the old device is shut down if frun booted it
-│ ⏎ same   → back, nothing done│
-│ Esc      → back, nothing done│
-└──────────────────────────────┘
+  ^D from any of 6-11                    ^S from 6, 8-11
+       │                                      │
+       ▼                                      ▼
+┌──────────────────────────────┐   ┌──────────────────────────────┐
+│ 12 SWITCH  (8.5)             │   │ 13 STOPPED  (8.8)            │
+│ ⏎ other  → kill, reap, 6     │   │ the child is gone, frun is not│
+│ ⏎ same   → back, nothing done│   │ r  → build again → 6          │
+│ Esc      → back, nothing done│   │ ^D → 12                       │
+└──────────────────────────────┘   │ q  → leave                    │
+                                   └──────────────────────────────┘
 ```
 
 ### 4.1 Notes on the branches
@@ -807,6 +885,10 @@ broke. This is new parsing work, not new UI.
 key and shuts itself down (`⏏`). `^C` is an interrupt, and SIGINT is
 forwarded to the child (`⏹`). The existing implementation already
 distinguishes them and the UI should keep doing so.
+
+**State 13 is the first frame with no child behind it.** Everything above assumes a
+run is coming or here, which is why stopping used to mean leaving: there was nowhere
+to stand. See 8.8.
 
 **State 12 is not a step in the flow, which is why it hangs off the side of it.**
 Every other frame is reached from exactly one place; this one is reached from six,
@@ -834,6 +916,7 @@ Flutter untouched.
 | `↑` / `↓` | Navigate target list | States 2, 4, 12 |
 | `1`-`9` | Select the nth target directly | States 2, 4, 12 |
 | `Enter` | Select device, or start the highlighted target | States 2, 4, 12 |
+| `⇧Enter` | Launch the highlighted target in a new terminal tab (8.4) | States 2, 4, 12, where the terminal reports the Kitty keyboard protocol |
 | `Esc` | Cancel and exit (code 130) | States 1, 2, 4 |
 | `Esc` | Back to the run, nothing killed | State 12 |
 | `r` | Hot reload | States 8, 10, 11 |
@@ -842,8 +925,10 @@ Flutter untouched.
 | `↑` / `↓`, `j` / `k` | Scroll the log window | States 6, 8-11 |
 | `z` | Give the log window the whole frame | States 6, 8-11 |
 | `q` | Quit gracefully — Flutter shuts itself down (`⏏`) | States 6, 8-11 |
-| `^C` | Stop — SIGINT forwarded to Flutter (`⏹`) | Any |
-| `^D` | Switch device — reopen the target list over the live run (8.5) | States 6-11 |
+| `^C` | Force stop — SIGINT forwarded to Flutter (`⏹`), ends the process | Any |
+| `^D` | Switch device — reopen the target list over the live run (8.5) | States 6-11, 13 |
+| `^S` | Stop the run and stay in frun (8.8) | States 6, 8-11 |
+| `r` | Build again, after a stop | State 13 |
 | `m` | Toggle mouse capture | Global |
 
 `:` is not bound. It used to open the command prompt, which is gone (3.6), so the
@@ -858,9 +943,23 @@ arrive unchanged.
 above, all three for the log window. Flutter binds none of them, and reaching a
 stack trace eight rows tall inside a twelve-row window is worth them.
 
-`^D` is not a fourth letter, and that is the point of it. Flutter's interactive
-commands are all bare single bytes, so a modifier costs nothing here — where the
-mnemonic `s` would have cost the screenshot key (8.3).
+`^D` and `^S` are not a fourth and fifth letter, and that is the point of them.
+Flutter's interactive commands are all bare single bytes, so a modifier costs nothing
+here — where the mnemonics `d` and `s` would have cost detach and the screenshot key
+(8.3, 8.8). `^S` is XOFF under a cooked terminal; raw mode clears `IXON`, so it
+arrives as a key event like any other.
+
+**Three ways out of a run, three words.** `^S` ends the run and stays in frun. `q`
+ends the run and leaves. `^C` ends the process whatever the run is doing, which is
+also the escape hatch behind `^S`: if Flutter is wedged and never answers the request
+to shut down, `^C` still works, and that is why `^S` needs no timeout of its own.
+
+`⇧Enter` is the same bargain and one step further: it takes no letter at all, and
+`Enter` in those three states is frun's already. What it costs instead is a
+capability the terminal has to grant. In the legacy encoding `Enter`, `⇧Enter` and
+`^Enter` are all CR, so crossterm reports `KeyCode::Enter` with no modifier and an
+arm matching on `SHIFT` can never fire. It becomes distinguishable only once the
+Kitty keyboard protocol is pushed, which is 8.4's to do and 8.4's to explain.
 
 ### 5.1 Key forwarding
 
@@ -929,12 +1028,18 @@ draw rather than estimated:
                                    body = 4 fields + 3 separators
   BUILD PHASE            10 rows   2 border + 1 title gap + bar + blank + 5 stages
                                    the stage count is live, so this is the tallest
-                                   case: a finished Android build. iOS ends at 9.
+                                   case: an Android build with all five phases
+                                   announced. iOS ends at 9.
   footer                  1 row
   gaps between blocks     3 rows   blocks - 1, not a constant
   ────────────────────────────────
   TOTAL                  36 rows
 ```
+
+That is the tallest the frame ever gets, and it is a frame with a build in it. Once
+the build settles the tracker drops to one row and the total is **27**, which is
+the figure that applies for the whole of a run. The paragraph on step 3 below is
+why.
 
 At the 106x45 target that leaves the log window **9 rows**. A five-line Dart
 exception, wrapped at 84 columns of message space, occupies **8 rows** — so one
@@ -999,7 +1104,7 @@ Elements are given up in this order until the floor is met, cheapest first:
 | :--- | :--- | :--- |
 | 1 | Row separators in both cards | 6 rows |
 | 2 | Device rows go dense, one line each | ~7 rows in States 2 and 4 |
-| 3 | BuildPhaseTracker collapses to one summary line once the build finished | 9 rows |
+| 3 | BuildPhaseTracker collapses to one summary line — only reachable while a build is still running, see below | 9 rows |
 | 4 | ProjectCard and SelectedTargetCard collapse to one metadata row each | ~19 rows |
 
 **The logo is no longer a rung, and never should have been.** It was step 1, on
@@ -1014,29 +1119,69 @@ The logo goes when the whole card collapses, at step 4, and on a window too
 narrow to afford 14 columns beside the metadata. Those are the two cases where it
 actually costs something.
 
-Step 3 is the important one, and it is state-dependent rather than
-size-dependent: after the build succeeds, every row the tracker occupies is
-static. It has no reason to hold nine rows while the only region still
-changing is starved.
+**Step 3 is not a step at all once the build has settled.** `Budget::solve`
+switches `full_build` off before the first concession is considered, so the
+tracker is one row at every height in `RUNNING`, `STOPPED` and the three reload
+frames. See 3.4 for what that row carries.
 
-**So once the build has finished, step 3 becomes step 1.** The ladder is not one
-fixed order; `Budget::concede` takes the state and moves the tracker to the front
-of the queue as soon as `build_done` is true. Below that the order is unchanged,
-and during `BUILDING` the table above stands as written.
+This arrived in two attempts and the first one is worth recording, because it was
+half right. The observation is the same either way: after the build ends every row
+the tracker holds is frozen, and it has no business holding nine of them while the
+log window — the only region still changing — is at its floor. The first fix
+believed that and still made the size decide it, by having `concede` take the
+state and promote the tracker to the front of the queue. So a 45-row window got
+its rows back and a 62-row window kept all nine, on the reasoning that it could
+afford them.
 
-This was ordered wrongly at first, and the symptom named the bug. An ordinary
-Ghostty window at 12px is 46 to 51 rows; a finished iOS build needs 40 rows of
-chrome and the log window claims 12, so six rows have to come from somewhere. The
-fixed order took them from the separators, so the moment `BUILD FINISHED` appeared
-and logs began, both cards lost every hairline rule — while nine rows of stage
-labels and frozen durations, which had stopped changing seconds earlier, kept
-theirs. The same window in a taller terminal never reached the rung and looked
-correct, which is what made it read as a terminal quirk rather than as a ladder
-that was paying with the wrong currency.
+Affordability was the wrong question. A claim weak enough to lose to the
+separators at 46 rows is not a claim that becomes legitimate at 62; the rows were
+just as static there, and the log window just as hungry. Rung 3 was doing two
+different jobs — reclaiming rows under pressure, and expressing a fact about
+finished builds — and only the first belongs in a ladder.
 
-The trade is explicit: between 45 and 51 rows you get the separators and a
-one-line build summary. At 56 rows and up both are on screen, and `--rows
-running` prints exactly where each rung lands.
+Separating them paid twice over:
+
+* **The ladder is one fixed order again**, with no `state` parameter and no
+  branch. The table above now stands as written in every frame.
+* **`STOPPED` stops being an exception nobody noticed.** `build_done` is false
+  there, because that predicate answers "is there a live child to send a key to",
+  so a stopped run was ranked as though its build were still in progress. At 45
+  rows it paid the separators *and* the roomy device rows to keep ten rows of
+  finished timings, in the one state whose entire purpose is reading the log. The
+  tracker now asks `State::build_settled`, which is `build_done` plus `STOPPED`,
+  and the two frames behave identically.
+
+`BUILD_FAILED` is deliberately not settled and keeps the full card: the failure
+note names which stage broke, so there the stage list is context for the error
+rather than history.
+
+The rung itself stays in the ladder for the frames where the rows are
+load-bearing. Deleting it outright was the tempting version of this and it does
+not fit: at `60x14` a build with both cards already collapsed still needs 19 rows
+if the tracker is expanded, and a layout charged more rows than it has is clipped
+in silence (7.5). So during `BUILDING` the tracker is the last thing given up, and
+on a terminal that small it is given up.
+
+What this buys, from `--rows running 106` — the numbers on the left are what the
+promoted-rung version produced:
+
+```
+  rows      before   after
+    45          18      18     unchanged, it was already collapsed there
+    50          14      23
+    56          20      29
+    62          26      35
+```
+
+Full chrome for a settled run is 27 rows rather than 36, and there is no height at
+which the tracker is expanded over a live log again.
+
+One further consequence, small but the kind that rots: `Budget::describe` takes
+the state and omits `build collapsed` when the collapse was state-driven. The
+footer prints that string, so without it every run would have carried a permanent
+`[build collapsed]` tag reporting a concession the layout never made — the same
+defect 6.3 records for the expanded log view. `--rows` says it once in its header
+instead of ten times in a column about the ladder.
 
 Nothing below `60x14` is drawable. At that point the app says so rather than
 rendering a broken grid.
@@ -1052,7 +1197,7 @@ wrapped rows per entry.
 
 ### 7.1 Status
 
-All twelve state frames render at any terminal size, and every value on them is
+All thirteen state frames render at any terminal size, and every value on them is
 read from the machine.
 
 **What that claim rests on.** Three different levels of evidence, kept apart
@@ -1083,6 +1228,8 @@ executed.
 | 7.6 Merged picker | live | 16 rows on a real machine, running first, `Pixel_10_Pro_XL` de-duplicated against the running `emulator-5554` |
 
 | 7.6 Log scrolling | tested | rendered at a size where content overflows; asserts rows change and the offset was not clamped to zero |
+| 8.4 New tab, the spawn and the title | live | the AppleScript run against Ghostty: a tab opened, and reported back `FRUN_DEVICE`, its working directory, and `fvm`/`adb` resolving on the handed `PATH`. `OSC 2` returned `iPhone 17 Pro · cwclub` as the tab's own name |
+| 8.4 New tab, `⇧⏎` and `FRUN_DEVICE` | **unrun** | the key needs a press under the pushed flags; `handed_over()` needs a real project and a device. Three tests cover what the argv and environment must contain |
 | 8.5 Switch device, the frame | tested | `--dump switch`; a test asserts the title, the `running` badge, `Esc → Back`, and that the target card and tracker are gone |
 | 8.5 Switch device, the respawn | **unrun** | kill, reap, respawn onto another device, and shutting the outgoing emulator down. No harness reaches the pty; needs a project and two devices |
 | 7.7 Zoom (`z`) | tested | fills the frame at the right width |
@@ -1113,7 +1260,7 @@ What the live runs covered, for the record: a merged picker with 16 rows, a
 `NO_DEVICES` screen, a booted AVD and an attached-emulator run, a Gradle build
 reaching `build finished` in 10.6s, 908 log lines in one session, a hot reload, a
 hot restart, a build failure, a number hotkey selecting a row, `Esc` at the picker,
-and `q` from the log stream. Nine of the twelve state frames have been on screen
+and `q` from the log stream. Nine of the thirteen state frames have been on screen
 with real data behind them. `RELOAD_DROPPED` has not, `SINGLE_DEVICE` no longer can
 be, and `SWITCH` (8.5) has not been driven on a real machine yet — it renders and its
 logic is tested, but the kill-reap-respawn behind it has never run against a device.
@@ -1646,9 +1793,10 @@ Three things fell out of it, each a deletion:
 * `Boot::Ready` is gone. A target that needs no booting is `boot: None`, which is
   what an already-running device already said, and both mean the same thing at the
   moment they are picked: launch now. Two spellings of one fact is one too many.
-* The `▶ Start` / `▶ Run` badge is decided per row rather than per frame. With one
-  merged list a per-frame flag would have labelled a shut-down simulator `Run`
-  purely because a phone happened to be plugged in.
+* The `▶ Start` / `▶ Run` badge was decided per row rather than per frame, because
+  with one merged list a per-frame flag would have labelled a shut-down simulator
+  `Run` purely because a phone happened to be plugged in. The badge is gone
+  entirely now (3.3): one answer shared by every row is the footer's job.
 * `enter()` lost a branch. Both frames now hold the same list, so the only
   question is whether the chosen row needs starting first.
 
@@ -1770,10 +1918,12 @@ the arithmetic between two numbers that were sitting there unused.
 
 ## 🧭 8. Target-card controls and concurrent runs
 
-**Point 4 is built (8.5). Points 1-3 are not.** This section was written before
-any of it existed so the costs would be argued once here rather than discovered
-one at a time in the diff, and 8.5 is now a description of code rather than a
-proposal. Everything else below is still a plan. Each item carries what has to
+**Points 3 and 4 are built (8.4, 8.5), and 8.8 with them. Point 3 is built in a
+different shape from the one it was asked in — a second process rather than a tab bar
+— and 8.4 says why. Points 1-2 are not built.** This section was written before any
+of it existed so the costs would be argued once here rather than discovered one at a
+time in the diff, and 8.4, 8.5 and 8.8 are now descriptions of code rather than
+proposals. Everything else below is still a plan. Each item carries what has to
 change and what it is paid for with, because in this layout every new row is taken
 from the log window (6.2) and every new letter is taken from Flutter (5.1).
 
@@ -1809,12 +1959,14 @@ here, and it is recorded as a rule rather than as a change.
 | :--- | :--- | :--- | :--- |
 | 1 — controls only in the target card | Yes | Small | A key that is not Flutter's |
 | 2 — inline, no overlay | Yes, already the only option | Small-medium | A variable-height card in the `Budget` |
-| 3 — terminal tabs | Yes | **Large — architectural** | `Msg` identity, splitting `App`, quit semantics |
+| 3 — tabs, in-app | Yes | **Large — architectural** | `Msg` identity, splitting `App`, quit semantics |
+| 3 — tabs, as a second process | **Done** | Small | — |
 | 4 — retarget the current session | **Done, not as described** | Small | — |
 
 Point 4 was the cheapest and the most mis-described, and it shipped first: 8.5 is
 what it turned into. Point 3 is the only one that is not an addition to the
-existing shape but a change of it.
+existing shape but a change of it — which is why the row is split, and why the
+second row is the one that will be built. 8.4 has the argument.
 
 One thing point 4 did **not** need, and it is worth naming here because 8.3 and
 8.4 assume otherwise: the inline panel. The list frun already has is the device
@@ -1846,7 +1998,14 @@ The way out is modifiers. Flutter's interactive commands are all bare single
 bytes, so `Ctrl-T` (new tab) and `Ctrl-D` (switch device) take nothing from it, and
 crossterm reports the modifier separately, so no ambiguity has to be resolved.
 **The new verbs are the first frun keys that are not plain letters, and that is why
-they are affordable.** `^D` is taken already, by 8.5; `^T` is still free for tabs.
+they are affordable.** `^D` is taken already, by 8.5.
+
+**`^T` is released, and one verb is left for this card.** 8.4 puts the new-tab verb
+in the picker, on `⇧Enter`, where a device is already being chosen — so nothing in
+the target card has to offer it. That halves what the panel would carry: one
+control, which 8.5 already ships as an inset title costing no rows. What is left of
+8.3 is presentation for a control that exists, which is the conclusion 8.2 reached
+about the panel from the other direction.
 
 The mnemonic that had to be turned down is worth recording, because it is the
 trap 5.1 exists to catch. `[s] Switch Device` reads better than `[^D]` and `s` is
@@ -1865,13 +2024,14 @@ The panel itself, inline, inside the card's bottom border:
 │ OS Version                                               iOS 26.0 │
 │ Type                                                    Simulator │
 │ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ │
-│  ➕ ^T Run another device (new tab)                               │
 │  🔄 ^D Change target (rebuilds, keeps this tab)                   │
 ╰───────────────────────────────────────────────────────────────────╯
 ```
 
-and once one of them is chosen, the target list opens in the same place, under the
-same border, with the same rows `devices.rs` already knows how to draw.
+One row, not two: the `➕ ^T Run another device` line this mock used to carry is gone
+with `^T` itself. And once the control is chosen, the target list opens in the same
+place, under the same border, with the same rows `devices.rs` already knows how to
+draw — where `⇧Enter` is then waiting, which is 8.4's whole economy.
 
 **What it is paid for with.** `Budget::target_h()` is a constant today: four
 fields, three optional separators, two borders, plus the title gap.
@@ -1891,8 +2051,284 @@ clipped in silence (7.5), so this cannot be left to chance.
 
 ### 8.4 Terminal tabs
 
-Possible, and it is the one item here that is a refactor rather than a feature.
-What stands in the way, in the order it will be hit:
+**Built: a second `frun` process in a real terminal tab, dispatched from the picker
+with `⇧Enter`.** Not a tab bar inside one process. The in-app shape is possible and
+is costed at the end of this section, because a decision this size only means
+something next to the price it declines.
+
+Three parts of it are verified by hand and three are not; the list is at the end of
+the section rather than here, because what it cost is the more useful heading.
+
+Four rules, and each one removes work rather than adding it:
+
+1. **The verb lives in the picker, not in the target card.** States 2, 4 and 12 are
+   already the place a device is chosen, already draw one list through one row
+   renderer, and already have `Enter` bound to *launch this*. `⇧Enter` is *launch
+   this, elsewhere*.
+2. **What crosses to the new process is one string plus the flags this one was
+   given.** The id, and `extra`. Nothing else, and nothing shared.
+3. **No row is refused.** The one genuinely conflicting row already says so in
+   words the list has carried since 8.5.
+4. **One capability is asked of the terminal.** If it is not granted the feature is
+   absent and unadvertised, not broken.
+5. **Each tab names itself** `<device> · <project>`, by `OSC 2`, from the one place
+   every target is set. Two tabs called `frun` would answer nothing the strip is
+   asked.
+
+```text
+tab A                                       tab B — new process, knows nothing of A
+─────                                       ──────────────────────────────────────
+picker, no run yet (states 2, 4)
+  ⏎    launch here, list closes
+  ⇧⏎   dispatch, LIST STAYS OPEN  ────────►  FRUN_DEVICE=<id> + A's own extra flags
+       (fire several, then ⏎ for the           Detecting, its own scan
+        one you want in this tab)                ├─ found, attached   → Building
+                                                 ├─ found, needs boot → Booting → Building
+switch picker, run alive (state 12, ^D)          └─ gone              → its own picker
+  ⏎    retarget this tab (8.5)
+  ⇧⏎   dispatch, then back to the live
+       run, exactly as Esc does:
+       nothing is killed
+```
+
+**Keeping the list open is the part worth defending.** Enter closes it because the
+choice was made; `⇧Enter` did not make a choice about *this* tab, so closing would
+be answering a question nobody asked. It also turns the list into a dispatcher: two
+devices out of one scan, two keystrokes, then `Enter` for the one you want here. In
+state 12 there is a run behind the list, so the return is to that run and not to the
+list — the same door `Esc` uses (8.5), and for the same reason.
+
+#### The key, and the one thing it costs
+
+`⇧Enter` reads as what it does. `Enter` launches here, `⇧Enter` launches there: one
+verb, one modifier, one difference. That is what a modifier on `Enter` should mean,
+and it is why this is not `^T` — `^C`, `^D` and a hypothetical `^T` are *unrelated*
+verbs that happen to be modified, whereas this one is the same verb aimed somewhere
+else. `^T` is released back to nothing (8.3).
+
+The digits keep meaning *launch here*. There is no shifted digit that is not simply
+another character, so `Enter` is the only key this second meaning can hang from.
+
+**In the legacy encoding the modifier does not survive the wire.** `Enter`, `⇧Enter`
+and `^Enter` are all CR, so crossterm reports `KeyCode::Enter` with an empty
+modifier set and an arm matching on `SHIFT` never fires. Nothing about `⇧Enter` is
+special here; every modified `Enter` has the same problem. It becomes
+distinguishable once the Kitty keyboard protocol is pushed:
+
+* `PushKeyboardEnhancementFlags(DISAMBIGUATE_ESCAPE_CODES)` beside
+  `enable_raw_mode()`, popped in the teardown that already runs
+  `LeaveAlternateScreen`.
+* It touches only what frun *reads*. The bytes frun forwards to Flutter are ones
+  frun writes itself (5.1), so the pty side is unchanged, and `KeyEventKind::Press`
+  is already filtered in `key_press`, so nothing new arrives on key release.
+* Verify by hand, three commands: `printf '\e[>1u'`, then `cat -v` and press the
+  keys, then `printf '\e[<u'`. Plain `Enter` is `^M`; under the protocol `⇧Enter`
+  is `^[[13;2u`.
+
+**Whether to advertise it needs a query, and the query has one honest home.**
+`supports_keyboard_enhancement()` writes an escape sequence and reads the reply off
+stdin — the same contention `FRUN_NO_QUERY` exists for (see `Logo::detect`). Raw mode
+is not the constraint; crossterm enables it for the query itself when it is not on.
+An uncontended stdin is, so the call belongs beside the logo query in `run()`, in
+the slot already commented as needing exactly that, and its answer is one `bool` the
+footer hint follows. A key advertised and dead is the failure 3.1 recorded about
+`[COPY]`.
+
+**The flags are pushed whether the query answered or not, and only the hint follows
+the answer.** They are two different things: pushing is a sequence a terminal either
+understands or ignores, while the query is a question that can go unanswered. So
+`FRUN_NO_QUERY` leaves `⇧Enter` working and merely unadvertised, which is the safe way
+round — a key that works unannounced costs nothing.
+
+**What the query costs when it fails is 2 seconds.** crossterm sends
+`CSI ? u` followed by `CSI c` and waits for the first; a terminal that answers only
+the second is indistinguishable from one still thinking, so the wait is a timeout, and
+it is 2000ms. Measured in the terminal this was written in: the reply is `\e[?1;2c`
+alone, no flags report, so this is not hypothetical. It is additive to the logo query's
+own wait in the same situation, and it is the same valve that turns both off. Ghostty
+answers immediately.
+
+**Two alternatives turned down.** A bare-letter fallback (`t`) for terminals without
+the protocol: a branch that never executes here, since Ghostty implements it, and a
+letter taken from Flutter for a session that does not exist. And `^Enter`, which is
+equally possible and slightly safer — `shift+enter` is a popular target for terminal
+keybinds (`shift+enter=text:\n`, so a CLI can take multiline input), and such a
+binding swallows the key before frun sees it, silently. There is no such config on
+this machine today; the risk is accepted, and the symptom is worth writing down so
+it is recognised if it ever appears.
+
+#### The handoff
+
+**`FRUN_DEVICE`, an environment variable, not a flag.** `FRUN_FLAGS` is a closed
+list and everything else beginning with `--` is Flutter's by rule, so `--device`
+would both take a name Flutter already uses (`--device-id`) and open a hole in that
+rule. An env var takes nothing from Flutter's namespace, has precedent
+(`FRUN_NO_QUERY`), and rides both Ghostty's `environment variables` surface field
+and `tmux new-window`'s environment without any quoting games.
+
+**The id is resolved by the new process, against its own scan.** That is what keeps
+the boot in tab B where it belongs: a shut-down AVD chosen in A takes its three
+minutes in B, on B's own `Booting` frame with B's own elapsed clock, while A carries
+on. It also means the Android id change is already handled — a bootable row is the
+AVD name and the running device is `emulator-5554`, and B walks the same code path
+that already reconciles those (3.3). If the id is not in B's scan, B opens its
+picker. A device that vanished between two scans is not a fatal error.
+
+**`extra` has to ride along.** Tab A was launched with whatever `--flavor` and
+`--dart-define` the user typed, and a second tab building a different flavour is
+worse than no second tab: the two-device comparison the feature exists for would be
+comparing two different apps.
+
+#### The spawn
+
+`$TMUX` set means `tmux new-window -c $PWD`; otherwise `osascript` against
+Ghostty's AppleScript dictionary, which exposes `new surface configuration` with
+`initial working directory`, `command` and `environment variables`, and `new tab in
+<window>` ([Ghostty AppleScript](https://ghostty.org/docs/features/applescript)).
+Setting `wait after command` keeps the tab open after frun exits, so its transcript
+can still be read.
+
+The command is `current_exe()`, not `frun`. `frun` is a zsh function sourced from
+`.zshrc` and `~/.cargo/bin` is deliberately off `PATH` (see `frun.zsh`), so the name
+does not exist for a shell started by anything but that shell. Asking the running
+process where it lives also survives the crate being moved or renamed.
+
+**`PATH` has to be handed over, and finding that out cost a measurement.** A surface
+Ghostty creates with a `command` runs that command *instead of* a shell, so no
+`.zshrc` runs and the environment is the app's own. Measured on this machine, `PATH`
+in that tab is `/usr/bin:/bin:/usr/sbin:/sbin:/Applications/Ghostty.app/Contents/MacOS`,
+where `fvm`, `flutter`, `adb` and `emulator` are all absent — so the new tab would
+have died on its first command with `fvm` not found, and it would have read as frun's
+bug rather than as a missing variable. This process's `PATH` is the one that works,
+because a shell built it, so it travels with the device. `FVM_CACHE_PATH` travels too
+when it is set, since `probe::fvm_cache` honours it and the two tabs must resolve the
+same SDK. Nothing else is copied: this is a handoff, not a session transfer.
+
+The environment is a list the script walks (`repeat with i from 3 to count of argv`),
+so a variable can be added without touching the AppleScript. Values travel as `argv`
+rather than being interpolated into the script, so a path or an id can contain
+anything; the one part that does need quoting is `command`, which Ghostty hands to a
+shell as a single string.
+
+Blocking, and never detached, which is the one place this shape pays for keeping `Msg`
+untouched: a thread could not report a failure back without a new variant. `tmux`
+answers in milliseconds and so does `osascript`, except on the first call of a session
+where macOS may raise its automation-consent dialog first — the frame is frozen while
+that dialog is up, and the user is looking at the dialog.
+
+A failure — no Ghostty, no tmux, or consent refused — is one line in the log and
+nothing else, quoting the shortest decisive line of `stderr`. Tab A is mid-run; a tab
+that did not open must not take a session with it.
+
+#### The tab's name
+
+Two tabs are only useful if the tab strip says which is which, and `frun  frun` says
+nothing. So the tab carries `<device> · <project>` — `iPhone 17 Pro · cwclub`.
+
+**Device and project, not device alone.** A tab strip has to answer three questions —
+is this frun, which device, which project — and the device answers one of them. The
+project name is the field the ProjectCard already reads (`app.project`), so the strip
+and the card cannot disagree.
+
+**`OSC 2`, written by frun itself.** `\x1b]2;<title>\x07`, which crossterm exposes as
+`SetTitle`. No AppleScript, no automation permission, and nothing about it depends on
+this being a second tab: the first tab gets its name the same way, which is what
+actually makes two of them distinguishable. This part is worth building whether or
+not `⇧Enter` ever is.
+
+**One call site, because every path already funnels through it.** `launch()` calls
+`app.choose(device)` and then `spawn_session`, and it is reached by the first pick, by
+a device that had to be booted (through the `Booted` handler), and by a switch — which
+does `stop_session`, `release_target`, and then falls into the same `match
+device.boot`. One line there covers all three.
+
+The one path that deliberately does not write a title is the one that changes nothing:
+`Enter` on the row that is already running during a switch returns through
+`app.goto(state)` before reaching `launch` (8.5), and the target it would name is the
+target already named.
+
+**The stale window during a boot is accepted.** The title is written when the build
+starts, not when the pick is committed, so switching to a shut-down AVD leaves the tab
+reading the outgoing device — or `frun`, on a first run — for as long as the boot takes,
+up to the 180-second cap. The alternative is a second call site before `Booting`, which
+names the destination immediately and then lies if the boot times out. One place that is
+always true beats two places that are usually true, and `Booting <name>` with an elapsed
+clock is already on screen saying what is being waited for.
+
+**Nothing needs restoring on exit.** The title outlives frun only until the next shell
+prompt, which writes its own — the same mechanism that put `frun` there to begin with,
+since that string is the shell reporting the running command, not frun naming itself.
+
+**Two things that will look like bugs.** Inside tmux, `OSC 2` sets the *pane* title;
+the window name needs `\x1bk<name>\x1b\\` and loses to `automatic-rename` when that is
+on, so the tmux path either does that or says plainly that naming is Ghostty-only. And
+if Ghostty's `title` option is ever set in config, titles are pinned to it and escape
+sequences are ignored — the first suspect if the name stops changing.
+
+#### What is not blocked, and why
+
+The list already distinguishes the two facts that matter here. `active` means the
+device is up, which is true of any simulator left booted and is exactly the case a
+second tab is *best* at: no boot, no wait. `running` means *your app is running on
+it*, is true of one row, and that row is the only one carrying a verb — ` ⏎ Keep `
+(8.5). So
+the one combination that genuinely conflicts — same project, same device, second
+install replacing the first and leaving tab A reloading into a dead VM — is already
+named on screen, in a different word, on precisely one row.
+
+That is enough. A refusal would need its own rule, its own message and its own
+reason for the row renderer to know this feature exists; the chip carries it for
+free, and `devices.rs` stays untouched. The cost of ignoring the chip is one lost
+session, recoverable by quitting and running again, with nothing destroyed.
+
+**What frun cannot see, it should not claim.** Another frun in another tab already
+building on that device is invisible: there is no cross-process registry, and adding
+one (a pid file per device id) is real machinery for one warning. So no wording
+anywhere should suggest the check is global. It covers this session only.
+
+#### What it costs
+
+| File | Change |
+| :--- | :--- |
+| `data.rs` | `Action::NewTab`, key `⇧⏎`, label `Launch in new tab`, and `App::shift_enter` for whether the terminal reports the protocol — the same shape as `live` and `mouse_on` |
+| `main.rs` | `KeyCode::Enter` with `SHIFT` in the three picker states, flags pushed and popped, the support query beside `Logo::detect`, `handed_over()` off `devices_answered`, `new_tab`/`handoff_env`/`tab_command`, and `name_tab()` in `launch()` |
+| `ui/chrome.rs` | one hint, `[⇧⏎] Launch in new tab`, in the hint lists for states 2, 4 and 12. It is a key, so it is never dropped; it moves the labels-off threshold and nothing else (3.7) |
+| `ui/devices.rs`, `ui/target.rs`, `Msg`, `App`'s two lifetimes, `Budget`, `dump.rs` | untouched |
+
+`dump.rs` was expected to need a line and did not: `shift_enter` defaults to `true` in
+`App::empty()` and `run()` overwrites it with the terminal's answer, so the harness
+draws the hint without knowing the flag exists.
+
+Zero rows. The footer already exists and the hint is a fourth key on a row that
+degrades by dropping words rather than keys, so the log window gives up nothing —
+which is the whole reason this shape was chosen over a tab bar, whose first cost is a
+permanent row and a higher `MIN_H`.
+
+#### What is verified, and what is not
+
+Three of each. The split matters because the parts a harness can reach and the parts
+it cannot are not the same parts.
+
+| Verified | How |
+| :--- | :--- |
+| The frame, at every width | `--dump picker\|no-devices\|switch`. At `MIN_W` the row measures 59 of 60 columns with its words intact, which is what the arithmetic in 3.7 predicted |
+| What the new tab is told | Three tests on `tab_command`/`handoff_env`: the device travels in `FRUN_DEVICE`, `extra` travels with it, `PATH` travels, and a `'` in a flag cannot break out of the quoting |
+| The spawn, by hand | The AppleScript run against the real Ghostty: a tab opened, and a command in it reported back `FRUN_DEVICE`, the working directory, and `fvm` and `adb` resolving on the handed `PATH`. `OSC 2` likewise — the tab reported its own name back as `iPhone 17 Pro · cwclub` |
+
+| Unverified | Why, and what would do it |
+| :--- | :--- |
+| `⇧Enter` arriving | Needs a keypress in Ghostty under the pushed flags. The escape form is confirmed (`^[[13;2u`), but that the arm fires is not |
+| `handed_over()` | Needs a real project and a device: found-and-attached, found-and-needs-boot, and gone are three paths and none has run |
+| `name_tab()` in place | `OSC 2` is proven; that `launch()` reaches it on all three paths — first pick, boot, switch — is read from the code, not observed |
+
+The same shape as 8.5, whose respawn is also unrun for the same reason, and the same
+conclusion: **exercise it by hand before believing it.**
+
+#### The in-app tab bar, and what it would cost
+
+Kept because the decision above is a decision, and the price it declined belongs
+next to it. It is a refactor rather than a feature. What stands in the way, in the
+order it will be hit:
 
 * **`Msg` has no identity.** `Line`, `Partial`, `Eof`, `Booted`, `Versions` all
   arrive on one `mpsc` shared by every worker, and the receiving end assumes there
@@ -1923,14 +2359,19 @@ What stands in the way, in the order it will be hit:
 * **A tab bar is a permanent row**, and `MIN_H` (14) goes up by it.
 
 ```text
-  TABS  [ 1 iPhone 17 Pro ✕ ]  [ 2 Pixel 9 · building ✕ ]  [ + ^T ]
+  TABS  [ 1 iPhone 17 Pro ✕ ]  [ 2 Pixel 9 · building ✕ ]  [ + ]
 ```
 
-**The alternative that has to be turned down deliberately.** Do not build tabs;
-run a second `frun` in another tmux pane or terminal window. One process, one run,
-the design untouched, and the OS does the multiplexing it is already good at. The
-case *for* tabs is a shared project card and one place to watch two devices
-reload; that is a real case, but it should be chosen with the price above in view.
+**And what it buys, since that is the half a cost list hides.** One project card for
+both runs, one window to watch two devices reload in, and one `q` that means
+something definite. Those are real, and they are what is being given up.
+
+The exchange rate is what settles it. Every item above is paid in the two currencies
+this design has least of — rows, and structural certainty about who owns `App` —
+while the spawned shape is paid in one footer span and one environment variable, and
+the multiplexing is done by a terminal that is already good at it. One thing is
+already prepaid should this ever be revisited: `alive` in `Session` is the smallest
+half of the `Msg`-identity problem, and it is done.
 
 ### 8.5 Switching device (built)
 
@@ -1974,8 +2415,8 @@ alive, as a state of its own — `Switching`, slug `switch`:
    ╰──────────────────────────────────────────────────────────────╯
    ╭─ ◆ SWITCH DEVICE ───────────────────────────────  5 devices ╮
    │ ❯  Pixel 10 Pro XL   running   last used         ⏎ Keep    │  12  Switching
-   │    Pixel 8                     Pixel_8  Android   ▶ Run    │   child alive
-   │    iPhone 17 Pro        8A3F91C2-4D2E  iOS         ▶ Run    │
+   │    Pixel 8                          Pixel_8  Android        │   child alive
+   │    iPhone 17 Pro             8A3F91C2-4D2E  iOS  virtual    │
    ╰──────────────────────────────────────────────────────────────╯
      [↑↓] Move        [⏎] Switch        [Esc] Back
           │                                  │
@@ -2013,8 +2454,9 @@ thing that can. ` running ` on the row whose id matches the target, in this stat
 only. A separate word from the existing ` active ` chip, which means *the device is
 up* and is true of every simulator left booted; this one means *your app is on it*
 and is true of exactly one row. `active` is suppressed there — it would be the same
-fact in a second word — and the row's `▶ Run` badge becomes ` ⏎ Keep `, because that
-is what `Enter` does on it.
+fact in a second word — and it is the one row that carries a verb, ` ⏎ Keep `, because
+`Enter` there is the only `Enter` in the list that does not build. Every other row
+shares one answer and the footer gives it once (3.3).
 
 **The cards go while the list is up.** `has_target()` and `has_build()` are both
 false in `Switching`, exactly as in the first picker, so the frame is the project
@@ -2222,17 +2664,104 @@ list below used to carry:
   from a stale snapshot offered devices that were no longer there.
 * **The outgoing device is shut down**, when frun is the one that booted it.
 
+Answered by building 8.4, whose spawn and title are verified by hand and whose key
+and handoff are not (8.4):
+
+* **A second process in a real terminal tab**, not tabs in-app. That closes the
+  question everything in 8.4 used to hang on, and with it the one about `q`, the
+  exit code and the transcript: each tab is a process, so each already owns all
+  three.
+* **The key is `⇧Enter`, in the picker.** Not `^T` in the target card, which is
+  released. `^Enter` was the safer twin and was declined on how the key reads.
+* **The handoff is `FRUN_DEVICE` plus `extra`**, resolved against the new process's
+  own scan, so the boot happens in the tab that waits for it.
+* **No row is refused.** The `running` chip and its `Keep` verb already mark the one
+  conflicting row, and the check is per-session, never claimed as global.
+* **The tab is named `<device> · <project>` by `OSC 2`**, written in `launch()` and
+  therefore on every path that sets a target, switches included. It is stale for the
+  length of a boot, deliberately, and it is worth building on its own.
+
 Still open:
 
-1. **Tabs in-app, or a second process in another pane?** Everything in 8.4 hangs
-   on this.
-2. **If tabs: what does `q` mean, and whose exit code and transcript survive?**
-3. **Where the inline panel's rows come from** — the log window is the only
+1. **Where the inline panel's rows come from** — the log window is the only
    answer available — **and what the panel does at the collapsed rung.** 8.5 no
    longer depends on either: the panel is presentation now, not the way in.
 
-Order from here: 8.3 next if the panel is wanted for its own sake — the two verbs
-in one place, and the click path that `&mut App` in `ui/target.rs` unlocks — then
-8.4 on its own once 8.7.1 is answered. 8.4 also inherits one thing already paid
-for: the `alive` flag in `Session` is the smallest half of the `Msg`-identity
-problem, and it is done.
+Order from here: exercise 8.4's three unverified paths by hand, since two of them
+(`handed_over`, `name_tab`) only ever run against a real project. Then 8.3, if the
+panel is still wanted for its own sake — by then it carries one control rather than
+two, and what it really unlocks is the click path that `&mut App` in `ui/target.rs`
+gives.
+
+### 8.8 Stopping without leaving (built)
+
+`[^S] Stop` ends the run and keeps frun on screen. `^C` is unchanged and still ends
+the process — that was the constraint this was built under, and it turned out to be
+what makes the rest simple.
+
+**Because `^C` stays, `^S` needs no signal.** A graceful stop is the mechanism `q`
+already uses: forward `q` to Flutter, let it shut itself down, wait for the pty to
+close. The only difference between the two is where frun lands afterwards, which is
+one flag — `App::stopping` — read in `child_exited`. During a build there is no
+interactive session to read a key, so `^S` there sends SIGINT instead; Gradle and
+Xcode answer to nothing else.
+
+And no escalation ladder behind it. If Flutter is wedged and ignores the request,
+`^C` still ends the process. A timeout that killed the child would be a second answer
+to a question the user already has a key for.
+
+**The frame is state 13, `Stopped`, and it is all reuse.** `has_target()`,
+`has_build()` and `has_logs()` are true, so the target card, the tracker and the log
+window are the ones already written; `build_done()` is false, so hot reload is not
+advertised for a session that is gone. The tracker's title becomes `STOPPED` in muted
+rather than rose — the run ending was asked for, and colouring it like a failure would
+make a deliberate stop read as something breaking.
+
+```text
+╭─ ◆ SELECTED DEVICE ───────────────────── [^D] Switch Device ╮
+╭─ ◆ STOPPED ────────────────── Build time 3.4s   Sync 240ms ╮
+╭─ ◆ APP LOGS STREAM ────────────────────────── [7 entries] ──╮
+  [r] Retry Build   [^D] Switch Device   [↑↓] Scroll   [e] Expand   [q] Quit
+```
+
+The device is left booted and the log is left intact, which is what makes `r` from
+here worth having: it is `Action::RetryBuild`, so it already brings the device back up
+if it has since stopped. Exit code after `^S` then `q` is Flutter's own, normally 0 —
+a stop is a graceful shutdown, the same as `q`, taken in two steps rather than one.
+
+**`[r] Build again`, and the word is the whole difference.** Same `Action` as
+`[r] Retry Build` in state 7, so the key and the click stay one path, but nothing
+failed here and calling it a retry would say something did.
+
+Two things had to be fixed before that key worked at all, and both were the same
+mistake: code that asked *what is on screen* where it should have asked *what is
+running*.
+
+* `r` resolved to `Action::Reload` outside `BuildFailed`, and a hot reload with no
+  child declines itself — silently, because `build_done()` is false. The footer
+  advertised the rebuild, the mouse click on that same hint performed it, and the
+  key did nothing. `apply()` exists so a key and a click cannot drift apart; the
+  drift was in the routing above it.
+* Picking the same device in the switch list returned without doing anything, which
+  is right over a live run — the row is highlighted when the list opens, so a
+  reflexive `Enter` lands on it, and it should not cost a rebuild. Opened from
+  `Stopped` there is no session to keep, so the same row now means "start this one
+  again". `ctx.session.is_some()` is the test, not the state.
+
+The switch list also stops claiming the app is on that device: ` running ` and
+` ⏎ Keep ` are drawn only when the banked state is a live run. From `Stopped` the
+device is still booted but the app on it is gone, and the row's ` active ` and
+` last used ` chips are all that remain true of it.
+
+**One thing this exposed in the footer.** The hint row had no truncation rule at all.
+Only the diagnostics group knew how to drop itself, and its fit test measured the
+hints without the single column each gap needs, so at 106 columns the seven running
+hints measured 84 against 87 and were clipped at the buffer edge in silence (7.5) —
+losing `[^C] Force stop`, the one key that matters when Flutter is wedged. Two fixes,
+both small: the minimum gaps count as content in every fit test, and when the row
+still does not fit, the labels are dropped and the keycaps are kept. `[^C]` alone is
+still a key you can press; a `[^C` that was cut off is not, and nothing on screen
+would have said so.
+
+`[h] Help` also left the row. It is Flutter's key and the only hint on the cheatsheet
+that can find itself: pressing `h` makes Flutter print its own list.

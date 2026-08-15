@@ -22,36 +22,55 @@ use crate::widgets::{alert_card, card, spread, strong, text};
 /// every duration stopped at column 66.
 const BAR_MAX: u16 = 44;
 
+/// Glyph, title and colour for the state the build is in.
+///
+/// One function because both the card and the collapsed row need the same answer,
+/// and the collapsed row is what the card *becomes*. Two copies of this drifted
+/// once already: the card said `BUILD FINISHED` while the row under it said
+/// `build finished`, so a layout change also changed the wording.
+///
+/// The card ignores the glyph — `card()` supplies its own `◆` — and the collapsed
+/// row, having no border to hang a title on, uses it.
+fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
+    match app.state {
+        State::BuildFailed => ("✖", "BUILD FAILED", theme::ROSE),
+        // Muted rather than rose: the run ending was asked for, and colouring it
+        // like a failure would make a deliberate stop read as something going wrong.
+        State::Stopped => ("⏹", "STOPPED", theme::MUTED),
+        s if s.build_done() => ("✔", "BUILD FINISHED", theme::EMERALD),
+        _ => (app.spinner(), "BUILDING", theme::AMBER),
+    }
+}
+
+/// Build time and sync, as the card's title bar carries them.
+///
+/// Shared with the collapsed row for the same reason `status` is: the row inherits
+/// the card's right-hand group, so the two numbers keep both their wording and
+/// their horizontal position when the card goes.
+fn timings(app: &App) -> Vec<Span<'static>> {
+    vec![
+        text("Build time ", theme::MUTED),
+        // Live while building, final once it is not. A build time that only
+        // appears at the end tells you nothing during the wait that matters.
+        strong(app.build_clock(), theme::TEXT),
+        text("   Sync ", theme::MUTED),
+        strong(app.sync_time.clone(), theme::TEXT),
+    ]
+}
+
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     if !plan.full_build {
         collapsed(frame, area, app);
         return;
     }
 
-    let failed = app.state == State::BuildFailed;
-    let done = app.state.build_done();
+    let (_, title, color) = status(app);
 
-    let (title, color) = if failed {
-        ("BUILD FAILED", theme::ROSE)
-    } else if done {
-        ("BUILD FINISHED", theme::EMERALD)
-    } else {
-        ("BUILDING", theme::AMBER)
-    };
+    let mut bar = vec![Span::raw(" ")];
+    bar.extend(timings(app));
+    bar.push(Span::raw(" "));
 
-    let block = card(title, color).title_top(
-        Line::from(vec![
-            Span::raw(" "),
-            text("Build time ", theme::MUTED),
-            // Live while building, final once it is not. A build time that only
-            // appears at the end tells you nothing during the wait that matters.
-            strong(app.build_clock(), theme::TEXT),
-            text("   Sync ", theme::MUTED),
-            strong(app.sync_time.clone(), theme::TEXT),
-            Span::raw(" "),
-        ])
-        .right_aligned(),
-    );
+    let block = card(title, color).title_top(Line::from(bar).right_aligned());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -213,33 +232,38 @@ fn stages(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Degradation step 5, and the most consequential one.
+/// What the tracker becomes once the build has settled, and rung 3 of the ladder
+/// while one is still running.
 ///
-/// State-dependent rather than size-dependent: once the build has succeeded
-/// every row here is static, so holding eight rows while the log window is
-/// starved cannot be justified.
+/// ```text
+/// ✔ BUILD FINISHED                                 Build time 20.2s   Sync 68ms
+/// ```
+///
+/// Reached by state rather than by size in the case that matters. Every row the
+/// full card holds after the build is over is frozen — five labels, five
+/// durations, and a progress bar reading `Stage 5/5` in emerald directly under a
+/// title already saying `BUILD FINISHED` — so it cannot justify nine rows while
+/// the log window is the only region still changing. `Budget::solve` switches
+/// `full_build` off before the ladder is consulted.
+///
+/// Same words and same colour as the card's own title, from `status`, and the
+/// same right-hand group, from `timings`. The collapse then reads as the card
+/// closing rather than as a different component appearing: the two numbers stay
+/// where they were, give or take the border and its padding.
+///
+/// **What this gives up is the per-stage breakdown.** The tracker is the only
+/// place it exists — the `BLD` and `OK` log levels were removed on the grounds
+/// that the tracker owned those facts — so `Building with Xcode 14.5s` is
+/// unreadable for the rest of the session. Accepted: that figure is watched while
+/// the row is spinning, which is when the full card is on screen, and what is kept
+/// here is the total it rolls up into.
 fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
-    let (glyph, color, label) = match app.state {
-        State::BuildFailed => ("✖", theme::ROSE, "build failed"),
-        s if s.build_done() => ("✔", theme::EMERALD, "build finished"),
-        _ => (app.spinner(), theme::AMBER, "building"),
-    };
+    let (glyph, label, color) = status(app);
 
     let line = spread(
         area.width,
-        vec![
-            strong(glyph, color),
-            Span::raw(" "),
-            text(label, theme::TEXT),
-            Span::raw("  "),
-            text(format!("{} stages", app.stages.len()), theme::MUTED),
-        ],
-        vec![
-            text("build ", theme::MUTED),
-            strong(app.build_clock(), theme::TEXT),
-            text("  sync ", theme::MUTED),
-            strong(app.sync_time.clone(), theme::TEXT),
-        ],
+        vec![strong(glyph, color), Span::raw(" "), strong(label, color)],
+        timings(app),
     );
 
     frame.render_widget(Paragraph::new(line), area);

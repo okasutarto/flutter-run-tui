@@ -217,10 +217,15 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     let hits: Vec<Hit> = Vec::new();
     let mut pending = hits;
 
-    // Which row the run is on, and only while switching. Outside `Switching` there
-    // is no run yet: `app.target` is either empty or, in the mocks, a device that
-    // shares an id with a row it has no relationship to.
-    let running_id = if app.state == State::Switching {
+    // Which row the run is on, and only while switching away from a live one.
+    // Outside `Switching` there is no run yet: `app.target` is either empty or, in
+    // the mocks, a device that shares an id with a row it has no relationship to.
+    //
+    // The `Stopped` case is the one worth spelling out. The list can be opened from
+    // there too, and the device is still booted, but the app on it is gone — so
+    // ` running ` would be false and ` ⏎ Keep ` would offer to keep nothing. That row
+    // still carries ` active ` and ` last used `, which is all that is true of it.
+    let running_id = if app.state == State::Switching && app.run_state() != State::Stopped {
         app.target.as_ref().map(|device| device.id.clone())
     } else {
         None
@@ -301,12 +306,16 @@ const LAST_USED: &str = " last used ";
 /// the list unable to answer the only question it is open to answer.
 const RUNNING: &str = " running ";
 
-// Uniformly `Run`. The Start/Run split existed to imply whether a boot was
-// coming, which the `active` chip now states outright, and two words for one
-// consequence read as two different consequences.
-const RUN: &str = " ▶ Run ";
-
 /// What `Enter` does on the row already running: nothing but close the list.
+///
+/// The only per-row verb left. `▶ Run` used to sit on every other row and was
+/// dropped: once the Start/Run split went, it was the same seven columns repeated
+/// down the list saying what the footer says once — `[⏎] Launch` in the picker,
+/// `[⏎] Switch` in the switch list. The hint row inside this card was removed for
+/// exactly that reason, and this was the same duplication one column to the right.
+///
+/// This one stays because it is the exception rather than the rule: it is the row
+/// where `Enter` does *not* build, and nothing else on the row says so.
 const KEEP: &str = " ⏎ Keep ";
 
 /// What a pill costs: its text plus the two cap columns `pill` adds.
@@ -324,9 +333,6 @@ fn draw_row(
 ) {
     let w = crate::widgets::width;
 
-    // What `Enter` costs on this row: a build, or nothing at all.
-    let verb = if running { KEEP } else { RUN };
-
     // Both chips, independently, because they are independent facts.
     //
     // `active` says what Enter costs: launch now, or boot first and wait.
@@ -335,7 +341,7 @@ fn draw_row(
     // the one that is up?" — which is the question the pair exists to answer.
     //
     // `active` requires `needs_boot()`: macOS and Chrome are always available, so
-    // `active` would describe a state they do not have, and `▶ Run` says enough.
+    // `active` would describe a state they do not have.
     //
     // Suppressed on the running row: `running` already says the device is up, and
     // saying it twice in two words on one row is how a list stops being read.
@@ -343,15 +349,14 @@ fn draw_row(
 
     let id = elide(&device.id, 16);
 
-    // Never dropped: the caret, the platform glyph, the name and the `▶ Run`
-    // badge. The first three are how you tell this row from the next one and the
-    // last is what pressing Enter does; a row missing either is not worth drawing.
+    // Never dropped: the caret, the platform glyph and the name — how you tell this
+    // row from the next one — plus ` ⏎ Keep ` on the one row that has it, since a
+    // row whose `Enter` behaves differently has to say so.
     let fixed = GAP
         + w(device.platform.glyph())
         + GAP
         + w(&device.name)
-        + GAP
-        + pill_width(verb)
+        + if running { GAP + pill_width(KEEP) } else { 0 }
         // `spread` keeps at least one column between the two groups.
         + 1;
 
@@ -445,16 +450,16 @@ fn draw_row(
         right.push(text("virtual", theme::PURPLE));
     }
 
-    // The badge says what picking this row will do, and that is a property of the
-    // row rather than of the frame it is on. Both frames now draw one merged
-    // list, so a per-frame flag would label a bootable simulator `Run` purely
-    // because a phone happened to be plugged in.
-    right.push(Span::raw("  "));
+    // One row can say what `Enter` does, and it is the row where `Enter` does
+    // nothing. Every other row shares one answer, and the footer gives it once.
+    if running {
+        right.push(Span::raw("  "));
 
-    right.extend(pill(
-        verb,
-        if selected { theme::CYAN } else { theme::MUTED },
-    ));
+        right.extend(pill(
+            KEEP,
+            if selected { theme::CYAN } else { theme::MUTED },
+        ));
+    }
 
     hits.push(Hit {
         area,

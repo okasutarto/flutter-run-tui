@@ -16,6 +16,32 @@ use crate::data::{Action, App, Hit, State};
 use crate::theme;
 use crate::widgets::{keycap, strong, text};
 
+/// `[⇧⏎] Launch in new tab` (8.4), in the three states that show a list.
+///
+/// Only where the key can arrive. In the legacy encoding `⇧⏎` is plain CR, so the
+/// hint would advertise a key indistinguishable from `⏎` — the `[COPY]` failure of
+/// 3.1. `App::shift_enter` carries what the terminal answered.
+///
+/// It is a key, not a diagnostic, so it is never dropped: below the width where the
+/// row fits with its words, `footer` drops every label and keeps every keycap.
+fn new_tab<'a>(
+    hints: &mut Vec<(&'a str, &'a str, ratatui::style::Color, Option<Action>)>,
+    app: &App,
+) {
+    if !app.shift_enter {
+        return;
+    }
+
+    // Cyan, not the emerald `⏎ Launch` wears. Both launch, but two adjacent emerald
+    // keycaps read as one control that lost its spacing.
+    hints.push((
+        Action::NewTab.key(),
+        Action::NewTab.label(),
+        theme::CYAN,
+        Some(Action::NewTab),
+    ));
+}
+
 /// Hotkey cheatsheet. One row, always last, never scrolls.
 ///
 /// No status bar and no grid metrics: session time, mode indicator and grid
@@ -45,25 +71,55 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
     let hints: Vec<(&str, &str, ratatui::style::Color, Option<Action>)> = match app.state {
         State::Detecting | State::Booting => vec![("^C", "Cancel", theme::ROSE, None)],
 
-        State::NoDevices | State::MultipleDevices => vec![
-            ("↑↓", "Move", theme::CYAN, None),
-            ("⏎", "Launch", theme::EMERALD, None),
-            ("Esc", "Cancel", theme::ROSE, None),
-        ],
+        State::NoDevices | State::MultipleDevices => {
+            let mut hints = vec![
+                ("↑↓", "Move", theme::CYAN, None),
+                ("⏎", "Launch", theme::EMERALD, None),
+            ];
+
+            new_tab(&mut hints, app);
+            hints.push(("Esc", "Cancel", theme::ROSE, None));
+
+            hints
+        }
 
         // Same three keys, two different words. `⏎` here replaces a run rather
         // than starting the first one, and `Esc` goes back to a live session
         // instead of cancelling out with 130. One key meaning two things has to
         // say which one it means.
-        State::Switching => vec![
-            ("↑↓", "Move", theme::CYAN, None),
-            ("⏎", "Switch", theme::EMERALD, None),
-            ("Esc", "Back", theme::ROSE, None),
-        ],
+        State::Switching => {
+            let mut hints = vec![
+                ("↑↓", "Move", theme::CYAN, None),
+                ("⏎", "Switch", theme::EMERALD, None),
+            ];
+
+            new_tab(&mut hints, app);
+            hints.push(("Esc", "Back", theme::ROSE, None));
+
+            hints
+        }
 
         // No scroll and no expand: there is no log card during a build, so both
         // keys would be advertised while doing nothing.
-        State::SingleDevice | State::Building => vec![("^C", "Stop", theme::ROSE, None)],
+        State::SingleDevice => vec![hint(Action::Stop, theme::ROSE)],
+
+        State::Building => vec![
+            hint(Action::StopRun, theme::AMBER),
+            hint(Action::Stop, theme::ROSE),
+        ],
+
+        // Nothing is running, so nothing can be reloaded or stopped. What is left is
+        // what to do next: build again, move to another device, read the log, leave.
+        State::Stopped => vec![
+            // `Build again`, not `Retry Build`: nothing failed here, the run was
+            // ended on purpose. Same `Action`, so the click and the key stay one
+            // path; only the word on the cheatsheet differs.
+            ("r", "Build again", theme::EMERALD, Some(Action::RetryBuild)),
+            hint(Action::Switch, theme::CYAN),
+            ("↑↓", "Scroll", theme::CYAN, None),
+            ("e", expand, theme::CYAN, None),
+            hint(Action::Quit, theme::MUTED),
+        ],
 
         State::BuildFailed => vec![
             hint(Action::RetryBuild, theme::ROSE),
@@ -77,11 +133,15 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
                 hint(Action::Restart, theme::PURPLE),
                 ("↑↓", "Scroll", theme::CYAN, None),
                 ("e", expand, theme::CYAN, None),
-                // Forwarded to Flutter, so no hit region: there is nothing for
-                // frun to click on its own behalf.
-                ("h", "Help", theme::CYAN, None),
+                hint(Action::StopRun, theme::AMBER),
                 ("q", "Quit", theme::ROSE, None),
-                ("^C", "Stop", theme::ROSE, None),
+                hint(Action::Stop, theme::ROSE),
+                // `[h] Help` was here and is the one hint that could find itself:
+                // pressing `h` makes Flutter print its own key list. The row has no
+                // truncation rule of its own — below 80 columns the tail is clipped
+                // at the buffer edge in silence — so the eight-hint version was
+                // losing the stop keys instead, which are the ones that matter when
+                // something is wrong.
             ]
         }
     };
@@ -93,22 +153,61 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
     // and not columns: `↑↓` is six bytes and two cells, so the estimate ran four
     // columns over on every state that shows the arrows and dropped diagnostics
     // that would have fitted.
-    let rendered: Vec<Vec<Span>> = hints
-        .iter()
-        .map(|(key, label, color, _)| {
-            let mut spans = keycap(key, *color);
-            spans.push(text(" ", theme::MUTED));
-            spans.push(text(*label, theme::MUTED));
-            spans
-        })
-        .collect();
+    let draw = |labelled: bool| -> Vec<Vec<Span>> {
+        hints
+            .iter()
+            .map(|(key, label, color, _)| {
+                let mut spans = keycap(key, *color);
 
-    let natural: Vec<usize> = rendered
-        .iter()
-        .map(|s| s.iter().map(Span::width).sum())
-        .collect();
+                if labelled {
+                    spans.push(text(" ", theme::MUTED));
+                    spans.push(text(*label, theme::MUTED));
+                }
 
-    let content: usize = natural.iter().sum();
+                spans
+            })
+            .collect()
+    };
+
+    let measure = |rendered: &[Vec<Span>]| -> Vec<usize> {
+        rendered
+            .iter()
+            .map(|spans| spans.iter().map(Span::width).sum())
+            .collect()
+    };
+
+    // The gaps between hints are content, and this is what the fit tests below have
+    // to ask about. Leaving them out is what let those tests pass on a row that then
+    // overflowed: at 106 columns the seven running hints measured 84 against 87
+    // available and were clipped at the buffer edge in silence (7.5), taking
+    // `[^C] Force stop` with them — the one key that matters when Flutter is wedged.
+    let gaps = hints.len().saturating_sub(1);
+
+    // Two columns reads as separate keys, one still reads as a list, and the second
+    // tier is worth having: at 80 columns the running row fits with single spacing
+    // and would otherwise have to drop its words.
+    let fits = |sum: usize, gap: u16| sum + gaps * gap as usize <= area.width as usize;
+
+    let mut rendered = draw(true);
+    let mut natural = measure(&rendered);
+    let mut sum: usize = natural.iter().sum();
+    let mut gap: u16 = 2;
+
+    if !fits(sum, gap) {
+        gap = 1;
+    }
+
+    // Keys without their words, rather than a row missing its last keys. `[^C]`
+    // alone is still a key you can press; a `[^C` that was cut off is not, and
+    // nothing on screen would say it had been.
+    if !fits(sum, gap) {
+        rendered = draw(false);
+        natural = measure(&rendered);
+        sum = natural.iter().sum();
+        gap = if fits(sum, 2) { 2 } else { 1 };
+    }
+
+    let content = sum + gaps * gap as usize;
 
     // Diagnostics keep their slot at the right edge, and the hints are spaced
     // across whatever is left. Ordered lowest priority first; the tail survives a
@@ -134,8 +233,10 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
     // than as a glitch. Only when a layout decision was actually taken: see the
     // note on `plan` above.
     if let Some(plan) = plan {
-        if plan.describe() != "full" {
-            optional.push(vec![text(format!("[{}]", plan.describe()), theme::BORDER)]);
+        let given_up = plan.describe(app.state);
+
+        if given_up != "full" {
+            optional.push(vec![text(format!("[{given_up}]"), theme::BORDER)]);
         }
     }
 
@@ -188,25 +289,23 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
             .spacing(if right.is_empty() { 0 } else { 2 })
             .split(area);
 
-    // True space-between: each hint keeps its natural width and the leftover is
-    // split into equal gaps between them.
+    // Right-aligned, at a fixed two columns between hints.
     //
-    // Equal-ratio columns were the first attempt and they clip: seven hints
-    // across ninety columns gives thirteen each, and `[r] Hot reload` needs
-    // fourteen. Forcing equal widths on unequal content truncates the longest,
-    // which on a cheatsheet is the worst thing it can do.
-    let gaps = hints.len().saturating_sub(1);
-    let slack = (cols[0].width as usize).saturating_sub(content);
-
-    // The remainder is handed out one column at a time to the leftmost gaps
-    // rather than discarded. `slack / gaps` alone left up to `gaps - 1` columns
-    // unused against the right edge — five of them at 106 columns with seven
-    // hints — so the last key stopped short and the row read as left-aligned with
-    // a ragged tail instead of spaced across the width.
-    let gap = slack.checked_div(gaps).unwrap_or(0);
-    let mut extra = slack.checked_rem(gaps).unwrap_or(0);
-
-    let mut x = cols[0].x;
+    // Space-between came first: the leftover was split into equal gaps so the row
+    // spanned the full width. It kept the keys in the same place at any size, but it
+    // also stretched them apart from each other as the window grew, until reading
+    // the row meant crossing ninety columns of blank to find the next key. Fixed
+    // spacing keeps the group readable as a group, and putting it on the right edge
+    // keeps it next to the diagnostics rather than leaving a gulf between them.
+    //
+    // Equal-ratio columns were the first attempt before that and they clip: seven
+    // hints across ninety columns gives thirteen each, and `[^C] Force stop` needs
+    // fifteen. Forcing equal widths on unequal content truncates the longest, which
+    // on a cheatsheet is the worst thing it can do.
+    //
+    // Clamped: below the width the row needs, this is the left edge, and the tiers
+    // above have already given up the spacing and then the words.
+    let mut x = cols[0].x + cols[0].width.saturating_sub(content as u16);
 
     for ((spans, width), (_, _, _, action)) in rendered.into_iter().zip(&natural).zip(&hints) {
         let slot = Rect {
@@ -225,12 +324,7 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
 
         frame.render_widget(Paragraph::new(Line::from(spans)), slot);
 
-        x += (*width + gap) as u16;
-
-        if extra > 0 {
-            x += 1;
-            extra -= 1;
-        }
+        x += *width as u16 + gap;
     }
 
     if !right.is_empty() {

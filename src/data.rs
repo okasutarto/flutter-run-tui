@@ -68,7 +68,7 @@ pub enum State {
 }
 
 impl State {
-    pub const ALL: [State; 12] = [
+    pub const ALL: [State; 13] = [
         State::Detecting,
         State::NoDevices,
         State::Booting,
@@ -180,12 +180,33 @@ impl State {
         )
     }
 
-    /// Whether the build finished, which is what lets the tracker collapse.
+    /// Whether the interactive session is live, so a key has something to reach.
+    ///
+    /// Used for far more than the tracker: `q` is only forwardable once Flutter is
+    /// reading keys, and a reload before that would be sent to Gradle. Which is why
+    /// `Stopped` is not here — there is no child behind that frame — and why the
+    /// tracker asks `build_settled` instead.
     pub fn build_done(self) -> bool {
         matches!(
             self,
             State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped
         )
+    }
+
+    /// Whether the tracker's rows have stopped moving, which is what collapses it.
+    ///
+    /// `build_done` plus `Stopped`, and the difference matters: a stopped run's
+    /// tracker is every bit as static as a running one's, yet `build_done` says no
+    /// because that question is about a live child. While the two were conflated
+    /// `Stopped` was ranked as though its build were still in progress, so at 45
+    /// rows it paid the separators *and* the roomy device rows to keep ten rows of
+    /// finished timings — in the one state whose entire purpose is reading the log.
+    ///
+    /// `BuildFailed` is excluded and stays expanded. The failure note names which
+    /// stage broke, so there the stage list is the context for the error card
+    /// rather than history.
+    pub fn build_settled(self) -> bool {
+        self.build_done() || self == State::Stopped
     }
 }
 
@@ -423,6 +444,9 @@ pub enum Action {
     RetryBuild,
     /// Reopen the picker to move this run to another device, DESIGN.md 8.5.
     Switch,
+    /// Launch the highlighted row in a second frun, in a new terminal tab,
+    /// DESIGN.md 8.4. This tab is left exactly as it was.
+    NewTab,
     /// End the run and stay in frun, DESIGN.md 8.8.
     StopRun,
     StartDevice,
@@ -441,6 +465,11 @@ impl Action {
             // bytes, so a modifier takes nothing from 5.1. `s` was the obvious
             // mnemonic and is Flutter's screenshot key.
             Action::Switch => "^D",
+            // Not a letter at all. `Enter` in the three picker states is already
+            // frun's, so the modifier costs nothing from 5.1 either — what it costs
+            // instead is the Kitty keyboard protocol, without which every modified
+            // `Enter` is plain CR on the wire. See 8.4 and `App::shift_enter`.
+            Action::NewTab => "⇧⏎",
             // `s` is Flutter's screenshot key, so the mnemonic has to be a modifier
             // the same way `^D` did. Raw mode clears IXON, so `^S` is not XOFF here.
             Action::StopRun => "^S",
@@ -452,13 +481,22 @@ impl Action {
 
     pub fn label(self) -> &'static str {
         match self {
-            Action::Reload => "Hot reload",
-            Action::Restart => "Hot restart",
+            // No `Hot` on either. The word is Flutter's vocabulary, not a
+            // distinction the user is choosing between on this row — there is no cold
+            // reload to tell it apart from — and the two of them cost eight columns
+            // on the one row that must never truncate. The reload *note* above still
+            // says `Hot reload` in full, where it is quoting Flutter.
+            Action::Reload => "Reload",
+            Action::Restart => "Restart",
             Action::RetryBuild => "Retry Build",
             // Not "Change target": the run is killed and rebuilt, and a label
             // that reads like a live switch would leave the user thinking the
             // tool had hung through a forty-second Gradle build.
             Action::Switch => "Switch Device",
+            // The same words in the picker and in the switch list, deliberately.
+            // `⏎` changes meaning between those two frames and has to say which it
+            // means; `⇧⏎` does not — it launches, in a new tab, either way.
+            Action::NewTab => "Launch in new tab",
             Action::StopRun => "Stop",
             Action::StartDevice => "Start",
             // `q` and `^C` are not the same exit, so they are not merged.
@@ -603,6 +641,15 @@ pub struct App {
     pub live: bool,
     pub demo: bool,
 
+    /// Whether this terminal reports the Kitty keyboard protocol, which is the
+    /// only way `⇧⏎` is distinguishable from `⏎` (8.4).
+    ///
+    /// It gates the footer hint and nothing else: advertising a key that cannot
+    /// arrive is the `[COPY]` failure of 3.1. Defaulting to `true` is what lets
+    /// `--dump` draw the hint — the harness has no terminal to ask — and `run()`
+    /// replaces it with the terminal's own answer before the first frame.
+    pub shift_enter: bool,
+
     clock: probe::Clock,
 }
 
@@ -675,6 +722,7 @@ impl App {
             expanded: false,
             live: false,
             demo: false,
+            shift_enter: true,
 
             clock: probe::Clock::new(),
         }
@@ -1296,7 +1344,9 @@ fn mock_stages(state: State) -> Vec<Stage> {
 
         // Five rows, not six: on the runs where CocoaPods appears it adopts the
         // generic row, so `Preparing build` is not a row of its own.
-        s if s.build_done() => vec![
+        // `Stopped` with them: the run it is the remains of had finished building,
+        // and a tracker with no rows would describe a build that never happened.
+        s if s.build_done() || s == State::Stopped => vec![
             stage(StageKey::Start, "Starting Flutter", "3.6s", true),
             stage(StageKey::Pods, "Installing CocoaPods", "1.2s", true),
             stage(StageKey::Xcode, "Building with Xcode", "14.5s", true),

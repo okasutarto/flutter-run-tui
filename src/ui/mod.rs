@@ -126,9 +126,13 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         // list to keep in step with this one.
         State::Switching => devices::render_picker(frame, middle, app, &plan),
 
-        State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped => {
-            logs::render(frame, middle, app)
-        }
+        State::Running
+        | State::ReloadInFlight
+        | State::ReloadFailed
+        | State::ReloadDropped
+        // Nothing is streaming any more, and that is exactly why the window stays:
+        // reading what the run said is the reason to stop without leaving (8.8).
+        | State::Stopped => logs::render(frame, middle, app),
     }
 
     chrome::footer(frame, footer_area, app, Some(&plan));

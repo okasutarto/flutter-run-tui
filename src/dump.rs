@@ -107,7 +107,16 @@ pub fn rows(app: &App, width: u16) -> String {
 
     let mut out = String::new();
 
-    out.push_str(&format!("state {}   width {width}\n\n", app.state.slug()));
+    out.push_str(&format!("state {}   width {width}\n", app.state.slug()));
+
+    // Said once, here, and not in the per-height column. The tracker collapses on
+    // state in this frame, at every height, so listing it as something the size gave
+    // up would put a fixed fact in a column about the ladder.
+    if app.state.build_settled() {
+        out.push_str("  tracker collapsed: the build has settled\n");
+    }
+
+    out.push('\n');
 
     // `mid`, not `log`: the flexible region is the log window in some states, the
     // failure card in one and the switch list in another, and each has its own
@@ -120,7 +129,10 @@ pub fn rows(app: &App, width: u16) -> String {
         let chrome = plan.chrome(app.state, app.stages.len());
         let mid = h.saturating_sub(chrome);
 
-        out.push_str(&format!("  {h:>4}   {mid:>3}   {}\n", plan.describe()));
+        out.push_str(&format!(
+            "  {h:>4}   {mid:>3}   {}\n",
+            plan.describe(app.state)
+        ));
     }
 
     out.push_str(&format!(

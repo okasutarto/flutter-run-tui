@@ -26,11 +26,13 @@ use std::time::Duration;
 
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-    MouseButton, MouseEventKind,
+    KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
+    LeaveAlternateScreen, SetTitle,
 };
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
@@ -429,6 +431,18 @@ fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> 
     // uncontended terminal.
     let mut art = Logo::detect();
 
+    // The same reason, and so the same slot: this query also writes a sequence and
+    // reads the reply off stdin. Raw mode is not the constraint — crossterm enables
+    // it for the query itself when it is off — an uncontended stdin is, which is what
+    // `FRUN_NO_QUERY` exists for (see `Logo::detect`).
+    //
+    // The answer only decides whether `⇧⏎` is advertised (8.4). Under `FRUN_NO_QUERY`
+    // the hint is withheld and the key still works if the terminal happens to support
+    // it, which is the safe way round: a key that works unannounced costs nothing, and
+    // one announced but unreachable is the `[COPY]` failure of 3.1.
+    app.shift_enter = std::env::var_os("FRUN_NO_QUERY").is_none()
+        && supports_keyboard_enhancement().unwrap_or(false);
+
     let mut ctx = Ctx {
         rx,
         tx,
@@ -438,6 +452,23 @@ fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> 
     };
 
     enable_raw_mode()?;
+
+    // `⇧⏎` (8.4). Without this, `Enter`, `⇧Enter` and `^Enter` are all CR on the
+    // wire and crossterm reports `KeyCode::Enter` with an empty modifier set, so the
+    // arm in `key_press` could never fire.
+    //
+    // Pushed whether or not the query above said yes: a terminal that does not
+    // understand the sequence ignores it, and asking again here would be a second
+    // read from a stdin the input loop now owns. Only `DISAMBIGUATE_ESCAPE_CODES` —
+    // event types are deliberately not requested, so no release or repeat events
+    // start arriving at a loop that filters for `Press`.
+    //
+    // It changes what frun *reads* and nothing it writes: the bytes forwarded to
+    // Flutter are ones frun composes itself (5.1).
+    execute!(
+        io::stdout(),
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    )?;
 
     // Mouse capture is NOT enabled here. Capturing takes text selection away
     // from the terminal, and copying a stack trace out of the log window is a
@@ -450,6 +481,10 @@ fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> 
     // Restore before propagating any error, so a failure inside the loop cannot
     // leave the terminal in raw mode or holding the mouse.
     disable_raw_mode()?;
+
+    // Paired with the push above. Left on, the shell inherits a keyboard mode it
+    // never asked for, and `⏎` at the prompt would arrive as an escape sequence.
+    execute!(io::stdout(), PopKeyboardEnhancementFlags)?;
 
     if app.mouse_on {
         execute!(io::stdout(), DisableMouseCapture)?;
@@ -698,6 +733,39 @@ fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
     } else {
         State::NoDevices
     });
+
+    handed_over(app, ctx);
+}
+
+/// The device this process was handed by the tab that spawned it (8.4).
+///
+/// Resolved here, against this process's own scan, which is what keeps a boot in the
+/// tab that waits for it: the spawning tab picked a row and nothing else, so a
+/// shut-down AVD takes its three minutes on this tab's `Booting` frame.
+///
+/// `enter()` is reused rather than reimplemented, so the boot-or-launch branch and
+/// the id it launches with stay in one place. That also means an Android AVD handed
+/// over by name is reconciled to its serial by the code that already does it.
+///
+/// Read once, and only from `State::Detecting`: a later `^D` in this tab must be the
+/// user's choice, not a repeat of the one the variable carries.
+///
+/// Not finding it is not fatal. The device may have gone between two scans, or the
+/// variable may be stale in an exported shell, and the picker is a better answer to
+/// both than an error — it is already on screen with the same rows.
+fn handed_over(app: &mut App, ctx: &mut Ctx) {
+    let Some(id) = std::env::var(HANDOFF).ok().filter(|id| !id.is_empty()) else {
+        return;
+    };
+
+    match app.devices.iter().position(|device| device.id == id) {
+        Some(index) => {
+            app.selected_device = index;
+            enter(app, ctx);
+        }
+
+        None => app.log(Level::Wrn, &format!("{HANDOFF}={id} is not attached")),
+    }
 }
 
 /// A later answer from discovery: swap the rows, leave the frame alone.
@@ -791,7 +859,33 @@ fn booted_device(app: &App, booted: &probe::Booted) -> probe::Device {
 /// Take a device as the target and start the build.
 fn launch(app: &mut App, ctx: &mut Ctx, device: probe::Device) {
     app.choose(device);
+    name_tab(app);
     spawn_session(app, ctx);
+}
+
+/// Name the terminal tab after what it is running, `<device> · <project>` (8.4).
+///
+/// Called from `launch` and nowhere else, which is enough because every path that
+/// sets a target ends here: the first pick, a device that had to be booted, and a
+/// switch. The one path that skips it is the one that changes nothing — `Enter` on
+/// the row already running returns before `launch` — and the title it would write is
+/// the title already on the tab.
+///
+/// `OSC 2`, so no AppleScript and no automation permission. Nothing restores it on
+/// exit: the string it replaced came from the shell reporting its running command,
+/// and the next prompt writes that again.
+///
+/// Failure is ignored deliberately. A terminal that will not take a title is not a
+/// reason to interrupt a build, and there is no second way to ask.
+fn name_tab(app: &App) {
+    let Some(device) = app.target.as_ref() else {
+        return;
+    };
+
+    let _ = execute!(
+        io::stdout(),
+        SetTitle(format!("{} · {}", device.name, app.project))
+    );
 }
 
 fn spawn_session(app: &mut App, ctx: &mut Ctx) {
@@ -823,6 +917,18 @@ fn child_exited(app: &mut App, ctx: &mut Ctx) {
         .as_mut()
         .and_then(Session::exit_code)
         .unwrap_or(1);
+
+    // Asked for (8.8). The child is gone, frun is not: the log stays readable, the
+    // device stays booted, and `r` builds again.
+    if app.stopping {
+        app.stopping = false;
+        ctx.session = None;
+
+        app.end_build();
+        app.goto(State::Stopped);
+
+        return;
+    }
 
     // The run's state, not the screen's: with the switch list open the child is
     // still the run, and reading `state` here would treat its death as a process
@@ -866,6 +972,12 @@ fn key_press(
         // Flutter's screenshot key.
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             return Ok(apply(app, ctx, Action::Switch));
+        }
+
+        // End the run without ending frun (8.8). A modifier for the same reason as
+        // `^D`: bare `s` is Flutter's screenshot.
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            return Ok(apply(app, ctx, Action::StopRun));
         }
 
         KeyCode::Char('q') => return Ok(apply(app, ctx, Action::Quit)),
@@ -912,8 +1024,14 @@ fn key_press(
             }
         }
 
+        // Two verbs behind one letter, decided by whether there is a session to
+        // reload. `Stopped` belongs with `BuildFailed` here: the footer advertised
+        // `[r] Build again` and the key was still resolving to a hot reload, which
+        // then declined itself because `build_done()` is false with no child. The
+        // click on the same hint worked, which is exactly the drift `apply()` exists
+        // to prevent.
         KeyCode::Char('r') => {
-            let action = if app.state == State::BuildFailed {
+            let action = if matches!(app.state, State::BuildFailed | State::Stopped) {
                 Action::RetryBuild
             } else {
                 Action::Reload
@@ -941,6 +1059,21 @@ fn key_press(
         // describing things that are not changing while the only region that is
         // gets twelve.
         KeyCode::Char('e') => app.expanded = !app.expanded,
+
+        // 8.4: the same verb as `⏎`, aimed at a new terminal tab instead of this
+        // one. Scoped to the three states that show a list, so everywhere else a
+        // shifted `Enter` still falls through to `enter()` and reaches Flutter as CR
+        // — which is what it did before the keyboard protocol made the modifier
+        // visible at all.
+        KeyCode::Enter
+            if key.modifiers.contains(KeyModifiers::SHIFT)
+                && matches!(
+                    app.state,
+                    State::NoDevices | State::MultipleDevices | State::Switching
+                ) =>
+        {
+            return Ok(apply(app, ctx, Action::NewTab));
+        }
 
         KeyCode::Enter => return Ok(enter(app, ctx)),
 
@@ -992,11 +1125,17 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
     };
 
     // Switching to the device that is already running is a return, not a rebuild.
-    // The row for the current target is the highlighted one when the picker opens,
-    // so a reflexive `Enter` lands on it, and the label promises another device —
-    // not forty seconds of Gradle to arrive back where it started.
+    // The row for the current target is the highlighted one when the list opens, so a
+    // reflexive `Enter` lands on it, and the label promises another device — not forty
+    // seconds of Gradle to arrive back where it started.
+    //
+    // Only while something is actually running. Opened from `Stopped` there is no
+    // session to keep, so the same row means "start this one again", and returning
+    // silently was a dead end: the frame came back with nothing rebuilt.
     if let Some(state) = app.resume {
-        if app.target.as_ref().is_some_and(|t| t.id == device.id) {
+        let same = app.target.as_ref().is_some_and(|t| t.id == device.id);
+
+        if same && ctx.session.is_some() {
             app.resume = None;
             app.goto(state);
 
@@ -1042,6 +1181,160 @@ fn forward(ctx: &mut Ctx, bytes: &[u8]) {
     if let Some(session) = &mut ctx.session {
         session.send(bytes);
     }
+}
+
+// ============================================================
+// New tab (8.4)
+// ============================================================
+
+/// The variable the new process is handed its device in.
+///
+/// An environment variable and not a flag: `FRUN_FLAGS` is a closed list and every
+/// other `--name` belongs to Flutter (5.1), so `--device` would both collide with
+/// Flutter's own `--device-id` and open a hole in that rule. `FRUN_NO_QUERY` is the
+/// precedent, and an env var rides Ghostty's surface configuration and `tmux -e`
+/// without any quoting.
+const HANDOFF: &str = "FRUN_DEVICE";
+
+/// Open a terminal tab running a second frun on `device`.
+///
+/// Blocking, and that is a deliberate trade. The alternative is a thread, which
+/// cannot report back without a new `Msg` variant, and the whole point of this shape
+/// is that `Msg` is untouched. `tmux` answers in milliseconds; `osascript` does too,
+/// except on the first call of a session, where macOS may put its automation-consent
+/// dialog up first. The frame is frozen while that dialog is open, and the user is
+/// looking at the dialog.
+fn new_tab(device: &str, extra: &[String]) -> Result<(), String> {
+    // The binary, not `frun`: that name is a zsh function from `.zshrc` and
+    // `~/.cargo/bin` is deliberately off `PATH` (see `frun.zsh`), so it does not
+    // exist for anything but that shell. `current_exe` also survives the crate being
+    // moved or renamed.
+    let exe = std::env::current_exe().map_err(|why| format!("cannot find frun — {why}"))?;
+    let cwd = std::env::current_dir().map_err(|why| format!("cannot read cwd — {why}"))?;
+
+    let (program, args) = tab_command(
+        &exe.to_string_lossy(),
+        &cwd.to_string_lossy(),
+        &handoff_env(device),
+        extra,
+        std::env::var_os("TMUX").is_some(),
+    );
+
+    let out = std::process::Command::new(&program)
+        .args(&args)
+        .output()
+        .map_err(|why| format!("{program} — {why}"))?;
+
+    if out.status.success() {
+        return Ok(());
+    }
+
+    // The shortest decisive line. AppleScript errors are one line and useful
+    // (`Application isn't running`, `Not authorized to send Apple events`); a wall of
+    // them in a log window is not.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    Err(stderr
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or("no reason given")
+        .to_string())
+}
+
+/// What the new process is given beyond its arguments.
+///
+/// **`PATH` is not optional here, and finding that out cost a measurement.** A
+/// Ghostty surface created with a `command` runs that command directly instead of a
+/// shell, so no `.zshrc` runs and the environment is the one the app itself was
+/// launched with: measured on this machine, `PATH` is
+/// `/usr/bin:/bin:/usr/sbin:/sbin:/Applications/Ghostty.app/Contents/MacOS` — where
+/// `fvm`, `flutter`, `adb` and `emulator` are all invisible. So the new tab would
+/// have failed on its first command with `fvm` not found, and it would have looked
+/// like frun's bug rather than a missing variable. This process's `PATH` is the one
+/// that works, because it came from the shell that started it.
+///
+/// `FVM_CACHE_PATH` for the same reason and only when set: `probe::fvm_cache` honours
+/// it, so a non-default cache would otherwise resolve differently in the two tabs.
+/// Nothing else is copied. This is a handoff, not a session transfer.
+fn handoff_env(device: &str) -> Vec<String> {
+    let mut env = vec![format!("{HANDOFF}={device}")];
+
+    for name in ["PATH", "FVM_CACHE_PATH"] {
+        if let Some(value) = std::env::var_os(name) {
+            env.push(format!("{name}={}", value.to_string_lossy()));
+        }
+    }
+
+    env
+}
+
+/// What to run, split out so it can be asserted without a terminal.
+///
+/// Two mechanisms because there is no portable one. Inside tmux the multiplexer owns
+/// the tabs, so asking the terminal would open a tab tmux does not know about;
+/// outside it, Ghostty's AppleScript dictionary is the only way in, and it is also
+/// the one that can set the working directory, the command and the environment in a
+/// single call.
+fn tab_command(
+    exe: &str,
+    cwd: &str,
+    env: &[String],
+    extra: &[String],
+    tmux: bool,
+) -> (String, Vec<String>) {
+    if tmux {
+        let mut args = vec!["new-window".to_string(), "-c".to_string(), cwd.to_string()];
+
+        for entry in env {
+            args.extend(["-e".to_string(), entry.clone()]);
+        }
+
+        args.push(exe.to_string());
+        args.extend(extra.iter().cloned());
+
+        return ("tmux".to_string(), args);
+    }
+
+    // Values travel as `argv` rather than being interpolated into the script, so a
+    // device id or a path can contain anything without breaking the quoting.
+    let script = [
+        "on run argv",
+        "tell application \"Ghostty\"",
+        "set cfg to new surface configuration",
+        "set initial working directory of cfg to item 1 of argv",
+        "set command of cfg to item 2 of argv",
+        // Everything from the third argument on is one `KEY=VALUE`, so the count can
+        // grow without the script changing.
+        "set envs to {}",
+        "repeat with i from 3 to count of argv",
+        "set end of envs to item i of argv",
+        "end repeat",
+        "set environment variables of cfg to envs",
+        // So the tab survives frun exiting and its transcript can still be read.
+        "set wait after command of cfg to true",
+        "new tab in front window with configuration cfg",
+        "end tell",
+        "end run",
+    ];
+
+    let mut args: Vec<String> = script
+        .iter()
+        .flat_map(|line| ["-e".to_string(), line.to_string()])
+        .collect();
+
+    // `command` is one string that Ghostty hands to a shell, so this half does need
+    // quoting — and it is the only half that does.
+    let command = std::iter::once(exe.to_string())
+        .chain(extra.iter().cloned())
+        .map(|part| format!("'{}'", part.replace('\'', r"'\''")))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    args.extend([cwd.to_string(), command]);
+    args.extend(env.iter().cloned());
+
+    ("osascript".to_string(), args)
 }
 
 /// Shut the outgoing device down when the run moves off it.
@@ -1192,6 +1485,54 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
             false
         }
 
+        // 8.4: a second frun, in a new terminal tab, on the highlighted row.
+        //
+        // This tab is untouched. Nothing is killed, no state changes, and the list
+        // stays open — the pick was about the other tab, so closing the list here
+        // would answer a question nobody asked, and leaving it open turns one scan
+        // into a dispatcher for several devices.
+        Action::NewTab => {
+            let Some(device) = app.selected().cloned() else {
+                return false;
+            };
+
+            match new_tab(&device.id, &ctx.extra) {
+                Ok(()) => app.log(Level::Inf, &format!("new tab — {}", device.name)),
+
+                // Reported, never fatal. A tab that did not open must not take a
+                // live run with it.
+                Err(reason) => app.log(Level::Err, &format!("new tab failed — {reason}")),
+            }
+
+            false
+        }
+
+        // Graceful, and deliberately the same mechanism as `q`: Flutter is asked to
+        // shut itself down and frun waits for the pty to close. The only difference
+        // is where it lands afterwards, which is what `app.stopping` records.
+        //
+        // No escalation ladder behind this. If Flutter is wedged and ignores the
+        // request, `^C` still ends the process — that is what keeping `^C` as force
+        // stop buys, and a timeout that killed the child would be a second answer to
+        // a question the user already has a key for.
+        Action::StopRun => {
+            if ctx.session.is_none() || !app.state.has_build() {
+                return false;
+            }
+
+            app.stopping = true;
+
+            // Before the interactive session opens there is no `q` to read: a build
+            // is Gradle or Xcode, and only a signal reaches it.
+            if app.state.build_done() {
+                forward(ctx, b"q");
+            } else if let Some(session) = &mut ctx.session {
+                session.interrupt();
+            }
+
+            false
+        }
+
         Action::StartDevice => enter(app, ctx),
 
         // Graceful: Flutter receives the key and shuts itself down (⏏). The loop
@@ -1315,5 +1656,96 @@ mod tests {
         let err = parse(&owned).expect_err("should reject");
 
         assert!(err.to_string().contains("running"), "{err}");
+    }
+
+    /// 8.4: what the new tab is told, in both mechanisms.
+    ///
+    /// The spawn itself cannot be reached from here — it needs a real terminal — so
+    /// this asserts the two things that would break silently: the device has to
+    /// travel in `FRUN_DEVICE`, and the flags this run was given have to travel with
+    /// it, or the second tab quietly builds a different flavour.
+    /// 8.4: what the new tab is told, in both mechanisms.
+    ///
+    /// The spawn itself cannot be reached from here — it needs a real terminal — so
+    /// this asserts the three things that would break silently: the device has to
+    /// travel in `FRUN_DEVICE`, the flags this run was given have to travel with it
+    /// or the second tab quietly builds a different flavour, and `PATH` has to travel
+    /// or the second tab cannot find `fvm` at all.
+    #[test]
+    fn a_new_tab_is_handed_the_device_the_flags_and_a_usable_path() {
+        let extra = vec!["--flavor".to_string(), "staging".to_string()];
+        let env = vec![
+            "FRUN_DEVICE=emulator-5554".to_string(),
+            "PATH=/opt/homebrew/bin".to_string(),
+        ];
+
+        let (program, args) = tab_command("/bin/frun", "/p", &env, &extra, true);
+
+        assert_eq!(program, "tmux");
+        assert_eq!(
+            args,
+            [
+                "new-window",
+                "-c",
+                "/p",
+                "-e",
+                "FRUN_DEVICE=emulator-5554",
+                "-e",
+                "PATH=/opt/homebrew/bin",
+                "/bin/frun",
+                "--flavor",
+                "staging",
+            ]
+        );
+
+        let (program, args) = tab_command("/bin/frun", "/p", &env, &extra, false);
+
+        assert_eq!(program, "osascript");
+
+        // Positional, after the script: everything the AppleScript reads out of
+        // `argv`, in the order it reads it.
+        assert_eq!(
+            args[args.len() - 4..],
+            [
+                "/p".to_string(),
+                "'/bin/frun' '--flavor' 'staging'".to_string(),
+                "FRUN_DEVICE=emulator-5554".to_string(),
+                "PATH=/opt/homebrew/bin".to_string(),
+            ]
+        );
+
+        assert!(
+            args.iter()
+                .any(|arg| arg == "new tab in front window with configuration cfg"),
+            "the script must actually open a tab: {args:?}"
+        );
+    }
+
+    /// `PATH` is the one variable the new tab cannot do without: a Ghostty surface
+    /// started with a command runs no shell, so nothing else would set it.
+    #[test]
+    fn the_handoff_carries_this_processs_path() {
+        let env = handoff_env("emulator-5554");
+
+        assert_eq!(env[0], "FRUN_DEVICE=emulator-5554");
+        assert!(
+            env.iter().any(|entry| entry.starts_with("PATH=")),
+            "PATH must be handed over: {env:?}"
+        );
+    }
+
+    /// A single quote in a path or a flag must not end the quoting.
+    #[test]
+    fn a_quote_in_an_argument_cannot_break_out() {
+        let extra = vec!["--dart-define=NAME=o'brien".to_string()];
+        let env = vec!["FRUN_DEVICE=x".to_string()];
+        let (_, args) = tab_command("/bin/frun", "/p", &env, &extra, false);
+
+        let command = &args[args.len() - 2];
+
+        assert_eq!(
+            command, r"'/bin/frun' '--dart-define=NAME=o'\''brien'",
+            "quoting escaped: {command}"
+        );
     }
 }

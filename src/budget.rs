@@ -53,9 +53,16 @@ pub struct Budget {
     pub roomy_devices: bool,
     /// 3. Build tracker collapses to a single summary line.
     ///
-    /// State-dependent as much as size-dependent: once the build has
-    /// succeeded, every row the tracker holds is static, so it has no claim on
-    /// nine rows while the only changing region is starved.
+    /// Decided by state before the ladder runs, and only reached *as* a rung
+    /// while a build is in progress. Once the build has settled the tracker holds
+    /// nothing that changes — five labels and their frozen durations — so it has
+    /// no claim on nine rows at any size, and `solve` switches it off before the
+    /// first concession is considered. See `State::build_settled`.
+    ///
+    /// It stays in the ladder for the `BUILDING` and `BUILD_FAILED` cases, where
+    /// the rows are load-bearing but a very short terminal may still have to have
+    /// them: without that rung a 14-row window during a build cannot be made to
+    /// fit, and a layout that overflows is clipped in silence (7.5).
     pub full_build: bool,
     /// 4. Both cards collapse to one metadata row each.
     pub full_cards: bool,
@@ -75,36 +82,23 @@ impl Budget {
     /// Turn off the next cheapest element. Returns false when nothing is left
     /// to give up.
     ///
-    /// The order is 6.2's table, with the one swap that table's own footnote
-    /// asks for: rung 3 is state-dependent, and once the build has finished it
-    /// is no longer the third-cheapest thing on screen but the first. Every row
-    /// the tracker then holds is static — five stage labels and their final
-    /// durations — while the separators are structure on two cards that are
-    /// still being read, and the log window below is the only region changing.
+    /// One fixed order, 6.2's table, with no state branch in it any more. There
+    /// used to be one: rung 3 was promoted to first once the build had finished,
+    /// because a static tracker has a weaker claim than the separators on two cards
+    /// still being read. That reasoning was right and the mechanism was wrong — a
+    /// claim that weak is not a claim the *size* should have to defeat, so the
+    /// tracker now collapses on state alone and this list never has to rank it
+    /// against anything.
     ///
-    /// Getting this wrong was visible rather than theoretical. At 46 to 51 rows,
-    /// which is an ordinary Ghostty window at 12px, the fixed order paid for the
-    /// log floor out of the separators and kept nine rows of finished timings, so
-    /// both cards lost their rules the instant the app started logging.
-    ///
-    /// During the build the original order stands, and for the same reason: the
-    /// stage list is the thing moving, so it is the last thing to give up.
-    fn concede(&mut self, state: State) -> bool {
-        let order = if state.build_done() {
-            [
-                &mut self.full_build,
-                &mut self.separators,
-                &mut self.roomy_devices,
-                &mut self.full_cards,
-            ]
-        } else {
-            [
-                &mut self.separators,
-                &mut self.roomy_devices,
-                &mut self.full_build,
-                &mut self.full_cards,
-            ]
-        };
+    /// The rung it left behind is not dead: a build in progress keeps its stage
+    /// list, so `full_build` is still reachable here, and still last but one.
+    fn concede(&mut self) -> bool {
+        let order = [
+            &mut self.separators,
+            &mut self.roomy_devices,
+            &mut self.full_build,
+            &mut self.full_cards,
+        ];
 
         for flag in order {
             if *flag {
@@ -200,16 +194,18 @@ impl Budget {
         body + 2 + Self::TITLE_GAP
     }
 
-    /// BuildPhaseTracker. Taller once finished, because the summary row and the
-    /// full stage list are both present.
-    /// BuildPhaseTracker.
+    /// BuildPhaseTracker, for `stages` rows.
     ///
     /// ```text
     ///   progress bar                              1
     ///   blank                                     1
     ///   one row per stage                         5 finished / 3 mid-build
     /// ```
-    /// Height of the tracker, for `stages` rows.
+    ///
+    /// Only ever this tall while the build is running. Once it settles the card is
+    /// one borderless row and this returns 1, so the tallest the tracker gets is
+    /// the tallest it gets *mid-build* — which is also the moment the log window
+    /// has the least to show.
     ///
     /// The count is passed in rather than assumed. It was a fixed six, which left
     /// blank rows below `Starting Flutter` for phases that had not been announced
@@ -308,8 +304,15 @@ impl Budget {
         let mut budget = Self::full();
         let floor = Self::floor(state);
 
+        // Before the ladder, not inside it. A settled tracker is collapsed at every
+        // size, so this is not a concession the height forced and there is no
+        // configuration in which the height buys it back.
+        if state.build_settled() {
+            budget.full_build = false;
+        }
+
         while budget.chrome(state, stages) + floor > area.height {
-            if !budget.concede(state) {
+            if !budget.concede() {
                 break;
             }
         }
@@ -317,8 +320,8 @@ impl Budget {
         budget
     }
 
-    /// Human-readable report, used by `--rows`.
-    pub fn describe(&self) -> String {
+    /// Human-readable report, used by `--rows` and by the footer.
+    pub fn describe(&self, state: State) -> String {
         let mut given_up = Vec::new();
 
         if !self.separators {
@@ -327,7 +330,12 @@ impl Budget {
         if !self.roomy_devices {
             given_up.push("dense devices");
         }
-        if !self.full_build {
+        // Only when the size forced it. Once the build has settled the tracker is
+        // collapsed in every configuration, so naming it here would report a
+        // concession the layout did not make — and the footer prints this string, so
+        // it would have sat there reading `[build collapsed]` for the whole of every
+        // run. That is the same defect 6.3 describes for the expanded log view.
+        if !self.full_build && !state.build_settled() {
             given_up.push("build collapsed");
         }
         if !self.full_cards {
@@ -398,10 +406,17 @@ mod tests {
         assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 9);
         assert!(log_rows(45) >= LOG_MIN, "{} rows", log_rows(45));
 
-        // And a window tall enough to keep everything gains the same eight.
+        // And a window tall enough to keep every *rung* still collapses the
+        // tracker, because that is not a rung any more.
         let plan = Budget::solve(area(106, 60), State::Running, DONE);
-        assert_eq!(plan, Budget::full());
-        assert_eq!(60 - plan.chrome(State::Running, DONE), 24);
+        assert_eq!(
+            plan,
+            Budget {
+                full_build: false,
+                ..Budget::full()
+            }
+        );
+        assert_eq!(60 - plan.chrome(State::Running, DONE), 33);
     }
 
     /// Guards the failure mode that adding the title gap caused: the Layout is
@@ -433,49 +448,89 @@ mod tests {
         assert!(
             remaining >= LOG_MIN,
             "log window got {remaining} rows, floor is {LOG_MIN}, budget: {}",
-            budget.describe()
+            budget.describe(State::Running)
         );
     }
 
+    /// A tall window keeps every rung — and still collapses the tracker, which is
+    /// the whole of this change.
     #[test]
-    fn a_tall_window_keeps_everything() {
+    fn a_tall_window_keeps_every_rung_but_not_the_finished_tracker() {
         let budget = Budget::solve(area(106, 60), State::Running, DONE);
-        assert_eq!(budget, Budget::full());
+
+        assert!(budget.separators);
+        assert!(budget.roomy_devices);
+        assert!(budget.full_cards);
+        assert!(
+            !budget.full_build,
+            "a settled tracker is collapsed at any size"
+        );
     }
 
     #[test]
     fn concessions_happen_in_the_documented_order() {
         let mut b = Budget::full();
 
-        b.concede(State::Building);
+        b.concede();
         assert!(!b.separators, "separators go first");
 
-        b.concede(State::Building);
+        b.concede();
         assert!(!b.roomy_devices, "device rows go second");
 
-        b.concede(State::Building);
+        b.concede();
         assert!(!b.full_build, "the build tracker collapses third");
 
-        b.concede(State::Building);
+        b.concede();
         assert!(!b.full_cards, "the cards collapse last");
 
-        assert!(!b.concede(State::Building), "nothing left to give up");
+        assert!(!b.concede(), "nothing left to give up");
     }
 
-    /// 6.2's footnote to the table: rung 3 is state-dependent.
+    /// The tracker is collapsed by state, so it costs the ladder nothing.
+    ///
+    /// This replaces a test that asserted the opposite mechanism — that a finished
+    /// build was *conceded* first, ahead of the separators. Same outcome for the
+    /// separators, reached without the size having to decide it.
     #[test]
-    fn a_finished_build_pays_before_the_separators_do() {
-        let mut b = Budget::full();
+    fn a_settled_tracker_collapses_before_the_ladder_runs() {
+        // Tall enough that nothing is under pressure at all.
+        let plan = Budget::solve(area(106, 80), State::Running, DONE);
 
-        b.concede(State::Running);
-        assert!(
-            !b.full_build,
-            "a finished tracker is static, so it goes first"
+        assert!(!plan.full_build, "collapsed with rows to spare");
+        assert_eq!(
+            plan.describe(State::Running),
+            "full",
+            "and not reported as a concession, because none was made"
         );
-        assert!(b.separators, "and the separators survive it");
 
-        b.concede(State::Running);
-        assert!(!b.separators, "separators are next");
+        // `Stopped` is the case `build_done` missed: its tracker is just as frozen,
+        // and it used to be ranked as though the build were still in progress.
+        let stopped = Budget::solve(area(106, 45), State::Stopped, DONE);
+
+        assert!(!stopped.full_build);
+        assert!(
+            stopped.separators && stopped.roomy_devices,
+            "which is what those nine rows were being paid for: {}",
+            stopped.describe(State::Stopped)
+        );
+    }
+
+    /// A build in progress still has the rung, and a 14-row terminal needs it.
+    ///
+    /// Removing `full_build` from `concede` entirely was the tempting version of
+    /// this change and it does not fit: at `MIN_H` a build with every card already
+    /// collapsed is still 19 rows if the tracker is expanded, and a layout charged
+    /// more rows than it has is clipped in silence (7.5).
+    #[test]
+    fn a_short_terminal_can_still_collapse_a_running_tracker() {
+        let plan = Budget::solve(area(60, MIN_H), State::Building, 8);
+
+        assert!(!plan.full_build, "nothing else can free enough rows");
+        assert!(
+            plan.chrome(State::Building, 8) + Budget::floor(State::Building) <= MIN_H,
+            "chrome {} must fit in {MIN_H}",
+            plan.chrome(State::Building, 8)
+        );
     }
 
     /// The regression this order exists for: an ordinary Ghostty window at 12px
@@ -490,13 +545,13 @@ mod tests {
             assert!(
                 plan.separators,
                 "{h} rows dropped the separators: {}",
-                plan.describe()
+                plan.describe(State::Running)
             );
 
             assert!(
                 plan.full_cards,
                 "{h} rows collapsed the cards: {}",
-                plan.describe()
+                plan.describe(State::Running)
             );
 
             let log = h - plan.chrome(State::Running, 5);
