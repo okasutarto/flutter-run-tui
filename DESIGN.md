@@ -200,23 +200,27 @@ already the component describing what is being run and where.
   A pill rather than a bare word, matching the chips on a device row, since this is a
   state the device is in.
 
-* **`[^D] Switch Device` is a row inside the card, bottom-right.** It rode in the
-  top border beside the title, where it cost no rows, and two things paid for
-  bringing it in. A keycap drawn on a border cannot be clicked — there is no
-  rectangle to register, and 3.1 is explicit that a control doing nothing on click
-  is worse than no control — and every other card uses its top-right for a count, a
-  path or a status, never for a control. As a content row it gets a hit region, and
-  the top border went to the status the slot was always for.
+* **No control row. `[^D] Switch` is on the footer** (3.7), in the five states where
+  the key does something.
 
-  No separator and no blank above it. Brackets and the absence of a label facing it
-  are enough to keep it from reading as a fifth field's value, and the rule that
-  would have divided it off is a row the log window keeps instead. The card is 11
-  rows, and 6.2 charges the extra one: a row drawn past the charged height is
-  clipped in silence, which is how this card lost its `Type` field once.
+  It has been in three places. The top border beside the title, where it cost nothing
+  but could not be clicked and sat in the slot every other card uses for a status. Then
+  a row of its own at the bottom of the card, which fixed both of those and cost two
+  rows: the keycap, plus a blank above it to stop it reading as a fifth field's value —
+  a row spent saying that the row below it is not what it looks like. It was the only
+  row in the card with nothing facing it on the left, and it showed.
 
-  Advertised only where the key does something, which is `has_build` and a non-empty
-  device list — not the narrower `has_tracker` of 3.4. There is a run to move
-  throughout a run; there is a tracker for very little of one.
+  The footer was the answer both times and was skipped both times because `RUNNING` and
+  the reload states did not carry the key on that row. They do now. This is the third
+  in-card action row the project has removed, after the failure card's `[r] Retry Build
+  [q] Quit` and the picker's `↑↓ move  ⏎ run  Esc cancel`, and all three went for the
+  reason the second one's note gives best: the footer says it once and says it
+  everywhere.
+
+  So the card is a table of facts about the device and nothing else, ten rows, with the
+  one state it is in as a pill in its title. The label shortened to `Switch` on the way
+  out: the footer carries it in five states now instead of one, and the noun was never
+  load-bearing — the argument was `switch` against `change target`, which survives.
 
 * **`OS Version`, not `OS Version / Arch`.** The row is Flutter's
   `sdkNameAndVersion`, and no mobile platform puts an architecture in it:
@@ -821,7 +825,24 @@ dimensions were all decoration: none of them change a decision you are about
 to make, and the row is more useful spent on the keys that do.
 
 Contents adapt to the active state, since a key that does nothing here should
-not be advertised: `↑↓ Enter ⇧Enter Esc` during discovery, `r R q ^C` while running.
+not be advertised: `↑↓ Enter ⇧Enter Esc` during discovery, `r R ^D q ^C` while running.
+
+**Centred, at a fixed two columns between hints.** The group was flush right, and the
+reason given was that the right edge keeps it beside the diagnostics rather than leaving
+a gulf between them. That optimised for a companion which is usually absent: `proto n/12`
+is prototype-only, `mouse on` is off by default, and `[given up]` is empty whenever the
+layout is not conceding — which at the design size it no longer is. So the row was
+anchored to an empty slot, and under two full-width cards it read as a group shoved into
+a corner. Centred, it reads as a caption for the frame above it.
+
+Centred within the hints region rather than the whole row, so the diagnostics keep the
+slot they are given and nothing can overlap them. When there are none, that region is
+the whole row.
+
+Fixed spacing is the part of the older decision that stands. Space-between came first —
+the leftover split into equal gaps so the row spanned the full width — and it stretched
+the keys apart as the window grew, until reading the row meant crossing ninety columns
+of blank to find the next key.
 
 The discovery and switch rows read, in full:
 
@@ -837,10 +858,17 @@ it launches, in a new tab, whether or not this tab has a run behind it (8.4).
 **It fits at the floor, which is the question a fourth hint raises.** Labelled, the
 keycaps and words measure 53 columns plus 3 single-column gaps on the picker row and
 51 plus 3 on the switch row, against the 60 of `MIN_W`. Below that the row does what
-it already does for the seven-hint running state: it drops every *word* and keeps
+it already does for the eight-hint running state: it drops every *word* and keeps
 every *key*, since `[^C]` alone is still a key you can press and a truncated `[^C`
 is not. So the new hint cannot cost another hint its place — the failure mode it
 brings closer is a wordless row, not a missing key.
+
+**The running row is eight hints now, and it is the one that pays for that.** `[^D]
+Switch` joined it when the target card's control row was removed (3.2), and labelled the
+row measures 99 columns. It fits at the design width and drops to bare keycaps below
+about 100, where it used to keep its words down to about 86. That is the cost, taken
+knowingly: a 90-column terminal shows eight pressable keys without their words, rather
+than seven with words and an eighth that is only discoverable by reading the source.
 
 The right-hand group is optional and priority-ordered, dropped whole until it
 fits: mouse state, then what the layout gave up, then the prototype position.
@@ -1186,9 +1214,10 @@ draw rather than estimated:
   PROJECT INFO           12 rows   2 border + 1 title gap + 9 body
                                    body = metadata 6 + separators 3
                                    the logo shares these rows, it does not add any
-  DEVICE INFO            12 rows   2 border + 1 title gap + 9 body
-                                   body = 4 fields + 3 separators + blank + control
+  DEVICE INFO            10 rows   2 border + 1 title gap + 7 body
+                                   body = 4 fields + 3 separators
                                    the run status is a title-bar pill, not a row
+                                   [^D] is on the footer, not a row either
   BUILD PHASE            10 rows   2 border + 1 title gap + bar + blank + 5 stages
                                    the stage count is live, so this is the tallest
                                    case: an Android build with all five phases
@@ -1196,35 +1225,40 @@ draw rather than estimated:
   footer                  1 row
   gaps between blocks     3 rows   blocks - 1, not a constant
   ────────────────────────────────
-  TOTAL                  38 rows
+  TOTAL                  36 rows
 ```
 
 That is the tallest the frame ever gets, and it is a frame with a build in it.
 `RUNNING` is a different shape rather than a shorter version of it: the tracker
-block is absent there entirely (3.4), so the total is **27** — two cards, a footer
+block is absent there entirely (3.4), so the total is **25** — two cards, a footer
 and two gaps.
 
-**`STOPPED` is 27 as well, and that is deliberate.** Every fact the tracker's summary
+**`STOPPED` is 25 as well, and that is deliberate.** Every fact the tracker's summary
 row carried has a home that costs nothing — the two totals in the log card's title,
 the ending word as a pill in the target card's title — so the two frames are the same
 shape and the log window does not resize when a run ends. It used to grow a banner and
 push every line of the stream down two rows, at the moment the user is most likely to
 be reading one.
 
-At the 106x45 target that leaves the log window **18 rows**, against the **8** a
+At the 106x45 target that leaves the log window **20 rows**, against the **8** a
 five-line Dart exception occupies when wrapped at 84 columns of message space. Nothing
-is conceded at the design size any more; the ladder below starts mattering at 39 rows
+is conceded at the design size any more; the ladder below starts mattering at 37 rows
 and under.
 
-This total has come down three times, and every time the rows went to the log
-window rather than back to the layout. It was 45, leaving nothing at all, until the
-prompt bar and its gap were removed (3.6). It was 41 until the target card gave up
-its status banner and its command string, with the blank each of them needed (3.2).
-It was 27 for a run until the settled tracker's row and gap went too (3.4) — offset
-by the two rows the switch control took when it moved out of the card's border onto a
-row of its own with a blank above it, the only rows in this document's history to have
-gone the other way. They bought a clickable control, and they vacated the title slot
-the run status now uses.
+This total has come down four times, and every time the rows went to the log window
+rather than back to the layout. It was 45, leaving nothing at all, until the prompt bar
+and its gap were removed (3.6). It was 41 until the target card gave up its status
+banner and its command string, with the blank each of them needed (3.2). It was 27 for
+a run until the settled tracker's row and gap went too (3.4). And it is 25 now that
+`[^D] Switch` and the blank above it left the target card for the footer, which is the
+third in-card action row to go that way.
+
+**Every one of those four was the same mistake and the same fix.** A component held a
+row for something a border row or a shared row was already carrying, or could carry for
+nothing: a command string that described an argv, a banner whose every fact was in the
+table beneath it, a summary whose numbers now sit in the log card's title, a keycap that
+belongs on the cheatsheet. Nothing was reorganised for tidiness — each time the question
+was which component *owns* the fact, and the row followed the answer.
 
 **The tracker's height follows the number of rows it actually has.** `build_h`
 takes the count rather than assuming one, so the card is four rows tall while four
@@ -2617,8 +2651,9 @@ half of the `Msg`-identity problem, and it is done.
 
 ### 8.5 Switching device (built)
 
-**Done.** `[^D] Switch Device`, advertised in the target card's own border and
-reachable from every state that has a run behind it.
+**Done.** `[^D] Switch`, advertised on the footer and reachable from every state that
+has a run behind it. It was in the target card's border when this was written, then a
+row inside the card, and 3.2 has the reasoning for both moves.
 
 **The description was wrong in a way that mattered.** `flutter run` is bound to its
 device at spawn — `Session::spawn` builds `flutter run -d <id>` — and Flutter has
@@ -2627,9 +2662,10 @@ to "change" on a running session.
 
 So "reuse the session" can only mean reuse the **tab**: its position, its scroll,
 and its log history. The Flutter process is killed, reaped and respawned. The label
-carries that: `Switch Device`, not `Change target (this session)`, because a label
-that reads like a live switch leaves the user watching a forty-second Gradle build
-and concluding the tool has hung.
+carries that: `Switch`, not `Change target (this session)`, because a label that reads
+like a live switch leaves the user watching a forty-second Gradle build and concluding
+the tool has hung. The noun was dropped when the footer took the key in five states
+rather than one; the verb is what the argument was about.
 
 The respawn was already load-bearing. `Action::RetryBuild` kills, reaps, resets
 stage state and respawns, and it deliberately *keeps* the previous log rather than
@@ -2647,7 +2683,6 @@ alive, as a state of its own — `Switching`, slug `switch`:
 ```text
    ╭─ ◆ DEVICE INFO ─────────────────────────────────────────────╮
    │ Device Target                             Pixel 10 Pro XL  │   8  Running
-   │                                       [^D] Switch Device    │
    ╰──────────────────────────────────────────────────────────────╯
    ╭─ ◆ APP LOGS STREAM ─────────────────────────────────────────╮
                               │ ^D
@@ -2803,7 +2838,7 @@ Five decisions inside the flow, each of which could have gone the other way:
   Chrome, where the nearest equivalent would be closing the user's browser.
 * **Picking the device that is already running is a return, not a rebuild.** Its row
   is the highlighted one when the list opens, so a reflexive `Enter` lands on it,
-  and `Switch Device` does not promise a rebuild.
+  and `Switch` does not promise a rebuild.
 * **`^D` works during `Building` too**, not just once the app is up — bailing out
   of a slow build onto another device is the case that wants it most.
 * **No marker line in the log.** The log is not cleared across a switch, so the
@@ -2989,10 +3024,9 @@ make a deliberate stop read as something breaking.
 
 ```text
 ╭─ ◆ DEVICE INFO ────────────────────────────────   STOPPED  ╮
-│                                         [^D] Switch Device  │
 ╰──────────────────────────────────────────────────────────────╯
 ╭─ ◆ APP LOGS STREAM ──── Build time 3.4s   Sync 240ms  [8 entries] ╮
-  [r] Build again   [^D] Switch Device   [↑↓] Scroll   [e] Expand   [q] Quit
+      [r] Build again   [^D] Switch   [↑↓] Scroll   [e] Expand   [q] Quit
 ```
 
 **Which word appears is the whole of this section**, and it is the title-bar pill of

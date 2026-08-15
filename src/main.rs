@@ -1222,6 +1222,13 @@ fn child_exited(app: &mut App, ctx: &mut Ctx) {
     }
 
     if app.run_state().has_build() {
+        // The child is gone here as surely as in the two branches above, and leaving
+        // the handle behind made frun believe otherwise: `enter` reads
+        // `ctx.session.is_some()` to decide that re-picking the current device is a
+        // free return, so after a failed build that row silently restored the failure
+        // frame instead of rebuilding. `Session::exit_code` has already been read.
+        ctx.session = None;
+
         app.end_build();
         app.exit_code = code;
         app.failure = Some(flutter::failure(app, code));

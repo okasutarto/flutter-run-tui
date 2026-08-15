@@ -171,8 +171,6 @@ impl Budget {
     ///
     /// ```text
     ///   Device Target / Platform ID / OS / Type   4
-    ///   blank                                     1
-    ///   [^D] Switch Device                        1
     ///   separators between the four fields        3   (optional)
     /// ```
     ///
@@ -183,22 +181,21 @@ impl Budget {
     /// that `Session::spawn` builds for itself. Four rows, handed to the log
     /// window.
     ///
-    /// The last two rows are the switch control and the blank above it. The control
-    /// used to ride in the border beside the title and cost nothing; it is a real row
-    /// now, and charging both here is not optional — a row drawn past the charged
-    /// height is clipped in silence, and this is the exact card that lost its `Type`
-    /// field that way.
+    /// Back to four after a detour through six. `[^D] Switch` was briefly a row here,
+    /// with a blank above it to stop it reading as a fifth field's value — two rows
+    /// for one key, in the only row of the card with nothing facing it on the left.
+    /// The footer carries it now (3.7), which is where the failure card's action row
+    /// and the picker's hint row both ended up for the same reason.
     ///
-    /// A blank rather than a separator, and the row is spent either way. Under `Type`
-    /// with nothing between them the keycap read as a fifth field's value, so the gap
-    /// is doing work; a rule would do the same work and divide the card in two while
-    /// it did it.
+    /// Nothing else in this card is a control, so this is a pure fact table again and
+    /// the height is the table's. The one state the card reports is a pill in its
+    /// title bar, which is a border row and costs nothing.
     pub fn target_h(&self) -> u16 {
         if !self.full_cards {
             return 1;
         }
 
-        let mut body = 6;
+        let mut body = 4;
 
         if self.separators {
             body += 3;

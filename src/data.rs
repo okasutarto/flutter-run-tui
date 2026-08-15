@@ -221,6 +221,21 @@ impl State {
         )
     }
 
+    /// Whether there is still a child behind this frame — something a switch would
+    /// be leaving, and something `Esc` could return to.
+    ///
+    /// `has_build()` is not the same question and using it for this was the bug: it
+    /// includes `BuildFailed`, where the pty has already closed. A device switched
+    /// away from after a failed build was still marked ` running ` in the list, with
+    /// a ` ⏎ Keep ` offering to keep a session that had exited — the same falsehood
+    /// `Stopped` was already excluded for, arrived at one state earlier.
+    ///
+    /// `Building` counts: the child is alive and mid-build, and `Esc` puts the
+    /// tracker back exactly where the parser has moved it to.
+    pub fn holds_session(self) -> bool {
+        matches!(self, State::Building) || self.build_done()
+    }
+
     // `build_settled()` was here — `build_done() || self == Stopped`, "the tracker's
     // rows have stopped moving, which is what collapses it". Both of its callers are
     // gone: `Budget::solve` asks `has_tracker` (is there a block at all) and
@@ -530,7 +545,13 @@ impl Action {
             // Not "Change target": the run is killed and rebuilt, and a label
             // that reads like a live switch would leave the user thinking the
             // tool had hung through a forty-second Gradle build.
-            Action::Switch => "Switch Device",
+            //
+            // `Switch` and not `Switch Device`, since the footer carries this in five
+            // states now rather than one. The noun was never load-bearing — the
+            // argument above is about `switch` versus `change`, and it survives the
+            // cut — and seven columns on a row that must never truncate is what the
+            // run states had left to give.
+            Action::Switch => "Switch",
             // The same words in the picker and in the switch list, deliberately.
             // `⏎` changes meaning between those two frames and has to say which it
             // means; `⇧⏎` does not — it launches, in a new tab, either way.

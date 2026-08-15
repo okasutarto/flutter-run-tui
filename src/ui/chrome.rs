@@ -104,6 +104,7 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
         State::SingleDevice => vec![hint(Action::Stop, theme::ROSE)],
 
         State::Building => vec![
+            hint(Action::Switch, theme::CYAN),
             hint(Action::StopRun, theme::AMBER),
             hint(Action::Stop, theme::ROSE),
         ],
@@ -131,6 +132,18 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
             vec![
                 hint(Action::Reload, theme::AMBER),
                 hint(Action::Restart, theme::PURPLE),
+                // Third, with the two keys that also act on the run, and ahead of the
+                // two that only move the view. It used to be a row inside the target
+                // card — a blank and a right-aligned keycap, two rows for one key,
+                // and the only row in that card without a label facing it.
+                //
+                // The card was where it lived because this row did not carry it, so
+                // moving it here is a relocation and not a second copy. It is also
+                // the third in-card action row this project has removed for the same
+                // reason: the failure card's `[r] Retry Build  [q] Quit` and the
+                // picker's `↑↓ move  ⏎ run  Esc cancel` both went on the grounds that
+                // the footer says it once and says it everywhere.
+                hint(Action::Switch, theme::CYAN),
                 ("↑↓", "Scroll", theme::CYAN, None),
                 ("e", expand, theme::CYAN, None),
                 hint(Action::StopRun, theme::AMBER),
@@ -289,23 +302,37 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
             .spacing(if right.is_empty() { 0 } else { 2 })
             .split(area);
 
-    // Right-aligned, at a fixed two columns between hints.
+    // Centred, at a fixed two columns between hints.
     //
     // Space-between came first: the leftover was split into equal gaps so the row
     // spanned the full width. It kept the keys in the same place at any size, but it
     // also stretched them apart from each other as the window grew, until reading
     // the row meant crossing ninety columns of blank to find the next key. Fixed
-    // spacing keeps the group readable as a group, and putting it on the right edge
-    // keeps it next to the diagnostics rather than leaving a gulf between them.
+    // spacing is what keeps the group readable as a group, and it is the part of
+    // that decision that still holds.
     //
-    // Equal-ratio columns were the first attempt before that and they clip: seven
-    // hints across ninety columns gives thirteen each, and `[^C] Force stop` needs
-    // fifteen. Forcing equal widths on unequal content truncates the longest, which
-    // on a cheatsheet is the worst thing it can do.
+    // Where the group sits has moved once since. It was flush right, on the grounds
+    // that the right edge keeps it next to the diagnostics rather than leaving a gulf
+    // between them. That reasoning optimised for a companion that is usually not
+    // there: `proto n/13` is prototype-only, `mouse on` is off by default, and
+    // `[given up]` is empty whenever the layout is not conceding — which at the design
+    // size it no longer is. So the row was being anchored to an empty slot, and it
+    // read as a group shoved into a corner under two full-width cards.
     //
-    // Clamped: below the width the row needs, this is the left edge, and the tiers
+    // Centred, it reads as a caption for the frame above it.
+    //
+    // Equal-ratio columns were the first attempt before all of this and they clip:
+    // seven hints across ninety columns gives thirteen each, and `[^C] Force stop`
+    // needs fifteen. Forcing equal widths on unequal content truncates the longest,
+    // which on a cheatsheet is the worst thing it can do.
+    //
+    // Centred in `cols[0]` rather than in the whole row, so the diagnostics keep the
+    // slot they were given and nothing can overlap them. When there are none — the
+    // usual case — `cols[0]` *is* the whole row.
+    //
+    // Clamped: below the width the row needs this is the left edge, and the tiers
     // above have already given up the spacing and then the words.
-    let mut x = cols[0].x + cols[0].width.saturating_sub(content as u16);
+    let mut x = cols[0].x + cols[0].width.saturating_sub(content as u16) / 2;
 
     for ((spans, width), (_, _, _, action)) in rendered.into_iter().zip(&natural).zip(&hints) {
         let slot = Rect {

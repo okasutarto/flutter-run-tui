@@ -11,9 +11,9 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
-use crate::data::{Action, App, Hit};
+use crate::data::App;
 use crate::theme;
-use crate::widgets::{card, field, keycap, pill, separator, spread, strong, text};
+use crate::widgets::{card, field, pill, separator, spread, strong, text};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     if app.target.is_none() {
@@ -86,15 +86,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
 
     let w = inner.width;
 
-    // Advertised only where the key does something. Before a run there is no
-    // session to move, and with no cached list there is nothing to move it to.
-    //
-    // `has_build`, deliberately, and not the narrower `has_tracker` the frame uses
-    // to decide whether the tracker block is laid out: this asks whether there is a
-    // run to move, which is true throughout a run, and the tracker is absent for
-    // most of one.
-    let switch = app.state.has_build() && !app.devices.is_empty();
-
     // No active-status banner, and no command string. Both were in DESIGN.md 3.2
     // and both are gone, for four rows.
     //
@@ -108,9 +99,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // `Session::spawn` builds its own argv, so nothing depended on it, and the
     // device it names is the row directly above it. Two rows plus its blank
     // separator, in the state where the log window is hungriest.
-    // Bound here rather than at the top of the function, because the `Hit` at the
-    // bottom needs `&mut app` and a borrow taken before the early returns would
-    // still be live at that point.
     let device = app
         .target
         .as_ref()
@@ -177,74 +165,22 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         vec![strong(app.target_kind(), theme::PURPLE)],
     ));
 
-    // The switch control, on a row of its own inside the card.
+    // No control row. `[^D] Switch` closed this card for a while — a blank and a
+    // right-aligned keycap — and it is on the footer now, in the five states where
+    // the key does something (3.7).
     //
-    // It used to ride in the border beside the title, where it cost no rows at all,
-    // and that was the whole argument for putting it there. Two things paid for
-    // moving it in. The top border is now one label and nothing else, which is what
-    // every other card's top-left says and what its top-right is for — a count, a
-    // path, a status — never a control. And a keycap drawn on a border is not
-    // clickable: `render` took `&App`, so there was nowhere to register a `Hit`, and
-    // 3.1 is explicit that a control which does nothing on click is worse than no
-    // control. As a content row it is a rectangle, so it gets one.
+    // Two rows for one key was the cost, and the shape was the reason. It was the
+    // only row in the card with nothing facing it on the left: eight rows of
+    // label-and-value, then a keycap alone in the whitespace. The blank above it
+    // existed to stop it reading as a fifth field's value, which is a row spent
+    // saying that the row below it is not what it looks like.
     //
-    // Right-aligned, on its own row below `Type`, with a blank row between the two
-    // and no separator.
-    //
-    // The blank is what stops it reading as a fifth field's value. Sitting directly
-    // under `Type` it was the fourth row of a four-row table, right-aligned in the
-    // column the values occupy, and the eye groups by proximity before it reads
-    // brackets — so the keycap arrived as data belonging to the row above it. A blank
-    // says the table ended without spending a rule on saying it.
-    //
-    // A separator would say the same thing and say it louder than a control needs.
-    // Both cost one row; the blank is the one that does not divide the card in two.
-    let mut right = Vec::new();
-
-    if switch {
-        right.extend(keycap(Action::Switch.key(), theme::CYAN));
-        right.push(text(format!(" {}", Action::Switch.label()), theme::MUTED));
-    }
-
-    // The row is charged in `target_h` unconditionally, so it is drawn
-    // unconditionally: skipping it when empty would leave a blank row above the
-    // bottom border in the states that have no control, and drawing an empty
-    // `spread` costs the same nothing.
-    let control = {
-        // Measured, not counted: `^D` is two cells in one glyph short of it, and the
-        // hit rectangle has to sit exactly under what was drawn.
-        //
-        // Read after the blank is pushed, so it is the control's own row and not the
-        // gap above it — a hit rectangle one row high, registered one row too early,
-        // is a click that lands on nothing.
-        let width: usize = right.iter().map(Span::width).sum();
-
-        lines.push(Line::default());
-        let row = lines.len() as u16;
-
-        lines.push(spread(w, Vec::new(), right));
-
-        // No control, no region. `spread` pads an empty group to nothing, so the
-        // rectangle would be zero-wide at the right border — a click target that
-        // cannot be hit but is still consulted on every mouse event.
-        (width > 0).then(|| Rect {
-            x: inner.x + inner.width.saturating_sub(width as u16),
-            y: inner.y + row,
-            width: width as u16,
-            height: 1,
-        })
-    };
-
+    // The footer already owned this job. The failure card's `[r] Retry Build
+    // [q] Quit` and the picker's `↑↓ move  ⏎ run  Esc cancel` were both removed on
+    // the same grounds, and this was the third and last of them. The card is a table
+    // of facts about the device again, with the one state it is in as a pill in its
+    // title.
     frame.render_widget(Paragraph::new(lines), inner);
-
-    // After the draw, which is what releases the borrow on `app.target` that every
-    // line above holds.
-    if let Some(area) = control {
-        app.hits.push(Hit {
-            area,
-            action: Action::Switch,
-        });
-    }
 }
 
 /// `android-arm64 (emulator-5554)`.

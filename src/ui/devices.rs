@@ -179,11 +179,17 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // Outside `Switching` there is no run yet: `app.target` is either empty or, in
     // the mocks, a device that shares an id with a row it has no relationship to.
     //
-    // The `Stopped` case is the one worth spelling out. The list can be opened from
-    // there too, and the device is still booted, but the app on it is gone — so
-    // ` running ` would be false and ` ⏎ Keep ` would offer to keep nothing. That row
-    // still carries ` active ` and ` last used `, which is all that is true of it.
-    let running_id = if app.state == State::Switching && app.run_state() != State::Stopped {
+    // The dead cases are the ones worth spelling out, and there are two. The list can
+    // be opened from `Stopped`, where the device is still booted but the app on it is
+    // gone; and from `BuildFailed`, where the run never opened at all — a device
+    // switched off mid-build lands there, which is how this was found. In both,
+    // ` running ` is false and ` ⏎ Keep ` offers to keep nothing. Those rows still
+    // carry ` active ` and ` last used `, which is all that is true of them.
+    //
+    // Asked as `holds_session`, so the two are one question. `!= Stopped` was the
+    // earlier spelling and it named the case instead of the property, which is why
+    // `BuildFailed` slipped past it.
+    let running_id = if app.state == State::Switching && app.run_state().holds_session() {
         app.target.as_ref().map(|device| device.id.clone())
     } else {
         None
