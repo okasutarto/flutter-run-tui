@@ -2,12 +2,20 @@
 .DS_Store
 
 # Design reference screenshots stay local: ten frames at ~90KB each is a lot of
-# history for files whose usefulness ends when the decision is made.
+# history for files whose usefulness ends when the decision is made. They are also
+# mockups of the v1 design rather than captures of this program, so they describe a
+# UI that no longer exists.
 #
 # The logo is different. `include_bytes!` pulls it in at compile time, so it is a
 # build input, not a reference: without it a fresh clone does not compile. The
 # directory has to be excluded with a wildcard rather than by name, because git
 # will not re-include a file inside an excluded directory.
+#
+# `screens/` is tracked for the same reason as the logo, one step removed: the
+# README embeds it, so a clone without it renders with broken images. Captures of
+# the running program, not mockups — the distinction the paragraph above is about.
 /assets/*
 !/assets/flutter-trim.png
 !/assets/flutter.png
+!/assets/screens/
+!/assets/screens/*.png
