@@ -23,7 +23,9 @@ pub use crate::probe::{Device, Platform};
 // States
 // ============================================================
 
-/// The eleven frames from DESIGN.md section 4, in flow order.
+/// The eleven frames from DESIGN.md section 4, in flow order, and the switch list
+/// from 8.5 after them — it is reachable from six of the eleven rather than from
+/// one, so it has no place in the flow order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
     /// 1. `fvm flutter devices --machine` is running.
@@ -48,10 +50,18 @@ pub enum State {
     ReloadFailed,
     /// 11. Flutter never acknowledged the key at all.
     ReloadDropped,
+    /// 12. `^D`: the target list, reopened over a run that is still alive (8.5).
+    ///
+    /// Not `MultipleDevices` with a flag on it. The frame differs in four places —
+    /// its title, the badge on the row already running, what `Esc` means, and the
+    /// three cards that stay on screen — and a state is what the `--dump` harness
+    /// can reach. A field on another state is a frame nothing can render on
+    /// demand, which is the same as a frame nobody checks.
+    Switching,
 }
 
 impl State {
-    pub const ALL: [State; 11] = [
+    pub const ALL: [State; 12] = [
         State::Detecting,
         State::NoDevices,
         State::Booting,
@@ -63,6 +73,7 @@ impl State {
         State::ReloadInFlight,
         State::ReloadFailed,
         State::ReloadDropped,
+        State::Switching,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -78,6 +89,7 @@ impl State {
             State::ReloadInFlight => "reload",
             State::ReloadFailed => "reload-failed",
             State::ReloadDropped => "reload-dropped",
+            State::Switching => "switch",
         }
     }
 
@@ -87,14 +99,27 @@ impl State {
 
     /// Whether a device has been chosen, which decides if the
     /// SelectedTargetCard has anything to show.
+    ///
+    /// `Switching` excluded with the pickers: while the list is up the card would
+    /// be describing the device you are leaving, directly above the row that says
+    /// the same thing with ` running `. The list gets those rows instead.
     pub fn has_target(self) -> bool {
         !matches!(
             self,
-            State::Detecting | State::NoDevices | State::Booting | State::MultipleDevices
+            State::Detecting
+                | State::NoDevices
+                | State::Booting
+                | State::MultipleDevices
+                | State::Switching
         )
     }
 
     /// Whether the build tracker is on screen.
+    ///
+    /// Not during `Switching`. The tracker there describes a build that is about to
+    /// be thrown away, and the rows are worth more to the list of devices that
+    /// replaces it. Code asking what the *run* is doing asks `App::run_state()`,
+    /// which is a different question from what is on screen.
     pub fn has_build(self) -> bool {
         matches!(
             self,
@@ -379,6 +404,8 @@ pub enum Action {
     Reload,
     Restart,
     RetryBuild,
+    /// Reopen the picker to move this run to another device, DESIGN.md 8.5.
+    Switch,
     StartDevice,
     Quit,
     Stop,
@@ -390,6 +417,11 @@ impl Action {
             Action::Reload => "r",
             Action::Restart => "R",
             Action::RetryBuild => "r",
+            // The first frun key that is not a plain letter, and the reason it is
+            // affordable: Flutter's interactive commands are all bare single
+            // bytes, so a modifier takes nothing from 5.1. `s` was the obvious
+            // mnemonic and is Flutter's screenshot key.
+            Action::Switch => "^D",
             Action::StartDevice => "⏎",
             Action::Quit => "q",
             Action::Stop => "^C",
@@ -401,6 +433,10 @@ impl Action {
             Action::Reload => "Hot reload",
             Action::Restart => "Hot restart",
             Action::RetryBuild => "Retry Build",
+            // Not "Change target": the run is killed and rebuilt, and a label
+            // that reads like a live switch would leave the user thinking the
+            // tool had hung through a forty-second Gradle build.
+            Action::Switch => "Switch Device",
             Action::StartDevice => "Start",
             // `q` and `^C` are not the same exit, so they are not merged.
             //
@@ -412,7 +448,7 @@ impl Action {
             // The labels have to carry that, otherwise two keys for one apparent
             // outcome look like an accident.
             Action::Quit => "Quit",
-            Action::Stop => "Force stop",
+            Action::Stop => "Stop",
         }
     }
 }
@@ -464,6 +500,29 @@ pub struct App {
     /// from it rather than copied out, so the card cannot describe a device that
     /// is not the one being run.
     pub target: Option<Device>,
+
+    /// Discovery is running again behind a list that is already on screen (8.5).
+    ///
+    /// Only for saying so in the title. The rows are swapped when the answer lands,
+    /// and a list that changes under the cursor with no explanation reads as a
+    /// glitch.
+    pub refreshing: bool,
+
+    /// Whether frun booted the current target itself.
+    ///
+    /// Decides one thing: whether the device is shut down again when the run moves
+    /// off it (8.5). A simulator that was already up belongs to whatever the user
+    /// had it open for, and closing it would be frun deciding that for them.
+    pub booted_target: bool,
+
+    /// Where `Esc` goes back to, and the one flag that says the picker is open
+    /// over a run that is still alive (DESIGN.md 8.5).
+    ///
+    /// `Some` only between `^D` and the pick that answers it. While it is set the
+    /// child keeps streaming, so `goto` banks its transitions here instead of
+    /// putting them on screen: a `Reloaded 12 libraries` arriving at the wrong
+    /// moment must not close the picker mid-choice.
+    pub resume: Option<State>,
 
     /// What is booting, and since when. The clock matters: Android waits on
     /// `sys.boot_completed` for up to three minutes and a spinner alone cannot
@@ -557,6 +616,9 @@ impl App {
             log_scroll: 0,
 
             target: None,
+            refreshing: false,
+            booted_target: false,
+            resume: None,
 
             boot_name: String::new(),
             boot_started: None,
@@ -608,8 +670,32 @@ impl App {
 
     /// Move to `state`. Carries no data with it: everything on screen is already
     /// in `self`, put there by whatever caused the transition.
+    ///
+    /// One exception, and it is the reason every transition goes through here:
+    /// while the picker is open over a live run (`resume`), the child is still
+    /// announcing reloads and failures. Those transitions are banked rather than
+    /// drawn, so the list cannot vanish under the user's cursor, and `Esc`
+    /// restores the state Flutter actually reached rather than the one it was in
+    /// when `^D` was pressed.
     pub fn goto(&mut self, state: State) {
+        if self.resume.is_some() {
+            self.resume = Some(state);
+            return;
+        }
+
         self.state = state;
+    }
+
+    /// What the run is doing, as opposed to what the screen is showing.
+    ///
+    /// The two differ in exactly one place: `Switching`, where the list is on
+    /// screen and the child behind it is still building or still up. Anything
+    /// reasoning about the *run* has to ask this instead of `state`. The case that
+    /// makes it load-bearing: if the app dies while the list is open, `child_exited`
+    /// reading `state` sees no build in progress and ends the process, throwing away
+    /// the failure it was called to report.
+    pub fn run_state(&self) -> State {
+        self.resume.unwrap_or(self.state)
     }
 
     pub fn log(&mut self, level: Level, message: &str) {
@@ -938,6 +1024,16 @@ impl App {
         self.reload_note = mock_reload_note(state).to_string();
         self.selected_device = 0;
         self.scroll = 0;
+
+        // The switch list is the one frame whose contents depend on each other: the
+        // badge marks the row whose id matches the target, so the mock target has to
+        // *be* a row in the mock list or the frame shows a switch away from a device
+        // that is not there. `resume` is what the live flow sets on `^D`, and `Esc`
+        // reads it back.
+        if state == State::Switching {
+            self.target = self.devices.first().cloned();
+            self.resume = Some(State::Running);
+        }
     }
 
     pub fn next_state(&mut self) {
@@ -1091,6 +1187,12 @@ fn mock_devices(state: State) -> Vec<Device> {
             devices
         }
 
+        // A run always arrives from that list, and the list is kept afterwards so
+        // `^D` can reopen it without re-running discovery (8.5). The mock has to
+        // hold one too: without it the target card's border cannot advertise the
+        // key that is there live, and `--dump switch` is an empty list.
+        s if s.has_build() || s == State::Switching => mock_devices(State::MultipleDevices),
+
         _ => Vec::new(),
     }
 }
@@ -1234,5 +1336,43 @@ fn mock_reload_note(state: State) -> &'static str {
         }
         State::ReloadDropped => "Hot reload not picked up by Flutter — press r again",
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The picker opened by `^D` sits over a child that is still talking, and
+    /// every one of those announcements arrives as a `goto`. Without the banking
+    /// in `goto` a reload landing at the wrong moment closes the list under the
+    /// cursor, and `Esc` afterwards restores a state Flutter has already left.
+    #[test]
+    fn a_live_transition_does_not_close_the_picker() {
+        let mut app = App::empty();
+        app.state = State::Running;
+
+        // `^D`: the list goes up, then the state behind it is banked.
+        app.goto(State::MultipleDevices);
+        app.resume = Some(State::Running);
+
+        // Flutter keeps going while the list is up.
+        app.goto(State::ReloadFailed);
+
+        assert_eq!(
+            app.state,
+            State::MultipleDevices,
+            "the list has to survive a transition from the live child"
+        );
+
+        // `Esc`.
+        let back = app.resume.take().expect("a state to go back to");
+        app.goto(back);
+
+        assert_eq!(
+            app.state,
+            State::ReloadFailed,
+            "what Flutter reached while the list was up is what comes back"
+        );
     }
 }

@@ -109,21 +109,25 @@ pub fn rows(app: &App, width: u16) -> String {
 
     out.push_str(&format!("state {}   width {width}\n\n", app.state.slug()));
 
-    out.push_str("  rows   log   given up\n");
+    // `mid`, not `log`: the flexible region is the log window in some states, the
+    // failure card in one and the switch list in another, and each has its own
+    // floor. Naming the column after one of them made the other two look wrong.
+    out.push_str("  rows   mid   given up\n");
     out.push_str("  ────   ───   ────────\n");
 
     for h in [20u16, 24, 29, 33, 37, 40, 45, 50, 56, 62] {
         let plan = Budget::solve(Rect::new(0, 0, width, h), app.state, app.stages.len());
         let chrome = plan.chrome(app.state, app.stages.len());
-        let log = h.saturating_sub(chrome);
+        let mid = h.saturating_sub(chrome);
 
-        out.push_str(&format!("  {h:>4}   {log:>3}   {}\n", plan.describe()));
+        out.push_str(&format!("  {h:>4}   {mid:>3}   {}\n", plan.describe()));
     }
 
     out.push_str(&format!(
-        "\n  full chrome = {} rows   ·   log floor = {} rows\n",
-        Budget::solve(Rect::new(0, 0, width, 200), app.state, app.stages.len()).chrome(app.state, app.stages.len()),
-        crate::budget::LOG_MIN,
+        "\n  full chrome = {} rows   ·   floor = {} rows\n",
+        Budget::solve(Rect::new(0, 0, width, 200), app.state, app.stages.len())
+            .chrome(app.state, app.stages.len()),
+        Budget::floor(app.state),
     ));
 
     out
@@ -256,6 +260,41 @@ mod tests {
                 state.slug()
             );
         }
+    }
+
+    /// The switch list draws the same rows as the first pick and means something
+    /// else by them, so the three places that say so are checked together.
+    ///
+    /// They are one frame's worth of difference: a title, a badge on the row the
+    /// run is on, and a footer where `Esc` goes back instead of cancelling out with
+    /// 130. Any one of them silently reverting to the `SELECT DEVICE` wording would
+    /// leave a frame that reads like a first launch and is not one.
+    #[test]
+    fn the_switch_list_says_it_is_replacing_a_run() {
+        let mut app = App::new(State::Switching);
+        let frame = dump(&mut app, 106, 45);
+
+        assert!(
+            frame.contains("SWITCH DEVICE") && !frame.contains("SELECT DEVICE"),
+            "the title has to distinguish a switch from a first pick:\n{frame}"
+        );
+
+        assert!(
+            frame.contains("running"),
+            "the row the run is on has to be marked:\n{frame}"
+        );
+
+        assert!(
+            frame.contains("Back") && !frame.contains("Cancel"),
+            "Esc returns to the run here, it does not exit with 130:\n{frame}"
+        );
+
+        // The target card and the tracker are off screen here, so the list has the
+        // frame to itself as the first picker does.
+        assert!(
+            !frame.contains("SELECTED DEVICE") && !frame.contains("Stage "),
+            "the cards describing the outgoing run should be gone:\n{frame}"
+        );
     }
 
     /// Scrolling back is bounded by the oldest row, and the bound is in visual

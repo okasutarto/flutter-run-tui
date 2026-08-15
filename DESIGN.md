@@ -775,6 +775,16 @@ with one exception noted at the end.
            │                                            │ 11 DROPPED       │
            └────────────────────────────────────────────┤ ⚠ press r again  │
                                                         └──────────────────┘
+
+  ^D from any of 6-11
+       │
+       ▼
+┌──────────────────────────────┐
+│ 12 SWITCH  (8.5)             │  the same target list, over the live run
+│ ⏎ other  → kill, reap, 6     │  the old device is shut down if frun booted it
+│ ⏎ same   → back, nothing done│
+│ Esc      → back, nothing done│
+└──────────────────────────────┘
 ```
 
 ### 4.1 Notes on the branches
@@ -798,6 +808,13 @@ key and shuts itself down (`⏏`). `^C` is an interrupt, and SIGINT is
 forwarded to the child (`⏹`). The existing implementation already
 distinguishes them and the UI should keep doing so.
 
+**State 12 is not a step in the flow, which is why it hangs off the side of it.**
+Every other frame is reached from exactly one place; this one is reached from six,
+and it returns to whichever of them it came from. It is a state rather than a flag
+on state 4 for a reason worth keeping: the two frames draw the same list and mean
+different things by it, and a frame that no `--dump` slug can name is a frame
+nothing checks (8.5).
+
 **Boot is a dead end today, and should not be.** After a successful boot the
 existing flow proceeds with a one-row device list it built itself, rather
 than re-querying Flutter, because `flutter devices --machine` costs several
@@ -814,10 +831,11 @@ Flutter untouched.
 
 | Key Binding | Target Action | Scope |
 | :--- | :--- | :--- |
-| `↑` / `↓` | Navigate target list | States 2, 4 |
-| `1`-`9` | Select the nth target directly | States 2, 4 |
-| `Enter` | Select device, or start the highlighted target | States 2, 4 |
+| `↑` / `↓` | Navigate target list | States 2, 4, 12 |
+| `1`-`9` | Select the nth target directly | States 2, 4, 12 |
+| `Enter` | Select device, or start the highlighted target | States 2, 4, 12 |
 | `Esc` | Cancel and exit (code 130) | States 1, 2, 4 |
+| `Esc` | Back to the run, nothing killed | State 12 |
 | `r` | Hot reload | States 8, 10, 11 |
 | `r` | Retry build — kill, reap, respawn | State 7 |
 | `R` | Hot restart | States 8, 10, 11 |
@@ -825,6 +843,7 @@ Flutter untouched.
 | `z` | Give the log window the whole frame | States 6, 8-11 |
 | `q` | Quit gracefully — Flutter shuts itself down (`⏏`) | States 6, 8-11 |
 | `^C` | Stop — SIGINT forwarded to Flutter (`⏹`) | Any |
+| `^D` | Switch device — reopen the target list over the live run (8.5) | States 6-11 |
 | `m` | Toggle mouse capture | Global |
 
 `:` is not bound. It used to open the command prompt, which is gone (3.6), so the
@@ -838,6 +857,10 @@ arrive unchanged.
 `j`, `k` and `z` are the three letters frun takes from Flutter beyond the table
 above, all three for the log window. Flutter binds none of them, and reaching a
 stack trace eight rows tall inside a twelve-row window is worth them.
+
+`^D` is not a fourth letter, and that is the point of it. Flutter's interactive
+commands are all bare single bytes, so a modifier costs nothing here — where the
+mnemonic `s` would have cost the screenshot key (8.3).
 
 ### 5.1 Key forwarding
 
@@ -902,7 +925,7 @@ draw rather than estimated:
   PROJECT INFO           12 rows   2 border + 1 title gap + 9 body
                                    body = metadata 6 + separators 3
                                    the logo shares these rows, it does not add any
-  SELECTED TARGET        10 rows   2 border + 1 title gap + 7 body
+  SELECTED DEVICE        10 rows   2 border + 1 title gap + 7 body
                                    body = 4 fields + 3 separators
   BUILD PHASE            10 rows   2 border + 1 title gap + bar + blank + 5 stages
                                    the stage count is live, so this is the tallest
@@ -955,8 +978,15 @@ Two notes on the arithmetic, both learned by getting it wrong:
 over; it is a floor that the cards must yield to.
 
 ```
-  LOG_MIN = 12 rows      enough for one wrapped exception plus context
+  LOG_MIN  = 12 rows     enough for one wrapped exception plus context
+  FAIL_MIN = 14 rows     the compiler-error card, whole
+  else        3 rows     the device lists, which scroll
 ```
+
+Two floors and a default, decided in one place — `Budget::floor(state)` — because
+the flexible middle is a different region in different states and `--rows` reports
+the number the solver used. A list needs no floor of its own: it scrolls, and in
+every state that shows one the cards above it are hidden anyway.
 
 The floor is defended during `BUILDING` as well, now that the log stream is on
 screen from the start of the build (3.5). In practice that costs the separators
@@ -1022,7 +1052,7 @@ wrapped rows per entry.
 
 ### 7.1 Status
 
-All eleven state frames render at any terminal size, and every value on them is
+All twelve state frames render at any terminal size, and every value on them is
 read from the machine.
 
 **What that claim rests on.** Three different levels of evidence, kept apart
@@ -1053,6 +1083,8 @@ executed.
 | 7.6 Merged picker | live | 16 rows on a real machine, running first, `Pixel_10_Pro_XL` de-duplicated against the running `emulator-5554` |
 
 | 7.6 Log scrolling | tested | rendered at a size where content overflows; asserts rows change and the offset was not clamped to zero |
+| 8.5 Switch device, the frame | tested | `--dump switch`; a test asserts the title, the `running` badge, `Esc → Back`, and that the target card and tracker are gone |
+| 8.5 Switch device, the respawn | **unrun** | kill, reap, respawn onto another device, and shutting the outgoing emulator down. No harness reaches the pty; needs a project and two devices |
 | 7.7 Zoom (`z`) | tested | fills the frame at the right width |
 | 7.7 Marker gap durations | tested | the gap fills on the next stage, and the final row stays blank |
 | Mouse capture | unrun | `m` toggles it; only the geometry is covered, by `--hits` |
@@ -1081,9 +1113,10 @@ What the live runs covered, for the record: a merged picker with 16 rows, a
 `NO_DEVICES` screen, a booted AVD and an attached-emulator run, a Gradle build
 reaching `build finished` in 10.6s, 908 log lines in one session, a hot reload, a
 hot restart, a build failure, a number hotkey selecting a row, `Esc` at the picker,
-and `q` from the log stream. Nine of the eleven state frames have been on screen
-with real data behind them. `RELOAD_DROPPED` has not, and `SINGLE_DEVICE` no longer
-can be.
+and `q` from the log stream. Nine of the twelve state frames have been on screen
+with real data behind them. `RELOAD_DROPPED` has not, `SINGLE_DEVICE` no longer can
+be, and `SWITCH` (8.5) has not been driven on a real machine yet — it renders and its
+logic is tested, but the kill-reap-respawn behind it has never run against a device.
 
 Two of the 7.6 fixes are covered by render tests rather than live runs, and that is
 a deliberate choice rather than a shortfall. Log scrolling does nothing unless the
@@ -1735,14 +1768,14 @@ Both timestamps were already being recorded, so this added no measurement — on
 the arithmetic between two numbers that were sitting there unused.
 ---
 
-## 🧭 8. Proposed: target-card controls and concurrent runs
+## 🧭 8. Target-card controls and concurrent runs
 
-**Nothing in this section is implemented.** Sections 1-7 describe code that
-exists; this one is a plan, recorded before any of it is written so the costs are
-argued once here rather than discovered one at a time in the diff. Each item below
-carries what has to change and what it is paid for with, because in this layout
-every new row is taken from the log window (6.2) and every new letter is taken
-from Flutter (5.1).
+**Point 4 is built (8.5). Points 1-3 are not.** This section was written before
+any of it existed so the costs would be argued once here rather than discovered
+one at a time in the diff, and 8.5 is now a description of code rather than a
+proposal. Everything else below is still a plan. Each item carries what has to
+change and what it is paid for with, because in this layout every new row is taken
+from the log window (6.2) and every new letter is taken from Flutter (5.1).
 
 ### 8.1 What was asked for
 
@@ -1777,10 +1810,17 @@ here, and it is recorded as a rule rather than as a change.
 | 1 — controls only in the target card | Yes | Small | A key that is not Flutter's |
 | 2 — inline, no overlay | Yes, already the only option | Small-medium | A variable-height card in the `Budget` |
 | 3 — terminal tabs | Yes | **Large — architectural** | `Msg` identity, splitting `App`, quit semantics |
-| 4 — retarget the current session | Yes, but not as described | Small | Correcting the promise the label makes |
+| 4 — retarget the current session | **Done, not as described** | Small | — |
 
-Point 4 is the cheapest and the most mis-described. Point 3 is the only one that
-is not an addition to the existing shape but a change of it.
+Point 4 was the cheapest and the most mis-described, and it shipped first: 8.5 is
+what it turned into. Point 3 is the only one that is not an addition to the
+existing shape but a change of it.
+
+One thing point 4 did **not** need, and it is worth naming here because 8.3 and
+8.4 assume otherwise: the inline panel. The list frun already has is the device
+list, so the switch reuses it — a twelfth state that draws the same rows, and no
+rows taken from the log window. So the panel is now optional where it used to be a
+prerequisite: 8.3 buys presentation, not capability.
 
 ### 8.3 Controls in the card, and the panel inside it
 
@@ -1797,21 +1837,29 @@ off `app.target`. Two things follow from putting controls in it.
 **Clicking cannot be the only way to reach them.** Mouse capture is off by
 default and deliberately so (5.2); a control that only answers the mouse is dead
 in every session where `m` was never pressed. So each verb needs a key, and the
-key budget is the hard part: `q m r R e z j k` and the digits are frun's, and
+key budget is the hard part: `q m r R e z j k ^D` and the digits are frun's, and
 every other letter is Flutter's and has to arrive unchanged. `j`, `k` and `z` were
 already justified one at a time and that argument does not extend a fourth and
 fifth time.
 
 The way out is modifiers. Flutter's interactive commands are all bare single
-bytes, so `Ctrl-T` (new tab) and `Ctrl-D` (retarget) take nothing from it, and
+bytes, so `Ctrl-T` (new tab) and `Ctrl-D` (switch device) take nothing from it, and
 crossterm reports the modifier separately, so no ambiguity has to be resolved.
-That is the proposal: **the two new verbs are the first frun keys that are not
-plain letters, and that is why they are affordable.**
+**The new verbs are the first frun keys that are not plain letters, and that is why
+they are affordable.** `^D` is taken already, by 8.5; `^T` is still free for tabs.
+
+The mnemonic that had to be turned down is worth recording, because it is the
+trap 5.1 exists to catch. `[s] Switch Device` reads better than `[^D]` and `s` is
+Flutter's screenshot key — it writes `flutter.png` into the project root. Nothing
+would have failed loudly; screenshots would simply have stopped working, which is
+exactly the silent removal 5.1 forbids. `S` is taken too, by the accessibility
+tree dump. There is no good bare letter left for this, and that is the whole
+argument for the modifier.
 
 The panel itself, inline, inside the card's bottom border:
 
 ```text
-╭─ SELECTED TARGET ─────────────────────────────────────────────────╮
+╭─ SELECTED DEVICE ─────────────────────────────────────────────────╮
 │ Device Target                                       iPhone 17 Pro │
 │ Platform ID                               ios (2C4A8B1E-...-9F3D) │
 │ OS Version                                               iOS 26.0 │
@@ -1884,27 +1932,204 @@ the design untouched, and the OS does the multiplexing it is already good at. Th
 case *for* tabs is a shared project card and one place to watch two devices
 reload; that is a real case, but it should be chosen with the price above in view.
 
-### 8.5 Retargeting the current tab
+### 8.5 Switching device (built)
 
-**The description is wrong in a way that matters.** `flutter run` is bound to its
+**Done.** `[^D] Switch Device`, advertised in the target card's own border and
+reachable from every state that has a run behind it.
+
+**The description was wrong in a way that mattered.** `flutter run` is bound to its
 device at spawn — `Session::spawn` builds `flutter run -d <id>` — and Flutter has
 no interactive command to move a live session to another device. There is nothing
 to "change" on a running session.
 
 So "reuse the session" can only mean reuse the **tab**: its position, its scroll,
-and its log history. The Flutter process is killed, reaped and respawned.
+and its log history. The Flutter process is killed, reaped and respawned. The label
+carries that: `Switch Device`, not `Change target (this session)`, because a label
+that reads like a live switch leaves the user watching a forty-second Gradle build
+and concluding the tool has hung.
 
-That mechanism already exists and is already load-bearing. `Action::RetryBuild`
-kills, reaps, resets stage state and respawns, and it deliberately *keeps* the
-previous log rather than clearing it, because comparing the two runs is the point
-(3.4). Retargeting is that same path with one extra step in front of it: set
-`app.target` to the newly chosen device first. Kill-then-respawn is also why it
-cannot be a forwarded keypress — a respawn racing an unreaped child is how two
-Gradle daemons end up fighting over a lock.
+The respawn was already load-bearing. `Action::RetryBuild` kills, reaps, resets
+stage state and respawns, and it deliberately *keeps* the previous log rather than
+clearing it, because comparing the two runs is the point (3.4). A switch is that
+same path with the device chosen first, so the kill lives in one place —
+`stop_session()` — that both verbs call. A respawn racing an unreaped child is how
+two Gradle daemons end up fighting over a lock, which is also why this cannot be a
+forwarded keypress.
 
-**The label must not lie about this.** `Change target (this session)` reads like a
-switch and is a full rebuild. Whatever the panel says, it says the rebuild out
-loud, because the alternative is a user who thinks the tool has hung.
+#### The flow
+
+No inline panel. `^D` reopens the list frun already has, over the run that is still
+alive, as a state of its own — `Switching`, slug `switch`:
+
+```text
+   ╭─ ◆ SELECTED DEVICE ───────────────────── [^D] Switch Device ╮
+   │ Device Target                             Pixel 10 Pro XL  │   8  Running
+   ╰──────────────────────────────────────────────────────────────╯
+   ╭─ ◆ BUILD FINISHED ─────────── Build time 3.4s   Sync 240ms ╮
+   ╰──────────────────────────────────────────────────────────────╯
+   ╭─ ◆ APP LOGS STREAM ─────────────────────────────────────────╮
+                              │ ^D
+                              ▼
+   ╭─ ◆ PROJECT INFO ────────────────────────────────  ~/cwclub ╮
+   ╰──────────────────────────────────────────────────────────────╯
+   ╭─ ◆ SWITCH DEVICE ───────────────────────────────  5 devices ╮
+   │ ❯  Pixel 10 Pro XL   running   last used         ⏎ Keep    │  12  Switching
+   │    Pixel 8                     Pixel_8  Android   ▶ Run    │   child alive
+   │    iPhone 17 Pro        8A3F91C2-4D2E  iOS         ▶ Run    │
+   ╰──────────────────────────────────────────────────────────────╯
+     [↑↓] Move        [⏎] Switch        [Esc] Back
+          │                                  │
+   ⏎ other│                 ⏎ Keep / Esc     │
+          ▼                                  ▼
+   kill + reap, shut the old device    back to the run,
+   down if frun booted it, respawn     nothing killed
+   → 6 Building                        → whatever 8-11 it now is
+```
+
+**The titles are `SELECTED DEVICE`, `SELECT DEVICE` and `SWITCH DEVICE`.** One noun
+for one thing: `target` and `device` were the same object under two names, and the
+list that picks one now shares its vocabulary with the card that shows it and with
+the key that changes it. The struct is still `SelectedTargetCard` in the code, which
+is a rename with no reader and can wait.
+
+`App::run_state()` — `resume.unwrap_or(state)` — is what lets the screen hide the run
+without the code losing track of it. One caller and it is load-bearing:
+`child_exited`. If the app dies while the list is open, reading `state` there sees a
+frame with no build in it and ends the process, throwing away the failure it was
+called to report.
+
+**The list says which row it is leaving**, and with the cards gone it is the only
+thing that can. ` running ` on the row whose id matches the target, in this state
+only. A separate word from the existing ` active ` chip, which means *the device is
+up* and is true of every simulator left booted; this one means *your app is on it*
+and is true of exactly one row. `active` is suppressed there — it would be the same
+fact in a second word — and the row's `▶ Run` badge becomes ` ⏎ Keep `, because that
+is what `Enter` does on it.
+
+**The cards go while the list is up.** `has_target()` and `has_build()` are both
+false in `Switching`, exactly as in the first picker, so the frame is the project
+card and the list. Keeping them was the first attempt — the run has not stopped, so
+both were still describing something true — and it was wrong twice over: the target
+card named the device being left directly above the row that says the same thing
+with ` running `, and at 70x24 the three cards took the height and the list drew a
+border around nothing. Hiding them removed the need for a floor of its own; the
+list scrolls, and `Budget::floor(state)` (6.2) is where all of that is decided.
+
+**Nothing is killed until a device is picked.** That is what makes `Esc` free: the
+child keeps running, keeps streaming into the log buffer, and going back costs
+nothing. `Esc` on the first pick means cancel-and-exit-130, so this frame's footer
+reads `[⏎] Switch  [Esc] Back` where the picker's reads `[⏎] Launch  [Esc] Cancel`.
+Same three keys, four different words, because one key meaning two things has to say
+which one it means.
+
+**The cached list opens the frame; a fresh scan replaces it.** `enter()` and the
+boot path used to empty `app.devices` after launching, and no longer do, so `^D`
+draws rows immediately instead of putting a spinner in front of a list frun already
+has. Discovery then runs again behind them and the rows are swapped when it answers,
+with the title saying `⠋ 5 rechecking` until it does.
+
+Cache alone was the first attempt and it shipped a real failure. Every chip on a row
+is a fact about a device *at the moment it was scanned*: ` active ` means no boot is
+needed, ` last used ` means it is the one in `.frun-last-device`. A device that
+stopped since — including the one frun shut down on its own way out of a previous
+switch — still read as ready, so picking it went straight to `flutter run -d <id>`
+and failed the build. The stale row was not a cosmetic problem; it was the one row
+the user was most likely to pick.
+
+Two rules make the re-scan safe over a live run. **Only the first answer decides the
+flow**: `Msg::Devices` sets state and can be fatal when `state == Detecting`, and
+otherwise only replaces the rows. Without that, an answer landing after `Esc` would
+drag the user out of their session into the picker, and a failed scan would end a run
+that was working. And **the selection follows the device, not the row number**, since
+discovery reorders by what is running.
+
+Five decisions inside the flow, each of which could have gone the other way:
+
+* **The outgoing child dies at the pick, not at the respawn.** A boot can take
+  three minutes, and an old app still running on a device that has already been
+  replaced is a second run nobody asked for.
+* **The outgoing device is shut down with it — but only if frun booted it.**
+  `simctl shutdown` for a simulator, `adb -s <serial> emu kill` for an emulator, on
+  a worker thread with nothing reported back. The restriction is the whole safety
+  argument: a simulator that was already up when frun started belongs to whatever
+  the user had it open for, and closing it would be frun deciding that for them. So
+  `App::booted_target` records who started it, set when a boot lands and cleared
+  whenever an already-attached row is picked. `adb shell reboot -p` was the wrong
+  call to reach for — it powers the guest down and leaves the emulator process
+  answering `adb devices` with a device that cannot be used.
+* **Picking the device that is already running is a return, not a rebuild.** Its row
+  is the highlighted one when the list opens, so a reflexive `Enter` lands on it,
+  and `Switch Device` does not promise a rebuild.
+* **`^D` works during `Building` too**, not just once the app is up — bailing out
+  of a slow build onto another device is the case that wants it most.
+* **No marker line in the log.** The log is not cleared across a switch, so the
+  two runs do run together; the build tracker resetting to `Starting Flutter` is
+  the boundary, and a second one was not worth a row.
+
+#### Two defects this uncovered
+
+**`Msg` has no session identity, and a killed child keeps talking.** This is the
+same gap 8.4 lists as tab work, and it turned out to be a live bug in `RetryBuild`
+long before tabs. `Line`, `Partial` and `Eof` from every child arrive on one
+channel; after `kill()` the pump thread is still draining the pty and its `Eof`
+lands *after* the replacement has been spawned. `child_exited` then reads a
+`Building` state, gets `None` from the new child's `try_wait`, and marks a healthy
+run `BuildFailed` with the old child's death. Stale `Line`s are worse in a quieter
+way: they drive stage detection, so `Running Gradle task...` from a session that no
+longer exists opens a stage in the run that replaced it.
+
+Tagging every message with its session is the 8.4-sized fix. The cheap one is to
+silence the source: `Session` holds an `Arc<AtomicBool>`, `kill()` clears it
+*before* killing, and the pump checks it before every send and before `Eof`.
+Messages already queued when the flag drops are output the old child really
+produced before it died, and they are chronologically where they belong.
+
+**A live child can move the state while the picker is open.** `flutter::feed`
+calls `goto(Running)`, the reload paths call `goto(ReloadInFlight|ReloadFailed)`,
+and `tick_pending()` can reach `ReloadDropped` with no output at all. Any of those
+arriving mid-choice would close the list under the cursor.
+
+Every transition goes through `App::goto`, so the guard goes there and nowhere
+else: while `app.resume` is set, `goto` banks the state instead of drawing it. The
+list stays up, and `Esc` restores what Flutter actually reached rather than what it
+was doing when `^D` was pressed — a reload that failed while the list was up comes
+back as `ReloadFailed`, not as a `Running` that is no longer true. `resume` is
+cleared at the pick, or the `Booting` and `Building` transitions that follow would
+be banked too and never reach the screen.
+
+#### What it cost, and what verifies it
+
+Zero rows. The control is an inset title in a border that already had one
+(`title_top(...).right_aligned()`, the same call `render_picker` uses for its
+count), so `Budget::target_h()` is untouched and the log window gives up nothing.
+At `MIN_W` the two titles need 41 of the 58 columns inside the border. Below the
+`full_cards` rung the card has no border to carry it and the hint disappears; the
+key still works, which is the same bargain `z` and `j`/`k` already have.
+
+It is also not clickable. `ui/target.rs` stays `&App`, so no hit region is pushed
+(7.5) and the mouse cannot reach the control at all — acceptable because capture is
+off by default (5.2) and the key is the primary path, and 8.3 has to take that
+signature to `&mut App` anyway.
+
+Verified by the harness, which is the reason the switch is a state and not a flag:
+`--dump switch` draws the whole frame at any size. `--dump building|build-failed|
+reload-failed|running` all carry the hint and `--dump single` does not (no run yet);
+`--dump running 60x45` proves it fits at the minimum width. `mock_devices` returns
+the picker list for every state where `has_build()` is true, because live runs always
+have one, and `mock_goto` points the switch mock's target at a row in its own list —
+otherwise the frame would show a switch away from a device that is not there.
+
+Three tests carry the parts a frame cannot show.
+`the_switch_list_says_it_is_replacing_a_run` asserts the title, the badge, the footer
+and the surviving hint together, since any one of them reverting leaves a frame that
+reads like a first launch. `the_switch_list_is_not_starved_by_the_cards_above_it`
+walks six heights and requires three target rows at each.
+`a_live_transition_does_not_close_the_picker` covers the banking in `goto`.
+
+The pty path — kill, reap, respawn onto another device, and shutting the outgoing
+emulator down — has no coverage and no dump can reach it: it needs a real project and
+two real devices. **It is unverified, and it is the part of 8.5 most worth exercising
+by hand first.**
 
 ### 8.6 What none of this includes
 
@@ -1924,15 +2149,30 @@ and it should be argued on its own.
 
 ### 8.7 Decisions still needed
 
+Answered by building 8.5, and recorded here because each one closes a question the
+list below used to carry:
+
+* **The key is `^D`**, and `^T` is still reserved for tabs. `s` was rejected: it is
+  Flutter's screenshot (8.3).
+* **The control is an inset title in the target card's border**, which is why it
+  costs no rows and why the collapsed rung needed no rule of its own.
+* **The list is reused, not rebuilt as a panel** — but as a state of its own
+  (`Switching`, slug `switch`), so the frame is something `--dump` can name.
+* **The cached list opens the frame and a fresh scan replaces it**, because chips
+  from a stale snapshot offered devices that were no longer there.
+* **The outgoing device is shut down**, when frun is the one that booted it.
+
+Still open:
+
 1. **Tabs in-app, or a second process in another pane?** Everything in 8.4 hangs
    on this.
 2. **If tabs: what does `q` mean, and whose exit code and transcript survive?**
 3. **Where the inline panel's rows come from** — the log window is the only
-   answer available — **and what the panel does at the collapsed rung.**
-4. **`Ctrl-T` / `Ctrl-D`, or another pair.** They only have to avoid Flutter's
-   bare letters and each other.
+   answer available — **and what the panel does at the collapsed rung.** 8.5 no
+   longer depends on either: the panel is presentation now, not the way in.
 
-Suggested order, cheapest first, so the expensive decision is made with the panel
-already on screen: 8.5 (retargeting, which is mostly an existing path), then 8.3
-(the card's controls and its inline panel, which is where points 1 and 2 land
-together), then 8.4 on its own once 8.7.1 is answered.
+Order from here: 8.3 next if the panel is wanted for its own sake — the two verbs
+in one place, and the click path that `&mut App` in `ui/target.rs` unlocks — then
+8.4 on its own once 8.7.1 is answered. 8.4 also inherits one thing already paid
+for: the `alive` flag in `Session` is the smallest half of the `Msg`-identity
+problem, and it is done.

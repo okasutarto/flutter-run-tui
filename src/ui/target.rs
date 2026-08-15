@@ -6,14 +6,14 @@
 //! it exists to get right.
 
 use ratatui::layout::Rect;
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
-use crate::data::App;
+use crate::data::{Action, App};
 use crate::theme;
-use crate::widgets::{card, field, pill, separator, spread, strong, text};
+use crate::widgets::{card, field, keycap, pill, separator, spread, strong, text};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     let Some(device) = &app.target else {
@@ -25,7 +25,24 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
         return;
     }
 
-    let block = card("SELECTED TARGET", theme::CYAN);
+    // The control lives in the border, not in a row of its own: `target_h()` is a
+    // fixed height and every row it grows by is taken from the log window (6.2).
+    // The inset title is already there to be extended, and at MIN_W the two
+    // titles need 41 of the 58 columns inside the border.
+    //
+    // Advertised only where the key does something. Before a run there is no
+    // session to move, and with no cached list there is nothing to move it to.
+    let mut block = card("SELECTED DEVICE", theme::CYAN);
+
+    if app.state.has_build() && !app.devices.is_empty() {
+        let mut spans = vec![text("─ ", theme::BORDER)];
+
+        spans.extend(keycap(Action::Switch.key(), theme::CYAN));
+        spans.push(text(format!(" {} ", Action::Switch.label()), theme::MUTED));
+
+        block = block.title_top(Line::from(spans).right_aligned());
+    }
+
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

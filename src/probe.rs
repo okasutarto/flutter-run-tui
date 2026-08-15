@@ -802,6 +802,39 @@ fn boot_avd(name: &str) -> Result<Booted, String> {
     Err("did not finish booting".to_string())
 }
 
+/// Shut a virtual device down again.
+///
+/// Called when a run moves to another device (8.5) and only for the device frun
+/// booted itself. That restriction is the whole safety argument: a simulator that
+/// was already up when frun started belongs to whatever the user was doing with
+/// it, and shutting it down would close a window they were using. A physical
+/// device is never touched — there is nothing here that could.
+///
+/// Blocking, so it belongs on a worker thread. Nothing is reported back: a device
+/// that refuses to stop costs memory and nothing else, and the run that matters is
+/// already starting on another one.
+pub fn shutdown(id: &str, platform: Platform) {
+    match platform {
+        // `simctl shutdown` leaves the Simulator app open with no device booted,
+        // which is what quitting a simulator from its own menu does.
+        Platform::Ios => {
+            let _ = run("xcrun", &["simctl", "shutdown", id], QUICK);
+        }
+
+        // `emu kill` is the emulator's own console command and stops the process.
+        // `adb -s <serial> shell reboot -p` would power the guest Android down and
+        // leave the emulator process running, which is a device that still answers
+        // `adb devices` and can no longer be used.
+        Platform::Android => {
+            let _ = run("adb", &["-s", id, "emu", "kill"], QUICK);
+        }
+
+        // macOS and Chrome are the host. There is no device to stop, and the
+        // nearest equivalent would be closing the user's browser.
+        Platform::Desktop | Platform::Web => {}
+    }
+}
+
 /// `targetPlatform` and `sdk` for a booted emulator, asked of the emulator.
 ///
 /// This is the fix for the dash. A device that frun booted itself never passed

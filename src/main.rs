@@ -35,7 +35,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 
-use data::{Action, App, Msg, State};
+use data::{Action, App, Level, Msg, State};
 use flutter::Session;
 use ui::logo::Logo;
 
@@ -542,22 +542,46 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
             app.dart = dart;
         }
 
+        // Only the *first* answer decides the flow. Discovery runs again whenever
+        // `^D` opens the switch list, and by then there is a run on screen: a
+        // second answer that reset the state would drag the user out of their
+        // session, and a second failure that set `fatal` would end it.
         Msg::Devices(Err(reason)) => {
-            app.fatal = Some(reason);
-            ctx.done = true;
+            app.refreshing = false;
+
+            if app.state == State::Detecting {
+                app.fatal = Some(reason);
+                ctx.done = true;
+            } else {
+                app.log(Level::Wrn, &format!("device refresh failed — {reason}"));
+            }
         }
 
-        Msg::Devices(Ok(targets)) => devices_answered(app, ctx, targets),
+        Msg::Devices(Ok(targets)) => {
+            app.refreshing = false;
+
+            if app.state == State::Detecting {
+                devices_answered(app, ctx, targets);
+            } else {
+                devices_refreshed(app, targets);
+            }
+        }
 
         Msg::Booted(Ok(booted)) => {
             app.boot_started = None;
+
+            // frun started this one, so frun may stop it again when the run moves
+            // off it (8.5).
+            app.booted_target = true;
 
             // Straight to the run. The device is already known, so the picker is
             // skipped: 3.3 is explicit that asking again would name the same
             // device a third time in a row.
             let device = booted_device(app, &booted);
 
-            app.devices = Vec::new();
+            // The list is kept rather than emptied. `^D` reopens it without
+            // re-running discovery, and nothing renders it outside the two picker
+            // states, so holding it costs a vector and no rows.
             launch(app, ctx, device);
         }
 
@@ -627,6 +651,37 @@ fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
     } else {
         State::NoDevices
     });
+}
+
+/// A later answer from discovery: swap the rows, leave the frame alone.
+///
+/// This is what makes the chips on the switch list true. They are facts about a
+/// device at the moment it was scanned — ` active ` means no boot is needed,
+/// ` last used ` means it is the one in `.frun-last-device` — and the cache they
+/// came from is a snapshot taken before the run started. A device that has stopped
+/// since, including the one frun itself shut down on the way out, still read as
+/// ready, and picking it failed the build.
+///
+/// The selection follows the device rather than the row number: the list is
+/// reordered by what is running, so keeping the index would move the cursor to a
+/// different device while the user was looking at it.
+fn devices_refreshed(app: &mut App, targets: Vec<probe::Device>) {
+    // Nothing answered. The run is untouched and the old rows stay: a stale list is
+    // a better answer here than an empty frame, and `enter()` reports a dead device
+    // loudly if one is picked.
+    if targets.is_empty() {
+        return;
+    }
+
+    let anchor = app.selected().map(|device| device.id.clone());
+
+    app.devices = targets;
+
+    app.selected_device = anchor
+        .and_then(|id| app.devices.iter().position(|device| device.id == id))
+        .unwrap_or(0);
+
+    app.scroll = 0;
 }
 
 /// A device that was booted but is not in any list yet.
@@ -708,13 +763,16 @@ fn child_exited(app: &mut App, ctx: &mut Ctx) {
         .and_then(Session::exit_code)
         .unwrap_or(1);
 
-    if app.state.build_done() {
+    // The run's state, not the screen's: with the switch list open the child is
+    // still the run, and reading `state` here would treat its death as a process
+    // with nothing left to do and exit without reporting anything.
+    if app.run_state().build_done() {
         // Flutter shut itself down, which is the graceful exit `q` asks for.
         ctx.done = true;
         return;
     }
 
-    if app.state.has_build() {
+    if app.run_state().has_build() {
         app.end_build();
         app.exit_code = code;
         app.failure = Some(flutter::failure(app, code));
@@ -741,11 +799,28 @@ fn key_press(
             return Ok(apply(app, ctx, Action::Stop));
         }
 
+        // The first frun key that is not a plain letter, and that is why it is
+        // affordable: Flutter's interactive commands are all bare single bytes, so
+        // a modifier takes nothing from 5.1. `s` was the obvious mnemonic and is
+        // Flutter's screenshot key.
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            return Ok(apply(app, ctx, Action::Switch));
+        }
+
         KeyCode::Char('q') => return Ok(apply(app, ctx, Action::Quit)),
 
         // Cancel, only where there is something to cancel. During a run `Esc` is
         // Flutter's, and quitting on it would be a surprise.
         KeyCode::Esc => {
+            // The picker was opened over a run that is still alive, so this is a
+            // return and not a cancel: nothing has been killed yet, and the state
+            // restored is whatever Flutter reached while the list was up.
+            if let Some(state) = app.resume.take() {
+                app.goto(state);
+
+                return Ok(false);
+            }
+
             if matches!(
                 app.state,
                 State::NoDevices | State::MultipleDevices | State::Detecting
@@ -812,7 +887,10 @@ fn key_press(
         // screen: everywhere else a digit is Flutter's, and it has to arrive
         // unchanged.
         KeyCode::Char(c @ '1'..='9')
-            if matches!(app.state, State::NoDevices | State::MultipleDevices) =>
+            if matches!(
+                app.state,
+                State::NoDevices | State::MultipleDevices | State::Switching
+            ) =>
         {
             let index = c as usize - '1' as usize;
 
@@ -840,7 +918,10 @@ fn key_press(
 /// `Enter` means "select" in the two states that offer a list, and nothing
 /// anywhere else.
 fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
-    if !matches!(app.state, State::NoDevices | State::MultipleDevices) {
+    if !matches!(
+        app.state,
+        State::NoDevices | State::MultipleDevices | State::Switching
+    ) {
         forward(ctx, b"\r");
         return false;
     }
@@ -849,13 +930,40 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
         return false;
     };
 
+    // Switching to the device that is already running is a return, not a rebuild.
+    // The row for the current target is the highlighted one when the picker opens,
+    // so a reflexive `Enter` lands on it, and the label promises another device —
+    // not forty seconds of Gradle to arrive back where it started.
+    if let Some(state) = app.resume {
+        if app.target.as_ref().is_some_and(|t| t.id == device.id) {
+            app.resume = None;
+            app.goto(state);
+
+            return false;
+        }
+    }
+
+    // The pick is committed from here on. The banked state goes with it, or the
+    // transitions below would be banked too and never reach the screen.
+    let switching = app.resume.take().is_some();
+
+    // The outgoing child goes now rather than at the respawn. A boot can take
+    // three minutes, and an old app still running on a device that has already
+    // been replaced is a second run nobody asked for.
+    stop_session(ctx);
+
+    if switching {
+        release_target(app);
+    }
+
+    // Whether the *incoming* device is ours to stop later. An attached row was up
+    // before frun ran; the boot branch sets this when the boot lands.
+    app.booted_target = false;
+
     // One list, so one branch: either the target has to be started first or it is
     // ready to run. Which frame the row was on does not matter.
     match device.boot.clone() {
-        None => {
-            app.devices = Vec::new();
-            launch(app, ctx, device);
-        }
+        None => launch(app, ctx, device),
 
         Some(boot) => {
             app.boot_name = device.name.clone();
@@ -877,6 +985,43 @@ fn forward(ctx: &mut Ctx, bytes: &[u8]) {
     if let Some(session) = &mut ctx.session {
         session.send(bytes);
     }
+}
+
+/// Shut the outgoing device down, if frun was the one that started it.
+///
+/// Off the main thread: `simctl shutdown` and `adb emu kill` both take about a
+/// second, and the frame after this one is the new build starting. Nothing is
+/// reported back — there is no answer worth waiting for and nothing the user could
+/// do with one.
+///
+/// Only devices frun booted, and only virtual ones. Anything else was somebody
+/// else's decision to have running.
+fn release_target(app: &App) {
+    if !app.booted_target {
+        return;
+    }
+
+    let Some(device) = app.target.as_ref().filter(|d| d.virtual_device) else {
+        return;
+    };
+
+    let id = device.id.clone();
+    let platform = device.platform;
+
+    std::thread::spawn(move || probe::shutdown(&id, platform));
+}
+
+/// Kill and reap the current child, if there is one.
+///
+/// One place, because two callers want it for the same reason: a retry and a
+/// device switch both respawn, and a respawn racing an unreaped child is how two
+/// Gradle daemons end up fighting over a lock.
+fn stop_session(ctx: &mut Ctx) {
+    if let Some(session) = &mut ctx.session {
+        session.kill();
+    }
+
+    ctx.session = None;
 }
 
 /// One path for keys and clicks alike, so the two cannot drift apart.
@@ -912,12 +1057,41 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
         // The failed build's log is kept rather than cleared, because comparing
         // the two runs is the point.
         Action::RetryBuild => {
-            if let Some(session) = &mut ctx.session {
-                session.kill();
+            stop_session(ctx);
+            spawn_session(app, ctx);
+
+            false
+        }
+
+        // Reopen the picker over the live run, DESIGN.md 8.5. Nothing is killed
+        // here: the child keeps running and keeps streaming while the list is up,
+        // which is what makes `Esc` a free return rather than a lost session.
+        //
+        // Only where there is a run to move. Before one, the picker is the screen
+        // already, and `^D` there would reopen what is open.
+        Action::Switch => {
+            // Nothing to move before a run, nowhere to move it with an empty cache,
+            // and nothing to do when the list is already up.
+            if !app.state.has_build() || app.devices.is_empty() {
+                return false;
             }
 
-            ctx.session = None;
-            spawn_session(app, ctx);
+            if app.state == State::Switching {
+                return false;
+            }
+
+            app.resume = Some(app.state);
+
+            // Assigned rather than `goto`: `resume` is now set, and `goto` banks
+            // every transition while it is.
+            app.state = State::Switching;
+
+            // The cached rows go up immediately, then discovery runs again behind
+            // them. Waiting for the scan would put a spinner in front of a list frun
+            // already has, and trusting the cache alone is what offered a device
+            // that had since been shut down.
+            app.refreshing = true;
+            detect(&ctx.tx);
 
             false
         }

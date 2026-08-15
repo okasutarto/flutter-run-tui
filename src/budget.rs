@@ -279,21 +279,34 @@ impl Budget {
         rows + self.blocks(state).saturating_sub(1)
     }
 
-    /// Solve for the largest configuration that still leaves the log window
-    /// its floor.
-    pub fn solve(area: Rect, state: State, stages: usize) -> Self {
-        let mut budget = Self::full();
-
-        // The floor protects whichever region carries the information the user
-        // came for. Elsewhere the cards can have the window and the picker
-        // takes the remainder, which it can scroll.
-        let floor = if state.has_logs() {
+    /// Rows the flexible middle must keep in `state`.
+    ///
+    /// The floor protects whichever region carries the information the user came
+    /// for. Where nothing does — the picker before a run, `Detecting`, `Booting` —
+    /// the cards can have what they want and the remainder scrolls.
+    ///
+    /// One function rather than a branch inside `solve`, because `--rows` reports
+    /// this number and a report that names a different floor than the solver used
+    /// is a diagnostic that lies.
+    pub fn floor(state: State) -> u16 {
+        if state.has_logs() {
             LOG_MIN
         } else if state == State::BuildFailed {
             FAIL_MIN
         } else {
+            // The lists, and the two frames that are a spinner and a sentence. A
+            // list needs no floor of its own because it scrolls, and because
+            // nothing else competes for the frame: `Switching` hides the target
+            // card and the tracker exactly as the first picker does.
             3
-        };
+        }
+    }
+
+    /// Solve for the largest configuration that still leaves the flexible middle
+    /// its floor.
+    pub fn solve(area: Rect, state: State, stages: usize) -> Self {
+        let mut budget = Self::full();
+        let floor = Self::floor(state);
 
         while budget.chrome(state, stages) + floor > area.height {
             if !budget.concede(state) {

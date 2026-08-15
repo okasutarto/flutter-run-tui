@@ -121,6 +121,11 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         // pending stage row instead.
         State::Building => {}
 
+        // The same list `MultipleDevices` draws, over a run that is still going.
+        // 8.5: the picker frun already has is the switch UI, so there is no second
+        // list to keep in step with this one.
+        State::Switching => devices::render_picker(frame, middle, app, &plan),
+
         State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped => {
             logs::render(frame, middle, app)
         }

@@ -18,7 +18,9 @@
 //!   to protect them from.
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
@@ -54,6 +56,16 @@ pub struct Session {
     /// and kills it. Letting this fall out of scope at the end of `spawn` is a
     /// Flutter that dies the moment it starts.
     _master: Box<dyn MasterPty + Send>,
+
+    /// Cleared by `kill`, read by the pump thread before every send.
+    ///
+    /// `Msg` carries no session identity: `Line`, `Partial` and `Eof` from every
+    /// child arrive on one channel and the receiving end assumes there is one of
+    /// everything. A killed child's pump is still draining the pty, so without
+    /// this its `Eof` lands after the replacement has been spawned and is read as
+    /// the *new* run dying — a healthy build marked failed by its predecessor.
+    /// Silencing the source is what keeps that impossible.
+    alive: Arc<AtomicBool>,
 }
 
 // `command_line` used to live here, building `fvm flutter run -d <id>` as a string
@@ -109,15 +121,22 @@ impl Session {
         // would still be holding the other end of the child's terminal open.
         drop(pair.slave);
 
+        let alive = Arc::new(AtomicBool::new(true));
+        let pumping = Arc::clone(&alive);
+
         std::thread::spawn(move || {
-            pump(&mut reader, &tx);
-            let _ = tx.send(Msg::Eof);
+            pump(&mut reader, &tx, &pumping);
+
+            if pumping.load(Ordering::Relaxed) {
+                let _ = tx.send(Msg::Eof);
+            }
         });
 
         Ok(Self {
             child,
             writer,
             _master: pair.master,
+            alive,
         })
     }
 
@@ -145,6 +164,11 @@ impl Session {
     /// and not a keypress forwarded to Flutter, and a respawn racing an
     /// unreaped child is how two Gradle daemons end up fighting over a lock.
     pub fn kill(&mut self) {
+        // Before the kill, not after: everything the pump sends from here on
+        // belongs to a child that is being replaced, and `Msg` cannot say which
+        // child it came from. See `alive`.
+        self.alive.store(false, Ordering::Relaxed);
+
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -163,11 +187,18 @@ impl Session {
 /// Bytes are buffered rather than decoded per chunk: a 4 KiB read can split a
 /// multi-byte character, and lossy-decoding each chunk would turn the braille
 /// spinner frames into replacement characters at random.
-fn pump(reader: &mut Box<dyn Read + Send>, tx: &Sender<Msg>) {
+fn pump(reader: &mut Box<dyn Read + Send>, tx: &Sender<Msg>, alive: &AtomicBool) {
     let mut buf = [0u8; 4096];
     let mut pending: Vec<u8> = Vec::new();
 
     loop {
+        // A killed child can still have output buffered in the pty, and those
+        // lines drive stage detection: `Running Gradle task...` from a session
+        // that no longer exists would open a stage in the run that replaced it.
+        if !alive.load(Ordering::Relaxed) {
+            return;
+        }
+
         let read = match reader.read(&mut buf) {
             Ok(0) | Err(_) => return,
             Ok(n) => n,

@@ -7,7 +7,7 @@ use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarStat
 use ratatui::Frame;
 
 use crate::budget::Budget;
-use crate::data::{Action, App, Device, Hit};
+use crate::data::{Action, App, Device, Hit, State};
 use crate::theme;
 use crate::widgets::{card, elide, pill, spread, strong, text};
 
@@ -63,7 +63,7 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
     // row, and both of it a third time on the footer, which carries `↑↓ Move`,
     // `⏎ Launch` and `Esc Cancel` in exactly this state.
     //
-    // Unlike SELECT TARGET, there was nothing else on the row to keep: no
+    // Unlike SELECT DEVICE, there was nothing else on the row to keep: no
     // ordering note, no status, so the whole slot is the list's now. This is the
     // state with the most rows to show — every bootable target rather than the
     // attached ones — so two rows back is two more targets before it scrolls.
@@ -71,12 +71,27 @@ pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budg
 
 /// State 4. Two or more answered, so pick one.
 pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
-    let block = card("SELECT TARGET", theme::CYAN).title_top(
-        Line::from(vec![
-            Span::raw(" "),
-            text(format!("{} devices ", app.devices.len()), theme::MUTED),
-        ])
-        .right_aligned(),
+    // `SWITCH DEVICE`, not `SELECT DEVICE`, when there is a run to replace. The
+    // list is identical and the consequence is not: one starts a run, the other
+    // ends one and starts another. With the target card off screen here, the title
+    // is the only place that difference has room to be said.
+    let title = if app.state == State::Switching {
+        "SWITCH DEVICE"
+    } else {
+        "SELECT DEVICE"
+    };
+
+    // The count, and whether it is still being checked. Rows arriving 1-2s after the
+    // list opened have to be accounted for, or a device appearing or vanishing under
+    // the cursor reads as a glitch rather than as an answer.
+    let count = if app.refreshing {
+        format!("{} {} rechecking ", app.spinner(), app.devices.len())
+    } else {
+        format!("{} devices ", app.devices.len())
+    };
+
+    let block = card(title, theme::CYAN).title_top(
+        Line::from(vec![Span::raw(" "), text(count, theme::MUTED)]).right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -191,6 +206,15 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     let hits: Vec<Hit> = Vec::new();
     let mut pending = hits;
 
+    // Which row the run is on, and only while switching. Outside `Switching` there
+    // is no run yet: `app.target` is either empty or, in the mocks, a device that
+    // shares an id with a row it has no relationship to.
+    let running_id = if app.state == State::Switching {
+        app.target.as_ref().map(|device| device.id.clone())
+    } else {
+        None
+    };
+
     for slot in 0..visible {
         let index = app.scroll + slot;
 
@@ -216,6 +240,7 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
             row,
             device,
             index == app.selected_device,
+            running_id.as_deref() == Some(device.id.as_str()),
             &mut pending,
         );
 
@@ -257,18 +282,39 @@ const GAP: usize = 2;
 const ACTIVE: &str = " active ";
 const LAST_USED: &str = " last used ";
 
+/// The row the current run is on, while switching.
+///
+/// A separate word from `active`, deliberately. `active` means the device is up,
+/// which is true of every simulator left booted; this means *your app is running
+/// on it*, which is true of exactly one row. One word for both facts would make
+/// the list unable to answer the only question it is open to answer.
+const RUNNING: &str = " running ";
+
 // Uniformly `Run`. The Start/Run split existed to imply whether a boot was
 // coming, which the `active` chip now states outright, and two words for one
 // consequence read as two different consequences.
 const RUN: &str = " ▶ Run ";
+
+/// What `Enter` does on the row already running: nothing but close the list.
+const KEEP: &str = " ⏎ Keep ";
 
 /// What a pill costs: its text plus the two cap columns `pill` adds.
 fn pill_width(label: &str) -> usize {
     crate::widgets::width(label) + 2
 }
 
-fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits: &mut Vec<Hit>) {
+fn draw_row(
+    frame: &mut Frame,
+    area: Rect,
+    device: &Device,
+    selected: bool,
+    running: bool,
+    hits: &mut Vec<Hit>,
+) {
     let w = crate::widgets::width;
+
+    // What `Enter` costs on this row: a build, or nothing at all.
+    let verb = if running { KEEP } else { RUN };
 
     // Both chips, independently, because they are independent facts.
     //
@@ -279,7 +325,10 @@ fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits
     //
     // `active` requires `needs_boot()`: macOS and Chrome are always available, so
     // `active` would describe a state they do not have, and `▶ Run` says enough.
-    let active = device.boot.is_none() && device.platform.needs_boot();
+    //
+    // Suppressed on the running row: `running` already says the device is up, and
+    // saying it twice in two words on one row is how a list stops being read.
+    let active = !running && device.boot.is_none() && device.platform.needs_boot();
 
     let id = elide(&device.id, 16);
 
@@ -291,7 +340,7 @@ fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits
         + GAP
         + w(&device.name)
         + GAP
-        + pill_width(RUN)
+        + pill_width(verb)
         // `spread` keeps at least one column between the two groups.
         + 1;
 
@@ -322,6 +371,10 @@ fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits
         true
     };
 
+    // `running` outranks everything: it is the row the list was opened to move
+    // away from, and losing it to a narrow window would leave the frame unable to
+    // say where the run currently is.
+    let show_running = fits(running, GAP + pill_width(RUNNING));
     // `active` outranks `last used`: it is the one that changes the consequence
     // of pressing Enter, where a preference costs nothing either way.
     let show_active = fits(active, GAP + pill_width(ACTIVE));
@@ -348,6 +401,11 @@ fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits
             text(device.name.as_str(), theme::TEXT)
         },
     ];
+
+    if show_running {
+        left.push(Span::raw("  "));
+        left.extend(pill(RUNNING, theme::CYAN));
+    }
 
     if show_active {
         left.push(Span::raw("  "));
@@ -383,7 +441,7 @@ fn draw_row(frame: &mut Frame, area: Rect, device: &Device, selected: bool, hits
     right.push(Span::raw("  "));
 
     right.extend(pill(
-        RUN,
+        verb,
         if selected { theme::CYAN } else { theme::MUTED },
     ));
 
