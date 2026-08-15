@@ -1124,6 +1124,66 @@ pub fn remember_device(id: &str) {
 mod tests {
     use super::*;
 
+    /// 8.4: the row has to survive the trip to another process, or the tab it starts
+    /// has to run a discovery to learn what the tab that spawned it already knew.
+    ///
+    /// The two fields that decide behaviour rather than presentation are the ones
+    /// worth asserting: `platform`, without which a boot cannot be attempted, and
+    /// `virtual_device`, which is frun's licence to shut the device down.
+    #[test]
+    fn a_handed_over_device_round_trips() {
+        let avd = Device {
+            id: "Pixel_8".into(),
+            name: "Pixel 8".into(),
+            platform: Platform::Android,
+            target_platform: "android-arm64".into(),
+            sdk: "Android 17 (API 37)".into(),
+            virtual_device: true,
+            last_used: true,
+            boot: Some(Boot::Avd("Pixel_8".into())),
+        };
+
+        let back = Device::from_handoff(&avd.to_handoff()).expect("should parse");
+
+        assert_eq!(back.id, "Pixel_8");
+        assert_eq!(back.name, "Pixel 8");
+        assert_eq!(back.platform, Platform::Android);
+        assert!(back.virtual_device);
+        assert_eq!(back.boot, Some(Boot::Avd("Pixel_8".into())));
+
+        // Display-only, and deliberately absent: they arrive with the background scan
+        // rather than being duplicated into an environment variable.
+        assert_eq!(back.target_platform, "");
+        assert_eq!(back.sdk, "");
+
+        // A running device has no boot, and that is the difference that decides
+        // whether the new tab builds now or waits three minutes first.
+        let attached = Device {
+            boot: None,
+            platform: Platform::Ios,
+            virtual_device: false,
+            ..avd
+        };
+
+        let back = Device::from_handoff(&attached.to_handoff()).expect("should parse");
+
+        assert_eq!(back.boot, None);
+        assert_eq!(back.platform, Platform::Ios);
+        assert!(!back.virtual_device);
+    }
+
+    /// Anything short of the full form must be refused, because every field it is
+    /// missing would otherwise be a guess about a device frun is about to run or
+    /// shut down.
+    #[test]
+    fn a_partial_handoff_is_refused() {
+        assert!(Device::from_handoff("emulator-5554").is_none());
+        assert!(Device::from_handoff("emulator-5554\tPixel 8").is_none());
+        assert!(Device::from_handoff("").is_none());
+        assert!(Device::from_handoff("\tPixel 8\tandroid\t1\t").is_none());
+        assert!(Device::from_handoff("id\tPixel 8\tmartian\t1\t").is_none());
+    }
+
     #[test]
     fn platform_comes_from_the_target_triple() {
         assert_eq!(Platform::from_target("ios"), Platform::Ios);

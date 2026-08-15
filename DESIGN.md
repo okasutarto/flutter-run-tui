@@ -2066,8 +2066,9 @@ Four rules, and each one removes work rather than adding it:
    already the place a device is chosen, already draw one list through one row
    renderer, and already have `Enter` bound to *launch this*. `⇧Enter` is *launch
    this, elsewhere*.
-2. **What crosses to the new process is one string plus the flags this one was
-   given.** The id, and `extra`. Nothing else, and nothing shared.
+2. **What crosses to the new process is the row, flattened, plus the flags this one
+   was given.** Enough to start without asking anything: id, name, platform, virtual,
+   and how to boot it. Nothing shared, and nothing the new tab has to wait for.
 3. **No row is refused.** The one genuinely conflicting row already says so in
    words the list has carried since 8.5.
 4. **One capability is asked of the terminal.** If it is not granted the feature is
@@ -2081,15 +2082,16 @@ tab A                                       tab B — new process, knows nothing
 ─────                                       ──────────────────────────────────────
 picker, no run yet (states 2, 4)
   ⏎    launch here, list closes
-  ⇧⏎   dispatch, LIST STAYS OPEN  ────────►  FRUN_DEVICE=<id> + A's own extra flags
-       (fire several, then ⏎ for the           Detecting, its own scan
-        one you want in this tab)                ├─ found, attached   → Building
-                                                 ├─ found, needs boot → Booting → Building
-switch picker, run alive (state 12, ^D)          └─ gone              → its own picker
-  ⏎    retarget this tab (8.5)
+  ⇧⏎   dispatch, LIST STAYS OPEN  ────────►  FRUN_DEVICE=<the row> + A's extra flags
+       (fire several, then ⏎ for the           no DETECTING — the answer came with
+        one you want in this tab)              the question
+                                                 ├─ attached   → Building, at once
+switch picker, run alive (state 12, ^D)          └─ needs boot → Booting, at once
+  ⏎    retarget this tab (8.5)                                    → Building
   ⇧⏎   dispatch, then back to the live
-       run, exactly as Esc does:
-       nothing is killed
+       run, exactly as Esc does:               discovery runs behind all of that:
+       nothing is killed                       it fills `Platform ID` / `OS Version`
+                                               and gives `^D` a list
 ```
 
 **Keeping the list open is the part worth defending.** Enter closes it because the
@@ -2182,13 +2184,39 @@ rule. An env var takes nothing from Flutter's namespace, has precedent
 (`FRUN_NO_QUERY`), and rides both Ghostty's `environment variables` surface field
 and `tmux new-window`'s environment without any quoting games.
 
-**The id is resolved by the new process, against its own scan.** That is what keeps
-the boot in tab B where it belongs: a shut-down AVD chosen in A takes its three
-minutes in B, on B's own `Booting` frame with B's own elapsed clock, while A carries
-on. It also means the Android id change is already handled — a bootable row is the
-AVD name and the running device is `emulator-5554`, and B walks the same code path
-that already reconciles those (3.3). If the id is not in B's scan, B opens its
-picker. A device that vanished between two scans is not a fatal error.
+**The row travels, not just the id, and that correction came from using it.** The
+first version handed over the id alone and let the new process resolve it against its
+own scan. It worked, and it was wrong in the way that matters: the new tab sat on
+`DETECTING` through its own `fvm flutter devices --machine` — six seconds of Dart VM
+startup — before starting a build that needed none of it. The point of a handoff is
+that the answer travels with the question. `flutter run -d <id>` resolves its own
+device anyway.
+
+So `Device::to_handoff` flattens the row into one tab-separated line, and
+`handed_over` runs in `run()` **before the first frame**: attached devices go straight
+to `Building`, bootable ones straight to `Booting`. Measured, both: no `DETECTING`
+frame in either, `SELECTED DEVICE` and `Starting Flutter` in the first, `Booting Fake
+Pixel` in the second.
+
+Five fields, and the two that are not decoration are the reason it is all-or-nothing:
+`platform` decides whether a boot is even possible, and `virtual_device` is frun's
+licence to shut a device down (`release_target`), so guessing it could kill a physical
+phone. A value with fewer fields is refused, logged, and the picker comes up as usual.
+Tab-separated because device names, AVD names and simulator ids all contain spaces and
+colons and none contains a tab — verified to survive the trip through AppleScript and
+Ghostty's `environment variables` intact.
+
+`target_platform` and `sdk` are deliberately left behind. They are `Platform ID` and
+`OS Version`, they exist only once Flutter has answered, and `fill_target` writes them
+in when the background scan lands — the same only-ever-fill-a-blank rule
+`booted_device` follows.
+
+**Discovery still runs in the new tab, just not in front of the build.** `^D` needs a
+list to open, and `devices_refreshed` was already built to swap rows under a live run.
+Until it lands, the handed row *is* the list, of one, which is also what lets
+`booted_device` recover the name and platform of an AVD whose serial it has just
+learned: with an empty list it falls through to a bare shell that hardcodes Android,
+and a handed-over iOS simulator would have come back wearing the wrong glyph.
 
 **`extra` has to ride along.** Tab A was launched with whatever `--flavor` and
 `--dart-define` the user typed, and a second tab building a different flavour is
@@ -2307,7 +2335,8 @@ anywhere should suggest the check is global. It covers this session only.
 | File | Change |
 | :--- | :--- |
 | `data.rs` | `Action::NewTab`, key `⇧⏎`, label `Launch in new tab`, and `App::shift_enter` for whether the terminal reports the protocol — the same shape as `live` and `mouse_on` |
-| `main.rs` | `KeyCode::Enter` with `SHIFT` in the three picker states, flags pushed and popped, the support query beside `Logo::detect`, `handed_over()` off `devices_answered`, `new_tab`/`handoff_env`/`tab_command`, and `name_tab()` in `launch()` |
+| `main.rs` | `KeyCode::Enter` with `SHIFT` in the three picker states, flags pushed after the alternate screen and popped before it, the support query beside `Logo::detect`, `handed_over()` before the first frame, `start()` split out of `enter()` so a handoff and a pick share one branch, `fill_target()` on a later scan, `new_tab`/`handoff_env`/`tab_command`, and `name_tab()` in `launch()` |
+| `probe.rs` | `Device::to_handoff`/`from_handoff` and `Platform::tag`/`from_tag` — a wire format of its own, so renaming an enum variant cannot silently change it |
 | `ui/chrome.rs` | one hint, `[⇧⏎] Launch in new tab`, in the hint lists for states 2, 4 and 12. It is a key, so it is never dropped; it moves the labels-off threshold and nothing else (3.7) |
 | `ui/devices.rs`, `ui/target.rs`, `Msg`, `App`'s two lifetimes, `Budget`, `dump.rs` | untouched |
 
@@ -2333,10 +2362,12 @@ it cannot are not the same parts.
 | `⇧Enter`, end to end | Driven by Ghostty's own `send key … modifiers "shift"` into a running frun: the arm fired in `NoDevices` and in `MultipleDevices`, `osascript` exited 0, and the tab it opened returned its id. This is also what caught the screen-stack bug above |
 | `name_tab()`, in real use | The live session's tab reads `iPhone 17 Pro · cwclub`, read back through AppleScript from the tab itself |
 
+| `handed_over()`, both paths | frun run under `script` in a real project with `FRUN_DEVICE` set by hand: an attached handoff drew `SELECTED DEVICE`, `BUILDING` and `Starting Flutter`, a bootable one drew `Booting Fake Pixel`, and **`DETECTING` appeared in neither** — which is the whole point of the change. The capture also shows `\e[?1049h` then `\e[>1u`, so the screen-stack ordering is in the record too |
+
 | Unverified | Why, and what would do it |
 | :--- | :--- |
-| `handed_over()` | Needs a real project and a device. Found-and-attached, found-and-needs-boot, and gone are three paths and none has run. The mock walk proves the *spawn* is handed `FRUN_DEVICE=Pixel_10_Pro_XL`; what the receiving process does with it is still only read from the code |
-| `name_tab()` on the boot and switch paths | The first pick is observed. That `launch()` is also reached through `Msg::Booted` and through a switch is read from the code |
+| `fill_target()` | Needs the background scan to answer with a row matching a handed-over device, so it needs a real device. Six lines, and it only ever fills a blank |
+| `name_tab()` on the boot and switch paths | The first pick is observed, and so is a handoff (`Ghost Device · cwclub`, read out of the capture). That `launch()` is also reached through `Msg::Booted` and through a switch is read from the code |
 
 **How `⇧Enter` was driven, since it is worth reusing.** Ghostty's AppleScript
 dictionary can synthesise input (`send key "enter" to <terminal> modifiers "shift"`),

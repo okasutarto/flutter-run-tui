@@ -524,6 +524,10 @@ fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> 
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     )?;
 
+    // Before the first frame: a tab spawned by `⇧⏎` starts its build now, not after a
+    // discovery it does not need (8.4). Discovery is already running behind this.
+    handed_over(&mut app, &mut ctx);
+
     let result = event_loop(&mut app, &mut ctx, &mut art);
 
     // Restore before propagating any error, so a failure inside the loop cannot
@@ -823,7 +827,20 @@ fn handed_over(app: &mut App, ctx: &mut Ctx) {
     };
 
     match probe::Device::from_handoff(&line) {
-        Some(device) => start(app, ctx, device),
+        Some(device) => {
+            // The handed row becomes this tab's list, of one, so everything downstream
+            // sees the same shape a pick produces. `booted_device` reads the selected
+            // row to recover the name and platform of an AVD whose serial it has just
+            // learned, and with an empty list it would fall through to a bare shell
+            // that hardcodes Android — an iOS simulator handed over would have come
+            // back wearing the wrong glyph. It also gives `^D` something to open
+            // before the background scan lands, and `devices_refreshed` replaces it
+            // when that happens.
+            app.devices = vec![device.clone()];
+            app.selected_device = 0;
+
+            start(app, ctx, device);
+        }
 
         None => app.log(
             Level::Wrn,
@@ -861,6 +878,41 @@ fn devices_refreshed(app: &mut App, targets: Vec<probe::Device>) {
         .unwrap_or(0);
 
     app.scroll = 0;
+
+    fill_target(app);
+}
+
+/// Fill the two target-card fields a handoff cannot carry (8.4).
+///
+/// `Platform ID` and `OS Version` are Flutter's `targetPlatform` and
+/// `sdkNameAndVersion`, so they only exist once a scan has answered. A handed-over
+/// device starts building before that, deliberately, and this is where the card stops
+/// reading blank — from the scan that was running behind it the whole time.
+///
+/// Only ever fills a blank, which is the same rule `booted_device` follows and for the
+/// same reason: a device frun booted describes itself better than a stale list does.
+fn fill_target(app: &mut App) {
+    let Some(target) = app.target.as_ref() else {
+        return;
+    };
+
+    if !target.target_platform.is_empty() && !target.sdk.is_empty() {
+        return;
+    }
+
+    let Some(row) = app.devices.iter().find(|d| d.id == target.id).cloned() else {
+        return;
+    };
+
+    if let Some(target) = app.target.as_mut() {
+        if target.target_platform.is_empty() {
+            target.target_platform = row.target_platform;
+        }
+
+        if target.sdk.is_empty() {
+            target.sdk = row.sdk;
+        }
+    }
 }
 
 /// A device that was booted but is not in any list yet.
@@ -1237,8 +1289,18 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
         release_target(app);
     }
 
-    // One list, so one branch: either the target has to be started first or it is
-    // ready to run. Which frame the row was on does not matter.
+    start(app, ctx, device);
+
+    false
+}
+
+/// Take a device from wherever it was chosen and get it running.
+///
+/// One list, so one branch: either the target has to be started first or it is ready
+/// to run. Which frame the row was on does not matter, and neither does whether a
+/// person picked it here or another tab handed it over (8.4) — which is the second
+/// caller this exists for.
+fn start(app: &mut App, ctx: &mut Ctx, device: probe::Device) {
     match device.boot.clone() {
         None => launch(app, ctx, device),
 
@@ -1254,8 +1316,6 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
             });
         }
     }
-
-    false
 }
 
 fn forward(ctx: &mut Ctx, bytes: &[u8]) {
@@ -1285,7 +1345,7 @@ const HANDOFF: &str = "FRUN_DEVICE";
 /// except on the first call of a session, where macOS may put its automation-consent
 /// dialog up first. The frame is frozen while that dialog is open, and the user is
 /// looking at the dialog.
-fn new_tab(device: &str, extra: &[String]) -> Result<(), String> {
+fn new_tab(device: &probe::Device, extra: &[String]) -> Result<(), String> {
     // The binary, not `frun`: that name is a zsh function from `.zshrc` and
     // `~/.cargo/bin` is deliberately off `PATH` (see `frun.zsh`), so it does not
     // exist for anything but that shell. `current_exe` also survives the crate being
@@ -1338,8 +1398,8 @@ fn new_tab(device: &str, extra: &[String]) -> Result<(), String> {
 /// `FVM_CACHE_PATH` for the same reason and only when set: `probe::fvm_cache` honours
 /// it, so a non-default cache would otherwise resolve differently in the two tabs.
 /// Nothing else is copied. This is a handoff, not a session transfer.
-fn handoff_env(device: &str) -> Vec<String> {
-    let mut env = vec![format!("{HANDOFF}={device}")];
+fn handoff_env(device: &probe::Device) -> Vec<String> {
+    let mut env = vec![format!("{HANDOFF}={}", device.to_handoff())];
 
     for name in ["PATH", "FVM_CACHE_PATH"] {
         if let Some(value) = std::env::var_os(name) {
@@ -1577,7 +1637,7 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
                 return false;
             };
 
-            match new_tab(&device.id, &ctx.extra) {
+            match new_tab(&device, &ctx.extra) {
                 Ok(()) => app.log(Level::Inf, &format!("new tab — {}", device.name)),
 
                 // Reported, never fatal. A tab that did not open must not take a
@@ -1806,9 +1866,25 @@ mod tests {
     /// started with a command runs no shell, so nothing else would set it.
     #[test]
     fn the_handoff_carries_this_processs_path() {
-        let env = handoff_env("emulator-5554");
+        let device = probe::Device {
+            id: "emulator-5554".into(),
+            name: "Pixel 10 Pro XL".into(),
+            platform: probe::Platform::Android,
+            target_platform: "android-arm64".into(),
+            sdk: "Android 17 (API 37)".into(),
+            virtual_device: true,
+            last_used: false,
+            boot: None,
+        };
 
-        assert_eq!(env[0], "FRUN_DEVICE=emulator-5554");
+        let env = handoff_env(&device);
+
+        assert!(
+            env[0].starts_with("FRUN_DEVICE=emulator-5554\t"),
+            "the device leads the handoff: {:?}",
+            env[0]
+        );
+
         assert!(
             env.iter().any(|entry| entry.starts_with("PATH=")),
             "PATH must be handed over: {env:?}"
