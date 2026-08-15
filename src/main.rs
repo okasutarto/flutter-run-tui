@@ -338,6 +338,41 @@ fn detect(tx: &Sender<Msg>) {
     });
 }
 
+/// Recheck the cached list, without paying for discovery again.
+///
+/// `detect()` cannot be reused here. It runs `fvm flutter devices --machine`, which
+/// is six seconds of Dart VM startup on this machine against 145ms for `adb devices`
+/// plus `simctl list -j`, and six seconds is long enough that the list would settle
+/// after the user had already chosen a row from it.
+///
+/// So this asks the cheap question instead. The rows are already known; what is not
+/// known is which of them are still real. Anything virtual that was up and is no
+/// longer answering is dropped, and `probe::targets` then rebuilds the bootable rows
+/// around what survived — so a shut-down emulator comes back as a row that offers to
+/// boot it rather than one that claims to be ready.
+///
+/// Physical devices are kept whether or not they answered. `adb` covers Android, but
+/// a physical iPhone is only ever visible to Flutter's own scan, and dropping a row
+/// this cannot see would be worse than keeping one that has gone.
+fn recheck(app: &App, ctx: &Ctx) {
+    let cached = app.devices.clone();
+    let tx = ctx.tx.clone();
+
+    std::thread::spawn(move || {
+        let alive = probe::alive();
+        let last = probe::last_device();
+
+        let real: Vec<probe::Device> = cached
+            .into_iter()
+            .filter(|device| {
+                !device.attached() || !device.virtual_device || alive.contains(&device.id)
+            })
+            .collect();
+
+        let _ = tx.send(Msg::Devices(Ok(probe::targets(real, &last))));
+    });
+}
+
 fn state_arg(arg: Option<&String>) -> io::Result<State> {
     let Some(slug) = arg else {
         return Ok(State::Running);
@@ -569,10 +604,6 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
 
         Msg::Booted(Ok(booted)) => {
             app.boot_started = None;
-
-            // frun started this one, so frun may stop it again when the run moves
-            // off it (8.5).
-            app.booted_target = true;
 
             // Straight to the run. The device is already known, so the picker is
             // skipped: 3.3 is explicit that asking again would name the same
@@ -956,10 +987,6 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
         release_target(app);
     }
 
-    // Whether the *incoming* device is ours to stop later. An attached row was up
-    // before frun ran; the boot branch sets this when the boot lands.
-    app.booted_target = false;
-
     // One list, so one branch: either the target has to be started first or it is
     // ready to run. Which frame the row was on does not matter.
     match device.boot.clone() {
@@ -987,20 +1014,23 @@ fn forward(ctx: &mut Ctx, bytes: &[u8]) {
     }
 }
 
-/// Shut the outgoing device down, if frun was the one that started it.
+/// Shut the outgoing device down when the run moves off it.
 ///
 /// Off the main thread: `simctl shutdown` and `adb emu kill` both take about a
 /// second, and the frame after this one is the new build starting. Nothing is
 /// reported back — there is no answer worth waiting for and nothing the user could
 /// do with one.
 ///
-/// Only devices frun booted, and only virtual ones. Anything else was somebody
-/// else's decision to have running.
+/// Every virtual device, not only the ones frun booted. The ownership test was the
+/// first rule here and it silently did nothing in the commonest case: `boot_avd`
+/// starts the emulator under `nohup` precisely so it outlives frun, so on the next
+/// run the emulator is already attached, nothing was booted, and switching away left
+/// it running. One rule that always holds beats a rule that holds only in the
+/// session that started the device.
+///
+/// Physical devices are untouched — there is nothing here that could — and so are
+/// macOS and Chrome, where the nearest equivalent is closing the user's browser.
 fn release_target(app: &App) {
-    if !app.booted_target {
-        return;
-    }
-
     let Some(device) = app.target.as_ref().filter(|d| d.virtual_device) else {
         return;
     };
@@ -1086,12 +1116,9 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
             // every transition while it is.
             app.state = State::Switching;
 
-            // The cached rows go up immediately, then discovery runs again behind
-            // them. Waiting for the scan would put a spinner in front of a list frun
-            // already has, and trusting the cache alone is what offered a device
-            // that had since been shut down.
+            // The cached rows go up immediately and are rechecked behind them.
             app.refreshing = true;
-            detect(&ctx.tx);
+            recheck(app, ctx);
 
             false
         }

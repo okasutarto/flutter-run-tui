@@ -1998,6 +1998,16 @@ without the code losing track of it. One caller and it is load-bearing:
 frame with no build in it and ends the process, throwing away the failure it was
 called to report.
 
+**The adopted device replaces the row it was picked from** (`App::choose`), and on
+Android that is what makes the badges work at all. An AVD is offered under its AVD
+name and runs as a serial — `Pixel_10_Pro_XL` becomes `emulator-5554` — so a list
+left untouched showed the emulator frun was running as a row offering to *boot* it,
+with no ` running ` badge, because the badge matches on `target.id`, and no
+` last used ` either, because that compares ids too. iOS hid the bug for a while: a
+simulator keeps its UDID whether booted or not. The row is matched on name as well
+as id, which is the same join `probe::targets` already uses to de-duplicate a running
+emulator against its own AVD row.
+
 **The list says which row it is leaving**, and with the cards gone it is the only
 thing that can. ` running ` on the row whose id matches the target, in this state
 only. A separate word from the existing ` active ` chip, which means *the device is
@@ -2022,11 +2032,27 @@ reads `[⏎] Switch  [Esc] Back` where the picker's reads `[⏎] Launch  [Esc] C
 Same three keys, four different words, because one key meaning two things has to say
 which one it means.
 
-**The cached list opens the frame; a fresh scan replaces it.** `enter()` and the
-boot path used to empty `app.devices` after launching, and no longer do, so `^D`
-draws rows immediately instead of putting a spinner in front of a list frun already
-has. Discovery then runs again behind them and the rows are swapped when it answers,
-with the title saying `⠋ 5 rechecking` until it does.
+**The cached list opens the frame; a recheck corrects it.** `enter()` and the boot
+path used to empty `app.devices` after launching, and no longer do, so `^D` draws
+rows immediately instead of putting a spinner in front of a list frun already has.
+The rows are then rechecked behind them and swapped when the answer lands, with the
+title reading `⠋ 5 rechecking` until it does.
+
+**The recheck is not discovery, and the difference is measured.** On this machine
+`fvm flutter devices --machine` is 6113ms — Dart VM startup, mostly — against 12ms
+for `adb devices` and 119ms for `simctl list -j`. Six seconds is long enough for the
+list to settle *after* the user has picked from it, which is the same bug as a stale
+row wearing a different hat. So `probe::alive()` asks the two fast tools which ids
+are up, rows that were up and no longer answer are dropped, and `probe::targets()`
+rebuilds the bootable rows around what survived: a shut-down emulator comes back as
+a row offering to boot it. About 190ms end to end.
+
+Physical devices are kept whether or not they answered. `adb` covers Android, but a
+physical iPhone is visible only to Flutter's own scan, and dropping a row this cannot
+see would be worse than keeping one that has gone. The consequence is honest and
+bounded: a device that was never in the cache — a simulator booted by hand while frun
+was running — will not appear until the next full run, because the only tool that
+would have found it is the six-second one.
 
 Cache alone was the first attempt and it shipped a real failure. Every chip on a row
 is a fact about a device *at the moment it was scanned*: ` active ` means no boot is
@@ -2048,15 +2074,21 @@ Five decisions inside the flow, each of which could have gone the other way:
 * **The outgoing child dies at the pick, not at the respawn.** A boot can take
   three minutes, and an old app still running on a device that has already been
   replaced is a second run nobody asked for.
-* **The outgoing device is shut down with it — but only if frun booted it.**
-  `simctl shutdown` for a simulator, `adb -s <serial> emu kill` for an emulator, on
-  a worker thread with nothing reported back. The restriction is the whole safety
-  argument: a simulator that was already up when frun started belongs to whatever
-  the user had it open for, and closing it would be frun deciding that for them. So
-  `App::booted_target` records who started it, set when a boot lands and cleared
-  whenever an already-attached row is picked. `adb shell reboot -p` was the wrong
-  call to reach for — it powers the guest down and leaves the emulator process
-  answering `adb devices` with a device that cannot be used.
+* **The outgoing device is shut down with it, if it is virtual.** `simctl shutdown`
+  for a simulator, `adb -s <serial> emu kill` for an emulator, on a worker thread
+  with nothing reported back. `adb shell reboot -p` was the wrong call to reach for:
+  it powers the guest down and leaves the emulator process answering `adb devices`
+  with a device that cannot be used.
+
+  The first rule here was narrower — shut down only what frun booted, tracked in an
+  `App::booted_target` flag — and it silently did nothing in the commonest case.
+  `boot_avd` starts the emulator under `nohup` *so that it outlives frun*, so on
+  every run after the first the emulator is already attached, nothing was booted,
+  and switching away left it running. The flag is gone. One rule that always holds
+  beats a rule that holds only in the session that started the device, and the cost
+  is stated plainly: switching away closes a simulator or emulator you may have had
+  open for something else. Physical devices are untouched, and so are macOS and
+  Chrome, where the nearest equivalent would be closing the user's browser.
 * **Picking the device that is already running is a return, not a rebuild.** Its row
   is the highlighted one when the list opens, so a reflexive `Enter` lands on it,
   and `Switch Device` does not promise a rebuild.

@@ -508,13 +508,6 @@ pub struct App {
     /// glitch.
     pub refreshing: bool,
 
-    /// Whether frun booted the current target itself.
-    ///
-    /// Decides one thing: whether the device is shut down again when the run moves
-    /// off it (8.5). A simulator that was already up belongs to whatever the user
-    /// had it open for, and closing it would be frun deciding that for them.
-    pub booted_target: bool,
-
     /// Where `Esc` goes back to, and the one flag that says the picker is open
     /// over a run that is still alive (DESIGN.md 8.5).
     ///
@@ -617,7 +610,6 @@ impl App {
 
             target: None,
             refreshing: false,
-            booted_target: false,
             resume: None,
 
             boot_name: String::new(),
@@ -751,6 +743,35 @@ impl App {
     /// `ctx.extra` directly, so nothing else read it.
     pub fn choose(&mut self, device: Device) {
         probe::remember_device(&device.id);
+
+        // The row that was picked is replaced by the device that is now running,
+        // and this is not bookkeeping — it is what makes the switch list true for
+        // Android.
+        //
+        // An AVD is offered under its AVD name (`Pixel_10_Pro_XL`) and runs as a
+        // serial (`emulator-5554`). Adopting the target without touching the list
+        // left the old row in place, so `^D` showed the emulator frun was running
+        // as a row offering to boot it, with no ` running ` badge — the badge
+        // matches on `target.id` — and no ` last used ` either, since that compares
+        // ids too. iOS hid the bug: a simulator keeps its UDID booted or not.
+        //
+        // Matched on name as well as id because the name is the join `targets()`
+        // already relies on to de-duplicate a running emulator against its AVD row.
+        let existing = self
+            .devices
+            .iter()
+            .position(|d| d.id == device.id || d.name == device.name);
+
+        match existing {
+            Some(i) => self.devices[i] = device.clone(),
+            None => self.devices.insert(0, device.clone()),
+        }
+
+        // The chip follows the pick rather than waiting for the next full scan to
+        // read `.frun-last-device` back.
+        for row in &mut self.devices {
+            row.last_used = row.id == device.id;
+        }
 
         self.target = Some(device);
     }

@@ -594,6 +594,54 @@ fn target(id: &str, name: &str, platform: Platform, sdk: &str, boot: Boot) -> De
     }
 }
 
+/// Ids that are up right now, asked of the two tools that answer immediately.
+///
+/// Measured on this machine: `adb devices` 12ms, `simctl list -j` 119ms,
+/// `fvm flutter devices --machine` **6113ms**. That gap is the entire reason this
+/// exists. Rechecking the switch list does not need to rediscover devices — the
+/// list is already there — it needs to know which of its rows are still real, and
+/// that question is 145ms rather than six seconds (8.5).
+///
+/// Every adb serial, not only emulators: a phone unplugged mid-session is the same
+/// stale row as an emulator that was shut down.
+pub fn alive() -> std::collections::HashSet<String> {
+    let mut up = std::collections::HashSet::new();
+
+    if let Some(out) = run("adb", &["devices"], QUICK) {
+        up.extend(
+            out.lines()
+                .skip(1)
+                .filter_map(|line| line.split_whitespace().next())
+                .filter(|serial| !serial.is_empty())
+                .map(str::to_string),
+        );
+    }
+
+    if let Some(raw) = run(
+        "xcrun",
+        &["simctl", "list", "devices", "available", "-j"],
+        QUICK,
+    ) {
+        if let Ok(json) = serde_json::from_str::<Value>(&raw) {
+            let runtimes = json.get("devices").and_then(Value::as_object);
+
+            for devices in runtimes.into_iter().flatten().map(|(_, v)| v) {
+                for device in devices.as_array().into_iter().flatten() {
+                    if device.get("state").and_then(Value::as_str) != Some("Booted") {
+                        continue;
+                    }
+
+                    if let Some(udid) = device.get("udid").and_then(Value::as_str) {
+                        up.insert(udid.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    up
+}
+
 /// Shut-down iOS simulators.
 ///
 /// Shutdown only: a booted simulator Flutter cannot see is a different problem,
