@@ -93,6 +93,14 @@ pub const GLYPH_BOLT: &str = "\u{f0e7}";
 /// above and below it.
 pub const GLYPH_WARN: &str = "\u{f071}";
 
+/// Play triangle, for a run that is live. `U+F04B`.
+///
+/// Deliberately the same icon family as `GLYPH_STOP` below it, because the two are
+/// the ends of one axis and a device card shows one or the other. Mixing families
+/// there — a play triangle against a `⏹` from the Unicode symbols block — would make
+/// two states of one thing look like two unrelated facts.
+pub const GLYPH_PLAY: &str = "\u{f04b}";
+
 /// Stop square, for a run that was ended deliberately. `U+F04D`.
 ///
 /// Not `⏹` U+23F9, for the reason `GLYPH_WARN` is not `⚠`. It shares the same

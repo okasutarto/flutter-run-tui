@@ -11,7 +11,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
-use crate::data::{Action, App, Hit, State};
+use crate::data::{Action, App, Hit};
 use crate::theme;
 use crate::widgets::{card, field, keycap, pill, separator, spread, strong, text};
 
@@ -32,16 +32,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // picker state, so nothing but a chosen device can put it on screen.
     let mut block = card("DEVICE INFO", theme::CYAN);
 
-    // How the run ended, as a pill in the title bar. `STOPPED`, `DETACHED`,
-    // `DISCONNECTED`.
+    // What the run is doing, as a pill in the title bar: `RUNNING`, then `STOPPED`,
+    // `DETACHED` or `DISCONNECTED` depending on how it ended.
     //
-    // These were the whole reason the tracker block stayed on screen after a build —
-    // one row plus the blank above it, carried through every frame of a stopped
-    // session so that three words could be said once. This slot costs nothing, and it
-    // was empty: `^D` vacated it when it moved inside the card, and every other card
-    // uses its top-right for a count, a path or a status. A status is the plainest
-    // case of that, so filling it here closes the one exception rather than inventing
-    // an idiom.
+    // The three ending words were the whole reason the tracker block stayed on screen
+    // after a build — one row plus the blank above it, carried through every frame of
+    // a stopped session so that three words could be said once. This slot costs
+    // nothing, and it was empty: `^D` vacated it when it moved inside the card, and
+    // every other card uses its top-right for a count, a path or a status. A status is
+    // the plainest case of that, so filling it here closes the one exception rather
+    // than inventing an idiom.
     //
     // On *this* card because the three words are statements about the device. After
     // Flutter's own `d` the app is still running on it; after `^S` it is gone; after a
@@ -57,21 +57,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     //
     // A pill rather than a bare word, matching the chips on a device row: this is a
     // state the device is in, which is what those chips are for. Sitting on the border
-    // its fill interrupts the rule, which is how a badge on a frame edge is supposed
-    // to read. The glyph stays outside the fill, where a colour behind a word does not
-    // have to compete with a symbol on top of it.
+    // its fill interrupts the rule, which is how a badge on a frame edge should read.
     //
-    // Only in `Stopped`. A live run has nothing to report here that the streaming log
-    // window below is not reporting continuously and more precisely, and leaving the
-    // slot empty until then is what makes the pill's *arrival* the signal — the eye
-    // catches a thing appearing far more reliably than a word changing in place. That
-    // property is the one thing worth preserving from the banner this replaces.
-    if app.state == State::Stopped {
+    // Glyph inside the fill, so the pill is one object. Outside it, the glyph read as
+    // a separate mark that happened to be next to a badge — and on a border row, where
+    // `─` runs up to it on the left, a lone symbol between the rule and the pill has
+    // nothing to attach itself to.
+    //
+    // Shown in every state that draws this card except the two the tracker block owns.
+    // `has_tracker` is the same gate the log card's title uses for the build totals,
+    // and that is the point: while the tracker is on screen it holds both the word and
+    // the numbers, and when it is not, the word is here and the numbers are there.
+    // Without the gate, `BUILDING` would be on screen twice — once in the tracker's
+    // title and once in this pill.
+    if !app.state.has_tracker() {
         let (glyph, label, color) = super::build::status(app);
 
-        let mut spans = vec![text("─ ", theme::BORDER), strong(glyph, color), Span::raw(" ")];
+        let mut spans = vec![text("─ ", theme::BORDER)];
 
-        spans.extend(pill(format!(" {label} "), color));
+        spans.extend(pill(format!(" {glyph} {label} "), color));
         spans.push(Span::raw(" "));
 
         block = block.title_top(Line::from(spans).right_aligned());
@@ -95,8 +99,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // and both are gone, for four rows.
     //
     // The banner read `✔ 1 device active: iPhone 17 Pro (emulator) (iOS)`. Every
-    // fact in it is already in the table below: the name is the `Device Target`
-    // pill, `(emulator)` is `Type`, and the platform is the head of `Platform ID`.
+    // fact in it is already in the table below: the name is `Device Target`,
+    // `(emulator)` is `Type`, and the platform is the head of `Platform ID`.
     // What it added was the count, and the count is one by construction — this
     // card only exists once a device has been chosen.
     //
@@ -112,10 +116,22 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         .as_ref()
         .expect("returned above when there is no target");
 
+    // Plain bold text, not a pill.
+    //
+    // The pill was here to mark this as the card's headline value, and once the run
+    // status became a pill in the title bar directly above it, two pills on one card
+    // meant two different things: one is a *state*, which is what a filled chip says
+    // everywhere else in this app — ` active `, ` running `, ` in use `, ` last used `
+    // on a device row — and this one was a name.
+    //
+    // `TEXT` bold rather than a hue, and not `CYAN` like `Platform ID` below it: the
+    // two adjacent rows would then look like one value split across them. Brightest
+    // text with no colour is also how the device list draws the name of the selected
+    // row, so the same fact is styled the same way in both places.
     let mut lines = vec![field(
         w,
         "Device Target",
-        pill(format!(" {} ", device.name), theme::CYAN),
+        vec![strong(device.name.as_str(), theme::TEXT)],
     )];
 
     if plan.separators {

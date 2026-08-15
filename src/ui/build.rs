@@ -37,12 +37,15 @@ const BAR_MAX: u16 = 44;
 /// where that is visible as an *indent* rather than as an overflow: the glyph is the
 /// row's first cell, so a font giving it emoji presentation pushes the whole row a
 /// half-cell right of the card borders above and below it. See `theme::GLYPH_WARN`.
-/// The three `Stopped` arms are read by the target card rather than by anything in
-/// this file: the tracker block is not on screen in that state (`has_tracker`), and
-/// those words are statements about the device, so they are a pill on the card that
-/// describes it (3.2). They stay here because this is the one function that maps a
-/// state to a word, a glyph and a colour, and splitting it is how the card and the
-/// row came to disagree the first time.
+/// Two components read this, and they split it exactly where `has_tracker` splits.
+/// `BUILDING` and `BUILD FAILED` are drawn here, as the tracker card's own title.
+/// The other four — `RUNNING`, `STOPPED`, `DETACHED`, `DISCONNECTED` — are drawn by
+/// the target card as a pill, because in those states there is no tracker block and
+/// all four are statements about the device rather than about a build (3.2).
+///
+/// One function for both, so the two cards cannot disagree about what a state is
+/// called. They did once, when this was two copies: the card said `BUILD FINISHED`
+/// while the row beneath it said `build finished`.
 pub(super) fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
     match app.state {
         State::BuildFailed => ("✖", "BUILD FAILED", theme::ROSE),
@@ -74,7 +77,23 @@ pub(super) fn status(app: &App) -> (&'static str, &'static str, ratatui::style::
             (theme::GLYPH_WARN, "DISCONNECTED", theme::ROSE)
         }
         State::Stopped => (theme::GLYPH_STOP, "STOPPED", theme::MUTED),
-        s if s.build_done() => ("✔", "BUILD FINISHED", theme::EMERALD),
+        // `RUNNING`, and this arm used to read `✔ BUILD FINISHED`.
+        //
+        // That wording had no reader left. The tracker block is not laid out once a
+        // build succeeds (`has_tracker`), so nothing could draw it — a state this
+        // function claims to describe with a word nothing on screen could show.
+        //
+        // The target card's pill is what reads it now, and there the subject is the
+        // run rather than the build it came out of: the pill's other three words are
+        // `STOPPED`, `DETACHED` and `DISCONNECTED`, so a fourth saying the build
+        // finished would be answering a different question from its neighbours. It is
+        // also the word the device list already uses for this exact fact — ` running `
+        // marks the row your app is on.
+        //
+        // A play triangle rather than the `✔` that was here, paired with the stop
+        // square on the way out. A tick means *done*, which is the build; this is the
+        // one state where something is still happening.
+        s if s.build_done() => (theme::GLYPH_PLAY, "RUNNING", theme::EMERALD),
         _ => (app.spinner(), "BUILDING", theme::AMBER),
     }
 }

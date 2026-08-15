@@ -150,18 +150,40 @@ already the component describing what is being run and where.
 * **Target Details Table**, and nothing else: `Device Target`, `Platform ID`,
   `OS Version`, `Type` (Simulator / Hardware). Four rows, plus separators.
 
-* **How the run ended is a pill in the title bar**: `STOPPED`, `DETACHED`,
-  `DISCONNECTED`, from `Ending`, in `STOPPED` only.
+* **What the run is doing is a pill in the title bar**: `RUNNING`, then `STOPPED`,
+  `DETACHED` or `DISCONNECTED` from `Ending` once it ends.
 
   ```text
+  ╭─ ◆ DEVICE INFO ───────────────────────────────   RUNNING  ╮
   ╭─ ◆ DEVICE INFO ──────────────────────────   DISCONNECTED  ╮
   ```
 
-  On this card because all three are statements about the *device*: after `d` the app
-  is still running on it, after `^S` it is gone, after a `Lost` the connection to it
-  is what broke. In the title bar because that slot was empty here and is a status
-  slot everywhere else — `~/cwclub`, `5 devices`, `N targets`, `[7 entries]` — so
-  this closes the one card that was an exception rather than inventing a place.
+  On this card because all four are statements about the *device*: the app is on it,
+  or after `d` still on it with the tooling let go, or after `^S` gone from it, or
+  after a `Lost` unreachable. In the title bar because that slot was empty here and is
+  a status slot everywhere else — `~/cwclub`, `5 devices`, `N targets`,
+  `[7 entries]` — so this closes the one card that was an exception rather than
+  inventing a place.
+
+  **Shown in every state that draws this card except the two the tracker owns.**
+  `has_tracker` is the gate, the same one the log card's title uses for the build
+  totals, and the symmetry is the point: while the tracker block is on screen it holds
+  both the state word and the two numbers, and when it is not, the word is here and the
+  numbers are there. Without the gate `BUILDING` would be on screen twice.
+
+  `RUNNING` replaced `✔ BUILD FINISHED` on that arm of `status()`, which had no reader
+  left — the tracker is not laid out once a build succeeds, so nothing could draw it.
+  The pill's subject is the run rather than the build it came out of, and its three
+  neighbours all answer that question, so a fourth reporting on the build would be
+  answering a different one. It is also the word the device list already uses for this
+  exact fact: ` running ` marks the row your app is on.
+
+  **The glyph goes inside the fill**, so the pill is one object. Outside it read as a
+  separate mark that happened to sit next to a badge, and on a border row — where `─`
+  runs up to it from the left — a lone symbol between the rule and the pill has nothing
+  to attach itself to. A play triangle in, a stop square out, from one icon family
+  (`theme::GLYPH_PLAY`, `GLYPH_STOP`): two ends of one axis should not look like two
+  unrelated facts.
 
   `PROJECT INFO` was the other candidate and is wrong twice over. Nothing about a
   project is disconnected, and its top-right is already spent on the cwd, so at any
@@ -172,14 +194,11 @@ already the component describing what is being run and where.
   No `Status` label, because no other title slot has one and the position already
   says the value describes the whole card. A labelled `Status` field row under `Type`
   was the alternative and costs two rows — the row and its separator — which is
-  exactly what 3.4 had just reclaimed by removing the tracker block. It would also
-  force a value for the whole of a run, and `Running` there says nothing a streaming
-  log window does not. Empty until something ends is what makes the pill's arrival
-  the signal.
+  exactly what 3.4 had just reclaimed by removing the tracker block. The title bar
+  carries the same four values for nothing.
 
   A pill rather than a bare word, matching the chips on a device row, since this is a
-  state the device is in. On a border its fill interrupts the rule, which is how a
-  badge on a frame edge should read. Glyph outside the fill.
+  state the device is in.
 
 * **`[^D] Switch Device` is a row inside the card, bottom-right.** It rode in the
   top border beside the title, where it cost no rows, and two things paid for
@@ -634,9 +653,12 @@ devices answered.
   arrive and push every line of the stream down two rows, at the moment the user is
   most likely to be reading one. `chrome(STOPPED)` now equals `chrome(RUNNING)`.
 
-  The pill's *arrival* still does the second job the banner did — it appears because
-  the run ended, so the transition is announced by something showing up rather than
-  by a word changing in place, which the eye is much worse at catching.
+  The pill is on screen throughout, reading `RUNNING` in emerald, so the transition is
+  a word and a colour changing in place rather than a banner arriving. That is weaker
+  as an alarm and it is not the only signal: the footer swaps to `[r] Build again` at
+  the same moment, and a `Lost` puts `ERR lost connection to the device` in the log.
+  What it buys is a card that says what the run is doing at every point in the session
+  rather than only at the end of one.
 
   `State::has_tracker` is the predicate, and it is `BUILDING | BUILD_FAILED`. It is
   deliberately narrower than `has_build`, which asks whether there is a run behind
@@ -2974,10 +2996,10 @@ make a deliberate stop read as something breaking.
 ```
 
 **Which word appears is the whole of this section**, and it is the title-bar pill of
-3.2 that carries it: `STOPPED` and `DETACHED` in muted, `DISCONNECTED` in rose. There
-is no tracker block here and no summary row — `chrome(STOPPED)` equals
-`chrome(RUNNING)`, so nothing on screen moves when the run ends, and the pill
-appearing is the announcement. 3.4 has the argument for that trade.
+3.2 that carries it: `STOPPED` and `DETACHED` in muted, `DISCONNECTED` in rose, in
+place of the `RUNNING` in emerald that was there a moment earlier. There is no tracker
+block here and no summary row — `chrome(STOPPED)` equals `chrome(RUNNING)`, so nothing
+on screen moves when the run ends. 3.4 has the argument for that trade.
 
 The device is left booted and the log is left intact, which is what makes `r` from
 here worth having: it is `Action::RetryBuild`, so it already brings the device back up
