@@ -331,6 +331,12 @@ fn detect(tx: &Sender<Msg>) {
     std::thread::spawn(move || {
         let last = probe::last_device();
 
+        // Sent first, and from here rather than left to `recheck`. The picker can be
+        // answered inside four seconds — sooner than the first recheck — and both the
+        // ` in use ` chip and the guard behind `Enter` are worthless if they arrive
+        // after the pick. 25ms against the six seconds this thread is already spending.
+        let _ = tx.send(Msg::Busy(probe::busy()));
+
         // The bootable scan is no longer conditional. It used to run only when
         // nothing was attached, which is exactly why booting was unreachable the
         // rest of the time. Two extra spawns, both of which answer immediately.
@@ -375,7 +381,11 @@ fn recheck(app: &App, ctx: &Ctx) {
         let alive = probe::alive();
         let last = probe::last_device();
 
-        let real: Vec<probe::Device> = cached
+        // Same worker, because it is the same question at the same cadence: what is
+        // true of these rows right now.
+        let _ = tx.send(Msg::Busy(probe::busy()));
+
+        let mut real: Vec<probe::Device> = cached
             .into_iter()
             .filter_map(|mut device| {
                 if !device.attached() || !device.virtual_device {
@@ -406,8 +416,42 @@ fn recheck(app: &App, ctx: &Ctx) {
             })
             .collect();
 
+        // **Rows can appear, not only vanish, and this half was missing.** The filter
+        // above can confirm or drop what it was handed and nothing else, so a device
+        // that came up after detection could only be noticed if one of the cached rows
+        // already carried its id. iOS satisfies that — a simulator keeps one UDID —
+        // and Android never does: the row said `Pixel_8` and the machine said
+        // `emulator-5554`. So an emulator booted by the tab a `⇧⏎` spawned (8.4), or
+        // by hand, stayed a row offering to boot it, ` active ` never appeared, and
+        // `Enter` on it would have booted a second copy of something already up.
+        for serial in &alive {
+            if real.iter().any(|row| row.id == *serial) {
+                continue;
+            }
+
+            if let Some(device) = probe::adopted(serial) {
+                adopt(&mut real, device);
+            }
+        }
+
         let _ = tx.send(Msg::Devices(Ok(probe::targets(real, &last))));
     });
+}
+
+/// Put an adopted device where its bootable row was.
+///
+/// In place, not appended: the row under the cursor is the one changing identity, and
+/// pushing the new one to the end would leave the old `Pixel 8` sitting above a second
+/// `Pixel 8` until `targets` deduplicated by name — which it only does for rows it
+/// adds itself, so the pair would have survived the merge.
+fn adopt(rows: &mut Vec<probe::Device>, device: probe::Device) {
+    match rows
+        .iter()
+        .position(|row| row.name == device.name && row.boot.is_some())
+    {
+        Some(index) => rows[index] = device,
+        None => rows.push(device),
+    }
 }
 
 fn state_arg(arg: Option<&String>) -> io::Result<State> {
@@ -696,6 +740,8 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
             }
         }
 
+        Msg::Busy(ids) => app.busy = ids,
+
         Msg::Devices(Ok(targets)) => {
             app.refreshing = false;
 
@@ -869,12 +915,23 @@ fn devices_refreshed(app: &mut App, targets: Vec<probe::Device>) {
         return;
     }
 
-    let anchor = app.selected().map(|device| device.id.clone());
+    let anchor = app
+        .selected()
+        .map(|device| (device.id.clone(), device.name.clone()));
 
     app.devices = targets;
 
+    // By name when the id is gone, which is not a fallback for a rare case: an
+    // emulator that boots between two rechecks changes the id of its own row from the
+    // AVD name to a serial (`adopt`), so the row the user is looking at would have
+    // dropped the cursor back to the top of the list at the moment it became runnable.
     app.selected_device = anchor
-        .and_then(|id| app.devices.iter().position(|device| device.id == id))
+        .and_then(|(id, name)| {
+            app.devices
+                .iter()
+                .position(|device| device.id == id)
+                .or_else(|| app.devices.iter().position(|device| device.name == name))
+        })
         .unwrap_or(0);
 
     app.scroll = 0;
@@ -1283,6 +1340,10 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
         return false;
     };
 
+    if refuse_busy(app, &device) {
+        return false;
+    }
+
     // Switching to the device that is already running is a return, not a rebuild.
     // The row for the current target is the highlighted one when the list opens, so a
     // reflexive `Enter` lands on it, and the label promises another device — not forty
@@ -1318,6 +1379,33 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
     start(app, ctx, device);
 
     false
+}
+
+/// Refuse a device another run already holds, and say so (8.4).
+///
+/// **One guard, both verbs.** `⏎` and `⇧⏎` are the two ways a row becomes a run, here
+/// and in another tab, and a device can only carry one: the second `flutter run`
+/// reinstalls over the first and takes its VM service down, so the tab that was
+/// working is the one that breaks. Guarding only the key that happened to be reported
+/// would have left the other spelling of the same mistake open.
+///
+/// Logged rather than silent, because a key that does nothing reads as a broken key.
+/// The chip on the row already says which device it is; this says the press was heard
+/// and refused.
+fn refuse_busy(app: &mut App, device: &probe::Device) -> bool {
+    if !app.in_use(&device.id) {
+        return false;
+    }
+
+    app.log(
+        Level::Wrn,
+        &format!(
+            "{} is in use by another run — pick another device",
+            device.name
+        ),
+    );
+
+    true
 }
 
 /// Take a device from wherever it was chosen and get it running.
@@ -1663,6 +1751,10 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
                 return false;
             };
 
+            if refuse_busy(app, &device) {
+                return false;
+            }
+
             match new_tab(&device, &ctx.extra) {
                 Ok(()) => app.log(Level::Inf, &format!("new tab — {}", device.name)),
 
@@ -1921,6 +2013,53 @@ mod tests {
             env.iter().any(|entry| entry.starts_with("PATH=")),
             "PATH must be handed over: {env:?}"
         );
+    }
+
+    /// An emulator that comes up takes the place of the row that offered to boot it.
+    ///
+    /// The identity of the row changes here — `Pixel_8` becomes `emulator-5554` — which
+    /// is why this cannot be an append. Two rows called `Pixel 8`, one claiming to be
+    /// bootable, is what the user would have been asked to choose between, and
+    /// `targets` deduplicates only the rows it adds itself, so the pair would have
+    /// survived the merge.
+    #[test]
+    fn an_adopted_emulator_replaces_the_row_that_offered_to_boot_it() {
+        let bootable = |id: &str, name: &str| probe::Device {
+            id: id.into(),
+            name: name.into(),
+            platform: probe::Platform::Android,
+            target_platform: String::new(),
+            sdk: String::new(),
+            virtual_device: true,
+            last_used: false,
+            boot: Some(probe::Boot::Avd(id.into())),
+        };
+
+        let mut rows = vec![
+            bootable("Pixel_10_Pro_XL", "Pixel 10 Pro XL"),
+            bootable("Pixel_8", "Pixel 8"),
+        ];
+
+        let mut up = bootable("emulator-5554", "Pixel 8");
+        up.boot = None;
+
+        adopt(&mut rows, up);
+
+        assert_eq!(rows.len(), 2, "the AVD row is replaced, not joined");
+
+        // In place: the cursor is on the row the user was looking at, and this is the
+        // moment it becomes runnable.
+        assert_eq!(rows[1].id, "emulator-5554");
+        assert!(rows[1].boot.is_none(), "an emulator that is up needs no boot");
+        assert_eq!(rows[0].id, "Pixel_10_Pro_XL", "the other AVD is untouched");
+
+        // Nothing to replace: a device with no bootable row of its own is still news.
+        let mut fresh = bootable("emulator-5556", "Pixel 9");
+        fresh.boot = None;
+
+        adopt(&mut rows, fresh);
+
+        assert_eq!(rows.len(), 3);
     }
 
     /// A single quote in a path or a flag must not end the quoting.

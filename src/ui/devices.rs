@@ -257,6 +257,7 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
             device,
             index == app.selected_device,
             running_id.as_deref() == Some(device.id.as_str()),
+            app.in_use(&device.id),
             &mut pending,
         );
 
@@ -306,6 +307,17 @@ const LAST_USED: &str = " last used ";
 /// the list unable to answer the only question it is open to answer.
 const RUNNING: &str = " running ";
 
+/// The row another frun is on (8.4).
+///
+/// A third word, and the reason it is not `running` is the same reason `running` is
+/// not `active`: the two say who. `running` is *this* tab and is answered by `⏎ Keep`;
+/// this is somebody else's, and `Enter` refuses it. In the switch list both can be on
+/// screen at once, on different rows, so one word for both would make the only
+/// question the list is open to answer unanswerable.
+///
+/// Amber, not emerald. Every other chip on a row describes something you can have.
+const IN_USE: &str = " in use ";
+
 /// What `Enter` does on the row already running: nothing but close the list.
 ///
 /// The only per-row verb left. `▶ Run` used to sit on every other row and was
@@ -329,6 +341,7 @@ fn draw_row(
     device: &Device,
     selected: bool,
     running: bool,
+    in_use: bool,
     hits: &mut Vec<Hit>,
 ) {
     let w = crate::widgets::width;
@@ -345,7 +358,12 @@ fn draw_row(
     //
     // Suppressed on the running row: `running` already says the device is up, and
     // saying it twice in two words on one row is how a list stops being read.
-    let active = !running && device.boot.is_none() && device.platform.needs_boot();
+    //
+    // Suppressed on a taken row for the same reason and a sharper one. ` in use `
+    // implies the device is up — nothing can be running on a device that is not — so
+    // the pair would spend two chips on one fact, and the fact `active` is there to
+    // carry is that `Enter` launches now. On this row `Enter` does not launch at all.
+    let active = !running && !in_use && device.boot.is_none() && device.platform.needs_boot();
 
     let id = elide(&device.id, 16);
 
@@ -391,6 +409,12 @@ fn draw_row(
     // away from, and losing it to a narrow window would leave the frame unable to
     // say where the run currently is.
     let show_running = fits(running, GAP + pill_width(RUNNING));
+    // Directly behind it, and ahead of `active` for the reason `active` outranks
+    // `last used`, only more so: this is the one row where `Enter` is refused, and a
+    // narrow window dropping it would leave a device that looks free and answers
+    // nothing. The two are never on the same row — `in_use` excludes this tab's own
+    // target — so the order between them is a ranking, not a fight for space.
+    let show_in_use = fits(in_use, GAP + pill_width(IN_USE));
     // `active` outranks `last used`: it is the one that changes the consequence
     // of pressing Enter, where a preference costs nothing either way.
     let show_active = fits(active, GAP + pill_width(ACTIVE));
@@ -421,6 +445,11 @@ fn draw_row(
     if show_running {
         left.push(Span::raw("  "));
         left.extend(pill(RUNNING, theme::CYAN));
+    }
+
+    if show_in_use {
+        left.push(Span::raw("  "));
+        left.extend(pill(IN_USE, theme::AMBER));
     }
 
     if show_active {

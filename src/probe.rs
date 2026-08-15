@@ -785,6 +785,104 @@ pub fn alive() -> std::collections::HashSet<String> {
     up
 }
 
+/// A device that came up on its own, built from its serial alone.
+///
+/// **This exists because `alive` and the rows disagree about what an Android device
+/// is called.** A bootable row is the AVD name (`Pixel_8`, from `emulator
+/// -list-avds`) while the running emulator is a serial (`emulator-5554`, from `adb
+/// devices`), so `alive.contains(&row.id)` is false for every AVD however long it has
+/// been up — the asymmetry `targets` names. An emulator started after detection
+/// therefore stayed on screen as a row offering to boot something already running,
+/// and the tab a `⇧⏎` handed it to (8.4) never earned its ` active ` chip. iOS never
+/// had the bug: a simulator carries one UDID whether booted or shut down.
+///
+/// Emulators only, and `None` for anything `adb emu avd name` will not answer for. A
+/// physical serial would need a `getprop` for its model name, and a physical row is
+/// never the stale-bootable case this exists for.
+///
+/// `target_platform` and `sdk` are left blank deliberately — they are Flutter's to
+/// report and the next full scan fills them in, the same trade `to_handoff` makes.
+pub fn adopted(serial: &str) -> Option<Device> {
+    if !serial.starts_with("emulator-") {
+        return None;
+    }
+
+    Some(Device {
+        id: serial.to_string(),
+        name: avd_name(serial)?,
+        platform: Platform::Android,
+        target_platform: String::new(),
+        sdk: String::new(),
+        virtual_device: true,
+        last_used: false,
+        // Up, so there is nothing left to start. This is the whole point of adopting
+        // the row: it stops offering a boot and starts reading ` active `.
+        boot: None,
+    })
+}
+
+/// Device ids that another `flutter run` is already driving.
+///
+/// **One `ps`, because the alternative is state.** A lock file per run would have to
+/// be written, removed on the way out, and then disbelieved whenever a crash left one
+/// behind. The process table needs none of that, and it answers for runs frun never
+/// started as well as the ones it did — a `flutter run` typed into another tab by
+/// hand occupies the device exactly as much.
+///
+/// **`pgrep`, and not `ps -Awwo args=`, and the reason is `run` rather than taste.**
+/// `run` waits for the child to exit before it reads a word of stdout, so a command
+/// whose output exceeds the 64KB pipe buffer blocks writing, never exits, and comes
+/// back as `None` three seconds later. A full process table measured 174KB on this
+/// machine, so the first version of this function silently always answered "nothing
+/// is busy". `pgrep -fl flutter` asks the kernel to do the filtering and answers in
+/// 4.7KB.
+///
+/// No match is `pgrep`'s exit code 1, which `run` reports as `None` — the same empty
+/// answer, arrived at correctly: nothing is running, so nothing is taken.
+pub fn busy() -> std::collections::HashSet<String> {
+    match run("pgrep", &["-fl", "flutter"], QUICK) {
+        Some(out) => busy_from(&out),
+        None => std::collections::HashSet::new(),
+    }
+}
+
+/// The parse, split out so it can be asserted without a process table.
+///
+/// Both spellings, because both reach Flutter: `-d <id>` is what frun spawns
+/// (`flutter.rs`), `--device-id` is what a person types. The `run` test is not
+/// redundant with `pgrep`'s pattern — `flutter` also matches `flutter_tester`, an
+/// analyzer, and frun's own path — and `-d` is too common a flag to read off a line
+/// that is not a run.
+///
+/// The leading pid `-l` prints is just another word here, and one that can never be
+/// mistaken for a device: nothing precedes it.
+fn busy_from(ps: &str) -> std::collections::HashSet<String> {
+    let mut busy = std::collections::HashSet::new();
+
+    for line in ps.lines() {
+        if !(line.contains("flutter") && line.split_whitespace().any(|word| word == "run")) {
+            continue;
+        }
+
+        let mut words = line.split_whitespace();
+
+        while let Some(word) = words.next() {
+            let id = match word {
+                "-d" | "--device-id" => words.next(),
+                _ => word.strip_prefix("--device-id="),
+            };
+
+            // A flag where an id should be means the id is missing, not that the
+            // next flag is a device.
+            if let Some(id) = id.filter(|id| !id.is_empty() && !id.starts_with('-')) {
+                busy.insert(id.to_string());
+            }
+        }
+    }
+
+    busy
+}
+
 /// Shut-down iOS simulators.
 ///
 /// Shutdown only: a booted simulator Flutter cannot see is a different problem,
@@ -901,8 +999,26 @@ pub fn boot(target: &Boot) -> Result<Booted, String> {
 
 fn boot_sim(udid: &str) -> Result<Booted, String> {
     // Bring the window up first, or the device boots headless and there is
-    // nothing to look at.
-    let _ = run("open", &["-a", "Simulator"], QUICK);
+    // nothing to look at. `bootstatus -b` below blocks for half a minute on a cold
+    // simulator, and that is a long time to look at a frame with no device on screen.
+    //
+    // **`--args -CurrentDeviceUDID` is not a nicety, it is what stops a second
+    // simulator from booting.** Launched bare, Simulator.app boots the device it
+    // remembers in `com.apple.iphonesimulator`'s `CurrentDeviceUDID` — its own memory,
+    // nothing to do with `.frun-last-device` — and the boot below then brings up the
+    // one that was actually picked. Measured: `CurrentDeviceUDID` was an iPhone 17 Pro,
+    // an iPhone 17 Pro Max was chosen, and both ended up booted with two windows open.
+    // Handing the app the udid makes the device it restores the device that was asked
+    // for, so the two boots are one.
+    //
+    // Only read on a cold launch, which is the only launch that boots anything: an
+    // already-running Simulator ignores `--args` and is merely activated, and there is
+    // no extra device for it to bring up.
+    let _ = run(
+        "open",
+        &["-a", "Simulator", "--args", "-CurrentDeviceUDID", udid],
+        QUICK,
+    );
 
     // `bootstatus -b` boots if needed and blocks until the device is ready, so
     // there is no polling loop to write.
@@ -1257,6 +1373,31 @@ mod tests {
         );
         assert_eq!(sdk_name("iOS 18.2 22C150"), "iOS 18.2 22C150");
         assert_eq!(sdk_name("-"), "-");
+    }
+
+    /// 8.4: a device is taken when a `flutter run` says `-d` on it, and not otherwise.
+    ///
+    /// The two false positives are the ones worth asserting, because both are on a real
+    /// process table: `-d` is a common flag, and `run` is a common word. Only a line
+    /// carrying both plus `flutter` is a Flutter run, and the second and third lines
+    /// here each satisfy exactly one of the three.
+    #[test]
+    fn a_flutter_run_declares_the_device_it_holds() {
+        let ps = "/sbin/launchd\n\
+             /usr/bin/rsync -d /tmp/x\n\
+             /opt/homebrew/bin/tmux new-window -d run\n\
+             /Users/x/fvm/versions/3.35.0/bin/flutter run -d emulator-5554 --flavor staging\n\
+             /usr/bin/dart /Users/x/cache/flutter_tools.snapshot run --device-id=8A3F91C2-4D2E\n\
+             /Users/x/fvm/versions/3.35.0/bin/flutter run -d --verbose\n";
+
+        let busy = busy_from(ps);
+
+        assert!(busy.contains("emulator-5554"), "{busy:?}");
+        assert!(busy.contains("8A3F91C2-4D2E"), "{busy:?}");
+
+        // The last line is a run with no device: `-d` swallowing the next flag would
+        // have locked `--verbose` out of the picker as if it were a device.
+        assert_eq!(busy.len(), 2, "only flutter runs hold a device: {busy:?}");
     }
 
     #[test]

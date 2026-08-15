@@ -274,6 +274,50 @@ mod tests {
         }
     }
 
+    /// 8.4: a device another run holds says so, and stops claiming to be free.
+    ///
+    /// Both halves matter. ` in use ` is the warning, and `active` going away is what
+    /// keeps the row honest: it means "press Enter and it launches now", which on this
+    /// row is the one thing that will not happen.
+    ///
+    /// Measured at the floor as well, because a fourth chip is a fourth claim on a row
+    /// that already clipped once (7.5).
+    #[test]
+    fn a_device_another_run_holds_reads_in_use_instead_of_active() {
+        for (w, h) in [(106, 45), (60, 14)] {
+            let mut app = App::new(State::MultipleDevices);
+
+            // The one attached row in the mock, and so the only one that carries
+            // ` active ` for this to take away.
+            app.busy.insert("emulator-5554".to_string());
+
+            let frame = dump(&mut app, w, h);
+
+            for (i, row) in frame.lines().enumerate() {
+                let plain: String = strip_sgr(row);
+
+                assert!(
+                    width(&plain) <= w as usize,
+                    "at {w}x{h}: row {i} overflows with the chip on it\n{plain}"
+                );
+            }
+
+            if w < 106 {
+                continue;
+            }
+
+            assert!(
+                frame.contains("in use"),
+                "a taken device has to say so:\n{frame}"
+            );
+
+            assert!(
+                !frame.contains("active"),
+                "a taken device is not one Enter can launch:\n{frame}"
+            );
+        }
+    }
+
     /// The switch list draws the same rows as the first pick and means something
     /// else by them, so the three places that say so are checked together.
     ///

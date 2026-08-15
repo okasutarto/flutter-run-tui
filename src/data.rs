@@ -428,6 +428,13 @@ pub enum Msg {
     /// A boot finished, carrying the id Flutter will use and whatever else the
     /// device could be asked while the connection to it was warm.
     Booted(Result<probe::Booted, String>),
+    /// Which device ids another `flutter run` is on (8.4).
+    ///
+    /// Its own message rather than a field on `Devices`, because it is a fact about
+    /// processes and not about the list: it is asked on the same worker but it stays
+    /// true across a list that failed to refresh, and a device can be taken over
+    /// without any row changing.
+    Busy(std::collections::HashSet<String>),
     /// The slow SDK version lookup landed.
     Versions(String, String),
 }
@@ -692,6 +699,12 @@ pub struct App {
     /// replaces it with the terminal's own answer before the first frame.
     pub shift_enter: bool,
 
+    /// Device ids another `flutter run` is already on, from `probe::busy` (8.4).
+    ///
+    /// Read through `in_use`, never directly: the set contains this tab's own run too,
+    /// and that row is `running`, not taken.
+    pub busy: std::collections::HashSet<String>,
+
     clock: probe::Clock,
 }
 
@@ -765,6 +778,7 @@ impl App {
             live: false,
             demo: false,
             shift_enter: true,
+            busy: std::collections::HashSet::new(),
 
             clock: probe::Clock::new(),
         }
@@ -848,6 +862,24 @@ impl App {
 
     pub fn selected(&self) -> Option<&Device> {
         self.devices.get(self.selected_device)
+    }
+
+    /// Whether some *other* run holds this device (8.4).
+    ///
+    /// **The exclusion is what makes this readable rather than merely true.**
+    /// `probe::busy` reads the process table, and this tab's own `fvm flutter run -d`
+    /// is in it — so without the second half, the device you are running on would
+    /// wear ` in use ` in your own switch list, next to ` running `, and `⏎ Keep`
+    /// would refuse the row it exists to offer. The target is compared rather than a
+    /// pid excluded because the answer wanted here is about the device, and one
+    /// device is one run: if it is yours, it is not another tab's.
+    ///
+    /// A heuristic, deliberately: `-d <id>` on a `flutter run` command line, nothing
+    /// registered anywhere. It can only be wrong in the safe direction — an unusual
+    /// invocation goes unnoticed and the device reads free, which is where frun was
+    /// before this existed.
+    pub fn in_use(&self, id: &str) -> bool {
+        self.busy.contains(id) && self.target.as_ref().map(|t| t.id.as_str()) != Some(id)
     }
 
     /// Scroll the log window. Positive goes back in history.
