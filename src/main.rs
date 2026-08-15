@@ -1034,6 +1034,13 @@ fn child_exited(app: &mut App, ctx: &mut Ctx) {
         .and_then(Session::exit_code)
         .unwrap_or(1);
 
+    // `q`, and the only ending that is about frun rather than about the run. It has
+    // to be checked before the two below, which both keep frun on screen.
+    if app.ending == Some(Ending::Quit) {
+        ctx.done = true;
+        return;
+    }
+
     // An ending frun knows about (8.8): `^S`, or Flutter's own detach. The child is
     // gone, frun is not — the log stays readable, the device stays booted, and `r`
     // builds again.
@@ -1050,8 +1057,27 @@ fn child_exited(app: &mut App, ctx: &mut Ctx) {
     // still the run, and reading `state` here would treat its death as a process
     // with nothing left to do and exit without reporting anything.
     if app.run_state().build_done() {
-        // Flutter shut itself down, which is the graceful exit `q` asks for.
-        ctx.done = true;
+        // A live session died and no key asked for it: the app was closed on the
+        // device, it crashed, or the device went away. This used to be read as
+        // Flutter shutting itself down — the graceful exit `q` asks for — so
+        // switching an emulator off took frun with it and reported nothing.
+        //
+        // The same landing as `^S`, because the device is in the same condition:
+        // the app is gone and `r` is the way back, which for a virtual target
+        // boots it again first. Only the title differs.
+        ctx.session = None;
+
+        app.ending = Some(Ending::Lost);
+        app.end_build();
+
+        // frun's own line, not a reclassified one of Flutter's. `Lost connection to
+        // device.` is what Flutter usually prints and it classifies as `INF`, but a
+        // device that goes away abruptly closes the pty without printing anything —
+        // so the one thing that is always true has to be the thing that is said.
+        app.log(Level::Err, "lost connection to the device");
+
+        app.goto(State::Stopped);
+
         return;
     }
 
@@ -1681,6 +1707,12 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
         // Flutter's to make.
         Action::Quit => {
             if ctx.session.is_some() && app.state.build_done() {
+                // Recorded before the key goes, because the pty closing is all
+                // `child_exited` will have to go on and every other way a live
+                // session can end now keeps frun on screen. Without this the exit
+                // asked for here would land on the `DISCONNECTED` frame instead.
+                app.ending = Some(Ending::Quit);
+
                 forward(ctx, b"q");
                 return false;
             }
@@ -1904,5 +1936,59 @@ mod tests {
             command, r"'/bin/frun' '--dart-define=NAME=o'\''brien'",
             "quoting escaped: {command}"
         );
+    }
+
+    /// A live session can end four ways, and one branch used to serve all of them.
+    ///
+    /// `q` is the regression this exists for. It forwards the key and keeps the loop
+    /// running, so it leaves through the same branch a dying device now lands on:
+    /// pointing that branch at `Stopped` without recording the key first would have
+    /// left `q` unable to quit.
+    #[test]
+    fn a_live_session_dying_only_ends_frun_when_a_key_asked_for_it() {
+        fn eof(ending: Option<Ending>) -> (App, bool) {
+            let (tx, rx) = std::sync::mpsc::channel();
+
+            let mut ctx = Ctx {
+                rx,
+                tx,
+                session: None,
+                extra: Vec::new(),
+                rechecked: Instant::now(),
+                done: false,
+            };
+
+            let mut app = App::new(State::Running);
+            app.ending = ending;
+
+            child_exited(&mut app, &mut ctx);
+
+            (app, ctx.done)
+        }
+
+        // Nobody asked: the app was closed, or the device went away.
+        let (app, done) = eof(None);
+
+        assert!(!done, "a device going away must not take frun with it");
+        assert_eq!(app.state, State::Stopped);
+        assert_eq!(app.ending, Some(Ending::Lost));
+        assert_eq!(
+            app.logs.last().map(|line| line.level),
+            Some(Level::Err),
+            "the reason has to be in the log, which is what survives in the transcript"
+        );
+
+        // `q`: the one ending that is about frun rather than about the run.
+        let (_, done) = eof(Some(Ending::Quit));
+        assert!(done, "q asked to leave");
+
+        // `^S` and `d`/`D` keep the frame, as they did before.
+        for ending in [Ending::Stopped, Ending::Detached] {
+            let (app, done) = eof(Some(ending));
+
+            assert!(!done, "{ending:?} ends the run, not frun");
+            assert_eq!(app.state, State::Stopped);
+            assert_eq!(app.ending, Some(ending), "the frame has to name which");
+        }
     }
 }

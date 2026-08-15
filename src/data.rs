@@ -517,16 +517,41 @@ impl Action {
     }
 }
 
-/// How a run ended, when it ended on purpose.
+/// How a run ended.
 ///
-/// The two look identical from the pty — the child closes it and goes — and they
-/// leave the device in opposite states, so the frame afterwards has to name which.
+/// Every one of these looks identical from the pty — the child closes it and goes
+/// — so this field is the only thing that can tell them apart, and they differ in
+/// both directions that matter: whether frun should still be here afterwards, and
+/// what state the device was left in.
+///
+/// `None` is the fourth case and the one no key produces: the app was killed or
+/// the device went away. That is the whole of the detection, for the same reason
+/// build failure is not a catalogue of error strings — a device yanked mid-run can
+/// close the pty without Flutter printing a word, so the *absence* of a recorded
+/// ending is more reliable than any line to grep for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ending {
     /// `^S`: Flutter was asked to shut down, and the app went with it.
     Stopped,
     /// `d`/`D`, Flutter's own key: the tool let go and the app is still running.
     Detached,
+    /// `q`: the same request as `^S`, aimed at frun rather than at the run.
+    ///
+    /// Recorded even though nothing renders it, because `child_exited` has to know
+    /// this death was asked for. Before this existed, `q` and a device dying were
+    /// one indistinguishable event — both arrived as "the pty closed while the
+    /// session was live" — so giving the second one a frame to land on would have
+    /// taken `q` with it.
+    Quit,
+    /// Nobody asked: the app was closed on the device, crashed, or the device
+    /// itself went away.
+    ///
+    /// Lands on `Stopped` like the two deliberate endings, because the device is
+    /// left in the same condition as after `^S` — app gone, and `r` is the way
+    /// back. Only the title differs, and it has to: frun cannot tell a deliberate
+    /// shutdown from a crash, so the frame says what it knows (the connection
+    /// ended) and not why.
+    Lost,
 }
 
 /// A clickable region, rebuilt every frame.

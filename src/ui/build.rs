@@ -44,6 +44,15 @@ fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
         State::Stopped if app.ending == Some(Ending::Detached) => {
             ("⏹", "DETACHED", theme::MUTED)
         }
+        // Amber, between the two: rose is for something broken and muted is for a
+        // stop that was asked for, and this is neither. Nothing frun did failed,
+        // but nothing asked for this either — and it cannot be narrowed further,
+        // because a device switched off and an app that crashed arrive as the same
+        // event. The word says what closed, not why; the `ERR` line in the log is
+        // where the reason lives.
+        State::Stopped if app.ending == Some(Ending::Lost) => {
+            ("⚠", "DISCONNECTED", theme::AMBER)
+        }
         State::Stopped => ("⏹", "STOPPED", theme::MUTED),
         s if s.build_done() => ("✔", "BUILD FINISHED", theme::EMERALD),
         _ => (app.spinner(), "BUILDING", theme::AMBER),
