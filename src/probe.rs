@@ -596,61 +596,74 @@ pub enum Boot {
     Sim(String),
 }
 
-/// Every target worth offering, in one list, in the order they should be shown.
+/// Every target worth offering, in one list, each in the slot the machine gives it.
 ///
 /// One list and not two, per DESIGN.md 7.6. Splitting them was what trapped you
 /// on whichever platform happened to be running: with one device attached there
 /// was nothing to choose, so booting anything else was unreachable without
 /// quitting. Booting *is* a choice, so it belongs in the picker.
 ///
-/// Order is running first, then things that need starting, then the platforms
-/// that are simply always there. That puts the single `Enter` case at the top and
-/// the slowest options last.
+/// **This is the canonical order, not the displayed one.** Every device gets one slot,
+/// decided by the tool that knows about it — `emulator -list-avds` for Android,
+/// `simctl` for iOS, Flutter's own answer for physical devices — and the slot does not
+/// move when the device boots or shuts down. Which rows are then lifted above it is
+/// `App::sort_devices`'s to decide, because that is a question about the run rather
+/// than about the machine: what is running, what another tab holds, what you reached
+/// for last.
+///
+/// The two used to be one thing done here, by appending whatever was new and sorting
+/// the remembered device to the top, and that is exactly how a device ended up in a
+/// different place in the picker than in the switch list.
 ///
 /// The mobile-only restriction the shell version applied is lifted, per 3.3.
 pub fn targets(reported: Vec<Device>, last_used: &str) -> Vec<Device> {
-    let (attached, always_available): (Vec<Device>, Vec<Device>) =
-        reported.into_iter().partition(|d| d.attached());
+    let mut rows = reported;
 
-    let mut targets = attached;
-
-    if let Some(out) = run("emulator", &["-list-avds"], QUICK) {
-        for avd in out.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            let name = pretty_avd(avd);
-
-            // An AVD that is already running is in the attached list under this
-            // same name — `android_name` resolves the serial back through
-            // `adb emu avd name` precisely so the two agree — so listing it again
-            // would offer to boot a device you are looking at.
-            if targets.iter().any(|d| d.name == name) {
-                continue;
-            }
-
-            targets.push(target(
-                avd,
-                &name,
-                Platform::Android,
-                "",
-                Boot::Avd(avd.to_string()),
-            ));
-        }
-    }
-
-    // Shut-down only, so a booted simulator cannot appear twice.
+    // Every AVD, in `emulator -list-avds` order, and a row that is already here is
+    // *moved* into that order rather than skipped.
     //
-    // Deduplicated by id as well, which the AVD loop above has always done by name.
-    // This function is written as "Flutter's list, plus what can be booted", and it
-    // used to trust that its input was Flutter's list. `recheck` hands it a list this
-    // function itself produced, so every pass appended the same shut-down simulators
-    // again: with a recheck every four seconds the picker climbed past two hundred
-    // rows. Being idempotent is cheaper than remembering the precondition.
-    let known: Vec<String> = targets.iter().map(|d| d.id.clone()).collect();
+    // Matched by name, which is the join `android_name` exists to make possible: a
+    // running emulator is `emulator-5554` and its AVD row is `Pixel_8`, and resolving
+    // the serial through `adb emu avd name` is what lets one row stand for both. So an
+    // emulator occupies its AVD's slot whether it is running or not.
+    let avds: Vec<Device> = avds()
+        .into_iter()
+        .map(|(avd, name)| {
+            let fresh = target(&avd, &name, Platform::Android, "", Boot::Avd(avd.clone()));
 
-    targets.extend(
-        simulators()
-            .into_iter()
-            .filter(|sim| !known.contains(&sim.id)),
-    );
+            claim(&mut rows, |row| row.name == name, fresh)
+        })
+        .collect();
+
+    // Every simulator, in `simctl`'s order, in whatever state it is in — and this is
+    // the fix for a row that wandered.
+    //
+    // Shut-down simulators used to be appended if their id was new, which made a row's
+    // place in the list a fact about frun's history rather than about the machine: boot
+    // `iPhone 17 Pro Max` and shut it down again and it came back *after* every other
+    // simulator, because all the others were already in the list and only it counted as
+    // new. Measured across two frames of one session — position 4 in the picker,
+    // position 15 in the switch list, same device, nothing about it changed but its
+    // state. Walking `simctl`'s own order and claiming rows out of the input cannot do
+    // that: the order is the same on every pass because the source of it is.
+    let sims: Vec<Device> = simulators()
+        .into_iter()
+        .map(|sim| {
+            let id = sim.id.clone();
+
+            claim(&mut rows, |row| row.id == id, sim)
+        })
+        .collect();
+
+    // What is left of Flutter's own list, which is the half no cheap tool can order:
+    // physical devices, and the platforms that are always there.
+    let (physical, always_available): (Vec<Device>, Vec<Device>) =
+        rows.into_iter().partition(|d| d.attached());
+
+    let mut targets = physical;
+
+    targets.extend(avds);
+    targets.extend(sims);
 
     // macOS, Chrome and friends. No boot step and nothing to wait for, which is
     // why they sit last rather than competing with a device you can see.
@@ -671,11 +684,41 @@ pub fn targets(reported: Vec<Device>, last_used: &str) -> Vec<Device> {
         device.last_used = !device.id.is_empty() && device.id == last_used;
     }
 
-    // Sorted once, at the end. `devices()` sorts its own half, and the bootable
-    // rows appended after it would otherwise undo that.
-    targets.sort_by_key(|d| !d.last_used);
-
+    // Not sorted here any more, deliberately. What this function produces is the
+    // *canonical* order — one slot per device, decided by the tools — and which rows
+    // deserve to be lifted out of it is a question about the run: `App::sort_devices`
+    // owns that, because only it knows what is running and what another tab holds.
+    // Two sorts in two layers is how the two frames disagreed in the first place.
     targets
+}
+
+/// Every AVD on the machine, raw name and pretty name.
+///
+/// Split out because it is now read for its *order* as much as its contents.
+fn avds() -> Vec<(String, String)> {
+    let Some(out) = run("emulator", &["-list-avds"], QUICK) else {
+        return Vec::new();
+    };
+
+    out.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|avd| (avd.to_string(), pretty_avd(avd)))
+        .collect()
+}
+
+/// Take the existing row for a device out of `rows`, or fall back to a fresh one.
+///
+/// The row that is already there wins on content and the caller wins on position.
+/// That split is the whole point: a row Flutter reported carries `targetPlatform` and
+/// `sdk` that a `simctl` or `-list-avds` row cannot know, while the tool knows where
+/// the device belongs in a list. Removing it also keeps the merge idempotent — this
+/// function is fed its own output every four seconds.
+fn claim(rows: &mut Vec<Device>, is_match: impl Fn(&Device) -> bool, fresh: Device) -> Device {
+    match rows.iter().position(is_match) {
+        Some(index) => rows.remove(index),
+        None => fresh,
+    }
 }
 
 /// A bootable row. It has no `targetPlatform` because nothing has told us yet —
@@ -883,10 +926,19 @@ fn busy_from(ps: &str) -> std::collections::HashSet<String> {
     busy
 }
 
-/// Shut-down iOS simulators.
+/// Every iOS simulator, in the order `simctl` lists them, whatever state it is in.
 ///
-/// Shutdown only: a booted simulator Flutter cannot see is a different problem,
-/// and booting it again would not fix it.
+/// **The state used to be a filter and is now a field, and that is what makes the
+/// list stable.** Shut-down only meant a simulator left this list the moment it
+/// booted, so its position was then decided by whoever happened to hold a row for it
+/// — and came back at the end when it shut down again. A device's place in a list
+/// cannot depend on its state without the list rearranging itself under the cursor.
+///
+/// `Booted` is the only state that counts as up. `Booting` and `Shutting Down` both
+/// get a `Boot`, which is honest in the direction that costs nothing: `bootstatus -b`
+/// boots if needed and waits either way, and the alternative — calling a device that
+/// is on its way down "ready" — is a row that flickers out of the list a second later
+/// when `alive` disagrees.
 fn simulators() -> Vec<Device> {
     let Some(raw) = run(
         "xcrun",
@@ -914,10 +966,6 @@ fn simulators() -> Vec<Device> {
         }
 
         for device in devices.as_array().into_iter().flatten() {
-            if device.get("state").and_then(Value::as_str) != Some("Shutdown") {
-                continue;
-            }
-
             let (Some(udid), Some(name)) = (
                 device.get("udid").and_then(Value::as_str),
                 device.get("name").and_then(Value::as_str),
@@ -925,18 +973,29 @@ fn simulators() -> Vec<Device> {
                 continue;
             };
 
+            let up = device.get("state").and_then(Value::as_str) == Some("Booted");
+
             // The runtime is the key this device is filed under, so its version
             // is known before it boots and without asking anything: the same
             // string, through the same `sdk_name`, that Flutter reports once the
             // simulator is up. A shut-down simulator therefore describes itself
             // exactly as a running one does.
-            targets.push(target(
+            let mut sim = target(
                 udid,
                 name,
                 Platform::Ios,
                 &sdk_name(runtime),
                 Boot::Sim(udid.to_string()),
-            ));
+            );
+
+            // Up, so there is nothing left to start. Only ever reached when Flutter's
+            // own row for this simulator is missing — `claim` prefers that one, and it
+            // carries the `targetPlatform` this cannot know.
+            if up {
+                sim.boot = None;
+            }
+
+            targets.push(sim);
         }
     }
 
@@ -1325,6 +1384,29 @@ mod tests {
             once.len(),
             "a second merge changed the row count"
         );
+    }
+
+    /// A row's place comes from the machine, not from where it happened to arrive.
+    ///
+    /// This is the guard for the wandering row: `recheck` feeds this function its own
+    /// output, so any positional decision that reads the input order compounds every
+    /// four seconds. Reversing the input is the cheapest way to prove none is left —
+    /// the answer has to come back in the same order, because `simctl` and
+    /// `-list-avds` are asked for it every pass.
+    ///
+    /// True trivially on a machine with neither tool, where both lists are empty.
+    #[test]
+    fn the_order_of_a_merged_list_does_not_depend_on_its_input() {
+        let once = targets(Vec::new(), "");
+
+        let mut scrambled = once.clone();
+        scrambled.reverse();
+
+        let again = targets(scrambled, "");
+
+        let ids = |list: &[Device]| -> Vec<String> { list.iter().map(|d| d.id.clone()).collect() };
+
+        assert_eq!(ids(&once), ids(&again));
     }
 
     /// Anything short of the full form must be refused, because every field it is

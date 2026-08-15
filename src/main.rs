@@ -836,12 +836,16 @@ fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
 
     let attached = targets.iter().any(probe::Device::attached);
 
-    // `targets` is already ordered running-first, so this is the top row unless
-    // the remembered device is further down.
-    app.selected_device = targets.iter().position(|d| d.last_used).unwrap_or(0);
-
     app.devices = targets;
     app.scroll = 0;
+
+    // Ranked before the cursor is placed, since the cursor is an index into the order.
+    app.sort_devices();
+
+    // The remembered device, unless another run holds it — `first_pickable` has the
+    // argument. It is usually the top row now anyway; what it must never be is a row
+    // that answers `Enter` with a refusal.
+    app.selected_device = app.first_pickable();
 
     app.goto(if attached {
         State::MultipleDevices
@@ -920,6 +924,11 @@ fn devices_refreshed(app: &mut App, targets: Vec<probe::Device>) {
         .map(|device| (device.id.clone(), device.name.clone()));
 
     app.devices = targets;
+
+    // The same order the picker was in, from the same function. This is what `⏎` in the
+    // switch list and `⏎` in the picker being the same key is worth: the rows under it
+    // are in the same places.
+    app.sort_devices();
 
     // By name when the id is gone, which is not a fallback for a rare case: an
     // emulator that boots between two rechecks changes the id of its own row from the

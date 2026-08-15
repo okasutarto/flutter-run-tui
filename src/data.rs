@@ -882,6 +882,82 @@ impl App {
         self.busy.contains(id) && self.target.as_ref().map(|t| t.id.as_str()) != Some(id)
     }
 
+    /// Where a row belongs, top to bottom. Lower sorts higher.
+    ///
+    /// Computed from the row and from what is running, and from nothing else — no
+    /// history, no arrival order. That is what makes `SELECT DEVICE` and
+    /// `SWITCH DEVICE` show one order: they are the same list, ranked by the same
+    /// function, and `probe::targets` hands both of them the same canonical slots
+    /// underneath.
+    ///
+    /// `running` above `in use` above `last used` is the order the three facts matter
+    /// in: where the run is now, where another run is, and where you usually go. Below
+    /// them the canonical order takes over, grouped only by what pressing `Enter`
+    /// costs — a device that is up, then one that has to boot, then the platforms that
+    /// are always there and are nobody's first choice.
+    ///
+    /// The two rows at the top are ones `Enter` will not launch: `running` answers
+    /// `⏎ Keep` and `in use` is refused outright. That is deliberate — the top of the
+    /// list is the answer to "what is going on", and the cursor is placed on the first
+    /// row that *can* be picked rather than on row zero.
+    fn rank(&self, device: &Device) -> u8 {
+        if self.target.as_ref().is_some_and(|t| t.id == device.id) {
+            return 0;
+        }
+
+        if self.in_use(&device.id) {
+            return 1;
+        }
+
+        if device.last_used {
+            return 2;
+        }
+
+        // Before the boot test, not after: macOS and Chrome have no boot either, and
+        // ranking them with a device that is up and waiting would put the host above
+        // the phone in your hand.
+        if !device.platform.needs_boot() {
+            return 5;
+        }
+
+        if device.boot.is_none() {
+            return 3;
+        }
+
+        4
+    }
+
+    /// Put the rows in that order, keeping the canonical order inside each rank.
+    ///
+    /// Stable, which is the whole reason `probe::targets` stopped sorting: ties fall
+    /// back to the slot the machine gave the device, so a simulator that boots and
+    /// shuts down again returns to the place it was rather than to the end of its
+    /// group.
+    pub fn sort_devices(&mut self) {
+        let mut rows = std::mem::take(&mut self.devices);
+
+        rows.sort_by_key(|device| self.rank(device));
+
+        self.devices = rows;
+    }
+
+    /// The row the cursor should start on: the first one `Enter` can actually launch.
+    ///
+    /// The remembered device is the preselection worth having — 7.6 wants one keystroke
+    /// per run — but it is frequently the device another tab is on, and a preselected
+    /// row that refuses `Enter` is worse than no preselection at all.
+    pub fn first_pickable(&self) -> usize {
+        self.devices
+            .iter()
+            .position(|device| device.last_used && !self.in_use(&device.id))
+            .or_else(|| {
+                self.devices
+                    .iter()
+                    .position(|device| !self.in_use(&device.id))
+            })
+            .unwrap_or(0)
+    }
+
     /// Scroll the log window. Positive goes back in history.
     ///
     /// Not clamped here: the ceiling depends on how many visual rows the entries
@@ -929,7 +1005,23 @@ impl App {
             row.last_used = row.id == device.id;
         }
 
+        let id = device.id.clone();
+
         self.target = Some(device);
+
+        // Ranked now rather than at the next recheck, because `^D` puts the list up
+        // from the cache immediately and the answer behind it takes a moment: without
+        // this the switch list opened in the old order and rearranged itself under the
+        // cursor a fraction of a second later.
+        self.sort_devices();
+
+        // The cursor follows the run, which is where the switch list wants it: `^D` then
+        // a reflexive `Enter` means "stay here", and 8.5 leans on that.
+        self.selected_device = self
+            .devices
+            .iter()
+            .position(|row| row.id == id)
+            .unwrap_or(0);
     }
 
     /// How the target card describes the target's kind.
@@ -1214,6 +1306,21 @@ impl App {
             self.target = self.devices.first().cloned();
             self.resume = Some(State::Running);
         }
+
+        // No run, no target, and this became load-bearing when the list started being
+        // ranked. `App::new` sets a target for the frames that draw the target card, and
+        // the picker frames inherited it — harmless while nothing read it, and wrong the
+        // moment `rank` did: `--dump picker` lifted a row to the top as the running one
+        // in a frame that exists precisely because nothing is running yet.
+        if !state.has_build() && state != State::Switching {
+            self.target = None;
+        }
+
+        // Ranked like the live list, so `--dump picker` and `--dump switch` are
+        // comparable frames rather than two hand-written orders. The mock is what the
+        // layout is judged against; an order the live flow cannot produce judges it
+        // against the wrong thing.
+        self.sort_devices();
     }
 
     pub fn next_state(&mut self) {
@@ -1556,5 +1663,92 @@ mod tests {
             State::ReloadFailed,
             "what Flutter reached while the list was up is what comes back"
         );
+    }
+
+    /// The picker and the switch list are one order.
+    ///
+    /// They draw the same rows through the same widget, and they used to disagree about
+    /// where those rows went — measured on one session, `iPhone 17 Pro Max` was the
+    /// fourth row of the picker and the fifteenth of the switch list. Nothing about the
+    /// device had changed but its state, and a list that rearranges itself between two
+    /// frames makes `1`-`9` mean something different in each.
+    #[test]
+    fn both_frames_put_the_devices_in_the_same_order() {
+        let order = |state| {
+            App::new(state)
+                .devices
+                .iter()
+                .map(|device| device.name.clone())
+                .collect::<Vec<String>>()
+        };
+
+        assert_eq!(order(State::MultipleDevices), order(State::Switching));
+    }
+
+    /// `running` above `in use` above `last used`, and the canonical order below them.
+    ///
+    /// Asserted on one list rather than two frames because that is the fix: there is no
+    /// per-frame ordering left to disagree with itself. The rows go in deliberately
+    /// scrambled, so a rank that quietly stopped applying would show up as the input
+    /// order surviving.
+    #[test]
+    fn the_list_is_ranked_by_what_is_going_on_and_then_by_the_machine() {
+        let row = |id: &str, boot: Option<Boot>, platform: Platform| Device {
+            id: id.into(),
+            name: id.into(),
+            platform,
+            target_platform: String::new(),
+            sdk: String::new(),
+            virtual_device: platform.needs_boot(),
+            last_used: false,
+            boot,
+        };
+
+        let mut app = App::empty();
+
+        let asleep = |id: &str| row(id, Some(Boot::Sim(id.into())), Platform::Ios);
+
+        app.devices = vec![
+            row("chrome", None, Platform::Web),
+            asleep("sleeping-b"),
+            row("mine", None, Platform::Android),
+            asleep("remembered"),
+            row("awake", None, Platform::Ios),
+            row("theirs", None, Platform::Ios),
+            asleep("sleeping-a"),
+        ];
+
+        app.target = Some(row("mine", None, Platform::Android));
+        app.busy.insert("theirs".to_string());
+        app.busy.insert("mine".to_string());
+
+        if let Some(device) = app.devices.iter_mut().find(|d| d.id == "remembered") {
+            device.last_used = true;
+        }
+
+        app.sort_devices();
+
+        let order: Vec<&str> = app.devices.iter().map(|d| d.id.as_str()).collect();
+
+        assert_eq!(
+            order,
+            [
+                // The run, and `mine` is in `busy` too — this tab put it there. Ranked
+                // as the run, not as somebody else's.
+                "mine",
+                "theirs",
+                "remembered",
+                // Up and free, then the two that need booting in the order they
+                // arrived, then the host.
+                "awake",
+                "sleeping-b",
+                "sleeping-a",
+                "chrome",
+            ]
+        );
+
+        // A row `Enter` refuses must not be the row the cursor opens on, and here the
+        // remembered device is free while the top two rows are not.
+        assert_eq!(app.devices[app.first_pickable()].id, "remembered");
     }
 }

@@ -109,10 +109,14 @@ pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget
     // The ordering note stays. It is not a keybinding but a fact about the list
     // above it, and nothing else on screen accounts for why the top row is the top
     // row.
+    //
+    // All three ranks, because `last used` alone stopped being the answer: a row the
+    // run is on and a row another run holds both outrank it now (8.4), and a note that
+    // names one of three reasons explains the top row only by accident.
     frame.render_widget(
         Paragraph::new(
             Line::from(text(
-                "last used device is promoted to the top",
+                "promoted to the top: running, in use, last used",
                 theme::MUTED,
             ))
             .right_aligned(),
