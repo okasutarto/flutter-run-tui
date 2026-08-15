@@ -1459,8 +1459,8 @@ it — not the same as having seen it.
 frun's to produce: Flutter has to silently discard a keypress. An attempt to force
 that by sending `r` during a hot restart failed — Flutter queued the key and
 serviced it when the restart finished, rather than dropping it. So the trigger
-remains unobserved here, and the reference comment describing it (7.5) is the only
-evidence it happens at all.
+remains unobserved here, and the `frun-runner` comment describing it (7.5) is the
+only evidence it happens at all.
 
 What *is* covered is frun's half, which is the half that can go wrong: a request
 that is never acknowledged resolves instead of spinning forever, an acknowledged
@@ -1857,10 +1857,11 @@ line was followed by `Error: Custom { kind: NotFound, .. }`. Print the message a
 `std::process::exit`.
 
 **Findings about Flutter and the platform, not about this code.** Harvested from
-the comments in `reference/`, which is the snapshot of the shell implementation
-this replaced. None of them are derivable from Flutter's documentation and each
-was paid for once already, so they are recorded here rather than left in an
-archive nobody reads.
+the comments in the shell implementation this replaced (`frun.zsh`, `frun-runner`,
+`frun-theme.zsh`; the snapshot lived in `reference/` and is now only in git
+history, last present at `08e1f53`). None of them are derivable from Flutter's
+documentation and each was paid for once already, so they are recorded here rather
+than left in an archive nobody reads.
 
 * **Flutter formats elapsed time through `NumberFormat`.** Durations carry a
   group separator, so `Restarted application in 1,234ms` clips to `234ms` if
