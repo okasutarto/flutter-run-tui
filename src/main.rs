@@ -616,10 +616,26 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
             launch(app, ctx, device);
         }
 
+        // Fatal only before the first run. Once a target exists this boot was a
+        // retry or a switch, and ending the process over it would throw away a
+        // session the user still has — the failure card and its log are the whole
+        // reason they are looking at the screen.
         Msg::Booted(Err(reason)) => {
             app.boot_started = None;
-            app.fatal = Some(format!("{} {reason}", app.boot_name));
-            ctx.done = true;
+
+            if app.target.is_none() {
+                app.fatal = Some(format!("{} {reason}", app.boot_name));
+                ctx.done = true;
+
+                return;
+            }
+
+            app.log(
+                Level::Err,
+                &format!("{} did not start — {reason}", app.boot_name),
+            );
+
+            app.goto(State::BuildFailed);
         }
 
         Msg::Line(line) => flutter::feed(app, &line),
@@ -723,8 +739,22 @@ fn devices_refreshed(app: &mut App, targets: Vec<probe::Device>) {
 /// the running system says about itself. Discovery does not run again, so this is
 /// the last chance to combine them.
 fn booted_device(app: &App, booted: &probe::Booted) -> probe::Device {
-    // The row that was picked, or a bare shell if the list is somehow gone.
-    let mut device = app.selected().cloned().unwrap_or_else(|| probe::Device {
+    // Which row this boot belongs to, in falling order of certainty.
+    //
+    // The selected row is right for a first pick — an AVD boots as a serial that is
+    // in no list yet — and wrong for a retry, where the boot is of the device already
+    // running and the cursor may be sitting anywhere after a recheck reordered the
+    // list. Taking the selection there would keep the correct id and inherit another
+    // device's name and platform.
+    let base = app
+        .devices
+        .iter()
+        .find(|d| d.id == booted.id)
+        .or_else(|| app.target.as_ref().filter(|d| d.id == booted.id))
+        .or_else(|| app.selected());
+
+    // Or a bare shell, if the list is somehow gone.
+    let mut device = base.cloned().unwrap_or_else(|| probe::Device {
         id: booted.id.clone(),
         name: booted.id.clone(),
         platform: probe::Platform::Android,
@@ -1086,9 +1116,48 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
         //
         // The failed build's log is kept rather than cleared, because comparing
         // the two runs is the point.
+        // Retry is not only a respawn any more: the device is often *why* the build
+        // failed. Shut a simulator down mid-build and Flutter reports `No supported
+        // devices found with name or id matching '<udid>'`, and respawning
+        // `flutter run -d <udid>` fails identically for the same reason, as often as
+        // it is pressed. So a virtual target is brought back up first.
         Action::RetryBuild => {
             stop_session(ctx);
-            spawn_session(app, ctx);
+
+            let Some(boot) = app.target.as_ref().and_then(probe::boot_target) else {
+                // A physical device, macOS or Chrome. Nothing frun can start, so the
+                // respawn is the whole of the retry.
+                spawn_session(app, ctx);
+
+                return false;
+            };
+
+            let id = app.target.as_ref().map(|d| d.id.clone()).unwrap_or_default();
+
+            app.boot_name = app
+                .target
+                .as_ref()
+                .map(|d| d.name.clone())
+                .unwrap_or_default();
+
+            app.boot_started = Some(std::time::Instant::now());
+            app.goto(State::Booting);
+
+            let tx = ctx.tx.clone();
+
+            std::thread::spawn(move || {
+                // Liveness first, and it decides whether anything is booted at all.
+                // `simctl bootstatus -b` is idempotent, but `boot_avd` is not: it
+                // spawns `emulator -avd`, so calling it on a device that is already
+                // running leaves two.
+                let msg = if probe::alive().contains(&id) {
+                    Ok(probe::Booted::bare(id))
+                } else {
+                    probe::boot(&boot)
+                };
+
+                let _ = tx.send(Msg::Booted(msg));
+            });
 
             false
         }

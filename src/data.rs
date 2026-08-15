@@ -50,6 +50,13 @@ pub enum State {
     ReloadFailed,
     /// 11. Flutter never acknowledged the key at all.
     ReloadDropped,
+    /// 13. `^S`: the run is over, frun is not.
+    ///
+    /// The one frame that exists with no child behind it. Every other state
+    /// assumes a run is coming or here, which is why stopping used to mean leaving:
+    /// there was nowhere to stand. The log stays readable, the device stays booted,
+    /// and `r` builds again.
+    Stopped,
     /// 12. `^D`: the target list, reopened over a run that is still alive (8.5).
     ///
     /// Not `MultipleDevices` with a flag on it. The frame differs in four places —
@@ -74,6 +81,7 @@ impl State {
         State::ReloadFailed,
         State::ReloadDropped,
         State::Switching,
+        State::Stopped,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -90,6 +98,7 @@ impl State {
             State::ReloadFailed => "reload-failed",
             State::ReloadDropped => "reload-dropped",
             State::Switching => "switch",
+            State::Stopped => "stopped",
         }
     }
 
@@ -129,6 +138,7 @@ impl State {
                 | State::ReloadInFlight
                 | State::ReloadFailed
                 | State::ReloadDropped
+                | State::Stopped
         )
     }
 
@@ -151,7 +161,14 @@ impl State {
             // rows would be better spent on the stage list. The elapsed clock on
             // the pending stage now marks that gap instead, which makes it
             // load-bearing rather than a nicety.
-            State::Running | State::ReloadInFlight | State::ReloadFailed | State::ReloadDropped
+            //
+            // `Stopped` included, and it is the point of that state: the log is the
+            // reason to stop without leaving.
+            State::Running
+                | State::ReloadInFlight
+                | State::ReloadFailed
+                | State::ReloadDropped
+                | State::Stopped
         )
     }
 
@@ -406,6 +423,8 @@ pub enum Action {
     RetryBuild,
     /// Reopen the picker to move this run to another device, DESIGN.md 8.5.
     Switch,
+    /// End the run and stay in frun, DESIGN.md 8.8.
+    StopRun,
     StartDevice,
     Quit,
     Stop,
@@ -422,6 +441,9 @@ impl Action {
             // bytes, so a modifier takes nothing from 5.1. `s` was the obvious
             // mnemonic and is Flutter's screenshot key.
             Action::Switch => "^D",
+            // `s` is Flutter's screenshot key, so the mnemonic has to be a modifier
+            // the same way `^D` did. Raw mode clears IXON, so `^S` is not XOFF here.
+            Action::StopRun => "^S",
             Action::StartDevice => "⏎",
             Action::Quit => "q",
             Action::Stop => "^C",
@@ -437,6 +459,7 @@ impl Action {
             // that reads like a live switch would leave the user thinking the
             // tool had hung through a forty-second Gradle build.
             Action::Switch => "Switch Device",
+            Action::StopRun => "Stop",
             Action::StartDevice => "Start",
             // `q` and `^C` are not the same exit, so they are not merged.
             //
@@ -448,7 +471,10 @@ impl Action {
             // The labels have to carry that, otherwise two keys for one apparent
             // outcome look like an accident.
             Action::Quit => "Quit",
-            Action::Stop => "Stop",
+            // `Force stop`, now that `^S` is `Stop`. Three ways out of a run and
+            // three different words: `^S` ends the run and stays, `q` ends the run
+            // and leaves, `^C` ends the process whatever the run is doing.
+            Action::Stop => "Force stop",
         }
     }
 }
@@ -500,6 +526,13 @@ pub struct App {
     /// from it rather than copied out, so the card cannot describe a device that
     /// is not the one being run.
     pub target: Option<Device>,
+
+    /// `^S` was pressed and the child has not closed the pty yet (8.8).
+    ///
+    /// What it decides is what `child_exited` does with the death: a stop lands on
+    /// `Stopped`, anything else is the end of the process. Without it a graceful
+    /// stop and Flutter shutting itself down are the same event.
+    pub stopping: bool,
 
     /// Discovery is running again behind a list that is already on screen (8.5).
     ///
@@ -609,6 +642,7 @@ impl App {
             log_scroll: 0,
 
             target: None,
+            stopping: false,
             refreshing: false,
             resume: None,
 

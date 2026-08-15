@@ -131,7 +131,18 @@ pub fn render_booting(frame: &mut Frame, area: Rect, app: &App) {
 
     // What is actually being waited on, which differs by platform: Android polls
     // a property, a simulator blocks in `bootstatus`.
-    let waiting = match app.selected().map(|d| d.platform) {
+    //
+    // The target first, when this boot is of the device already being run — a retry
+    // that found it shut down. The cursor is the right answer only for a first pick,
+    // and after a recheck it can be sitting on a row of the other platform.
+    let platform = app
+        .target
+        .as_ref()
+        .filter(|device| device.name == app.boot_name)
+        .map(|device| device.platform)
+        .or_else(|| app.selected().map(|device| device.platform));
+
+    let waiting = match platform {
         Some(crate::data::Platform::Ios) => {
             "  waiting on simctl bootstatus   ·   blocks until ready"
         }

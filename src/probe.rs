@@ -594,6 +594,45 @@ fn target(id: &str, name: &str, platform: Platform, sdk: &str, boot: Boot) -> De
     }
 }
 
+/// How to start `device` again, once it is no longer running.
+///
+/// `Device::boot` is cleared when a device is adopted as the target — a running
+/// device has nothing left to start — so a target that has since stopped carries no
+/// way back. This reconstructs one:
+///
+/// * A simulator keeps its UDID whether booted or not, so `Boot::Sim` needs nothing
+///   looked up.
+/// * An emulator runs as `emulator-5554` and its AVD name is not recoverable from
+///   the serial once it is dead — `adb emu avd name` needs a device to answer. So the
+///   AVD is found by name instead, against `emulator -list-avds`, which is the same
+///   join `targets()` uses to de-duplicate the two.
+///
+/// `None` for a physical device, macOS or Chrome: there is nothing frun can start.
+pub fn boot_target(device: &Device) -> Option<Boot> {
+    if let Some(boot) = &device.boot {
+        return Some(boot.clone());
+    }
+
+    if !device.virtual_device {
+        return None;
+    }
+
+    match device.platform {
+        Platform::Ios => Some(Boot::Sim(device.id.clone())),
+
+        Platform::Android => {
+            let out = run("emulator", &["-list-avds"], QUICK)?;
+
+            out.lines()
+                .map(str::trim)
+                .find(|avd| pretty_avd(avd) == device.name)
+                .map(|avd| Boot::Avd(avd.to_string()))
+        }
+
+        Platform::Desktop | Platform::Web => None,
+    }
+}
+
 /// Ids that are up right now, asked of the two tools that answer immediately.
 ///
 /// Measured on this machine: `adb devices` 12ms, `simctl list -j` 119ms,
@@ -734,7 +773,10 @@ pub struct Booted {
 
 impl Booted {
     /// A boot that learned nothing beyond the id.
-    fn bare(id: String) -> Self {
+    ///
+    /// Also the answer for a device that was already up, which is how a retry says
+    /// "nothing to start here" through the same channel as a real boot.
+    pub fn bare(id: String) -> Self {
         Self {
             id,
             target_platform: String::new(),

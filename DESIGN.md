@@ -2098,6 +2098,34 @@ Five decisions inside the flow, each of which could have gone the other way:
   two runs do run together; the build tracker resetting to `Starting Flutter` is
   the boundary, and a second one was not worth a row.
 
+#### Retry has to be able to bring the device back
+
+Not part of the four points, and found by using them: shut a simulator down while it
+is building and Flutter fails with `No supported devices found with name or id
+matching '<udid>'`. `[r] Retry Build` then respawned `flutter run -d <udid>` against
+a device that was still off and failed identically, as often as it was pressed. The
+retry could not fix the only thing that was wrong.
+
+So a retry now brings a virtual target up first. `probe::alive()` decides whether
+anything needs starting — `simctl bootstatus -b` is idempotent but `boot_avd` is not,
+and booting a running emulator leaves two of them — and the existing `BOOTING` frame
+and `Msg::Booted` path carry it from there, which means the rebuild afterwards is the
+same code as a first launch. A physical device, macOS or Chrome takes the plain
+respawn, because there is nothing frun could start.
+
+Two things had to be corrected to make that safe. `probe::boot_target()` reconstructs
+the `Boot` a running target no longer carries: a simulator by its UDID, an emulator by
+matching its name against `emulator -list-avds`, since `adb emu avd name` needs a live
+device to answer and the serial is useless once it is dead. And `booted_device()` now
+resolves which row a boot belongs to by id — the running row, then the target, then
+the cursor — where before it always took the cursor. That was right for a first pick
+and wrong for a retry: after a recheck reordered the list, the retry would have kept
+the correct id and inherited another device's name and platform.
+
+A failed boot is also no longer fatal once a run exists. Before, a reboot that did not
+come up ended the process, throwing away the failure card and the log the user was
+reading — which is the reason they were on that screen.
+
 #### Two defects this uncovered
 
 **`Msg` has no session identity, and a killed child keeps talking.** This is the
