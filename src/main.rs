@@ -1115,32 +1115,47 @@ fn booted_device(app: &App, booted: &probe::Booted) -> probe::Device {
 /// Take a device as the target and start the build.
 fn launch(app: &mut App, ctx: &mut Ctx, device: probe::Device) {
     app.choose(device);
-    name_tab(app);
     spawn_session(app, ctx);
 }
 
 /// Name the terminal tab after what it is running, `<device> · <project>` (8.4).
 ///
-/// Called from `launch` and nowhere else, which is enough because every path that
-/// sets a target ends here: the first pick, a device that had to be booted, and a
-/// switch. The one path that skips it is the one that changes nothing — `Enter` on
-/// the row already running returns before `launch` — and the title it would write is
-/// the title already on the tab.
+/// Called from `start` and nowhere else, which covers every path that takes a target:
+/// the first pick, a switch, and a handoff from another tab — `handed_over` reaches
+/// `start` too.
 ///
-/// `OSC 2`, so no AppleScript and no automation permission. Nothing restores it on
-/// exit: the string it replaced came from the shell reporting its running command,
-/// and the next prompt writes that again.
+/// **Before the boot, not after it, and that ordering is the whole of this comment.**
+/// The call used to sit in `launch`, which a device that has to be booted does not
+/// reach until it is up. A `⇧⏎` onto a shut-down simulator is exactly that case and
+/// is also the commonest reason to open a second tab at all, so for as long as the
+/// boot took — up to the 180s cap of `probe::boot` — the new tab was still called
+/// `Ghostty`. That is the one moment the name carries anything: there are now two
+/// tabs running two devices, and the strip is the only thing that can say which is
+/// which. The name is known at the moment the row is picked, so there is nothing to
+/// wait for.
+///
+/// The device is passed rather than read back out of `app.target`, because on the
+/// boot path there is no target yet: `choose` runs in `launch`, and a card describing
+/// a device that is still coming up is what state 3 exists to avoid.
+///
+/// An escape sequence, so no AppleScript and no automation permission: crossterm's
+/// `SetTitle` writes `ESC ] 0 ; text BEL`, which sets the icon name and the window
+/// title together. Measured on the wire, because `OSC 2` is the sequence this comment
+/// used to claim and the two are not interchangeable — a test grepping for `]2;` finds
+/// nothing here.
+///
+/// Nothing restores it on exit: the string it replaced came from the shell reporting
+/// its running command, and the next prompt writes that again. In a tab spawned by
+/// `⇧⏎` there is no such string and nothing else writes one either — a Ghostty surface
+/// created with a `command` runs it directly, with no shell and no shell integration —
+/// so this is the only thing standing between that tab and the terminal's own name.
 ///
 /// Failure is ignored deliberately. A terminal that will not take a title is not a
 /// reason to interrupt a build, and there is no second way to ask.
-fn name_tab(app: &App) {
-    let Some(device) = app.target.as_ref() else {
-        return;
-    };
-
+fn name_tab(project: &str, device: &probe::Device) {
     let _ = execute!(
         io::stdout(),
-        SetTitle(format!("{} · {}", device.name, app.project))
+        SetTitle(format!("{} · {}", device.name, project))
     );
 }
 
@@ -1493,6 +1508,10 @@ fn refuse_busy(app: &mut App, device: &probe::Device) -> bool {
 /// person picked it here or another tab handed it over (8.4) — which is the second
 /// caller this exists for.
 fn start(app: &mut App, ctx: &mut Ctx, device: probe::Device) {
+    // Ahead of the branch, because both branches end in a run on this device and the
+    // only difference between them is how long that takes. See `name_tab`.
+    name_tab(&app.project, &device);
+
     match device.boot.clone() {
         None => launch(app, ctx, device),
 
@@ -1548,6 +1567,7 @@ fn new_tab(device: &probe::Device, extra: &[String]) -> Result<(), String> {
     let (program, args) = tab_command(
         &exe.to_string_lossy(),
         &cwd.to_string_lossy(),
+        &device.name,
         &handoff_env(device),
         extra,
         std::env::var_os("TMUX").is_some(),
@@ -1609,15 +1629,28 @@ fn handoff_env(device: &probe::Device) -> Vec<String> {
 /// outside it, Ghostty's AppleScript dictionary is the only way in, and it is also
 /// the one that can set the working directory, the command and the environment in a
 /// single call.
+///
+/// `window` is the device name, and under tmux it is the only way the tab gets one.
+/// `name_tab`'s `OSC 2` reaches tmux as a *pane* title, which the status line does not
+/// show: the window name there comes from `automatic-rename`, which would call the
+/// window `frun-tui` after the running command. `-n` sets it up front, and passing a
+/// name explicitly is also what stops the automatic rename from taking it back.
 fn tab_command(
     exe: &str,
     cwd: &str,
+    window: &str,
     env: &[String],
     extra: &[String],
     tmux: bool,
 ) -> (String, Vec<String>) {
     if tmux {
-        let mut args = vec!["new-window".to_string(), "-c".to_string(), cwd.to_string()];
+        let mut args = vec![
+            "new-window".to_string(),
+            "-n".to_string(),
+            window.to_string(),
+            "-c".to_string(),
+            cwd.to_string(),
+        ];
 
         for entry in env {
             args.extend(["-e".to_string(), entry.clone()]);
@@ -2026,13 +2059,18 @@ mod tests {
             "PATH=/opt/homebrew/bin".to_string(),
         ];
 
-        let (program, args) = tab_command("/bin/frun", "/p", &env, &extra, true);
+        let (program, args) = tab_command("/bin/frun", "/p", "Pixel 10 Pro XL", &env, &extra, true);
 
         assert_eq!(program, "tmux");
         assert_eq!(
             args,
             [
                 "new-window",
+                // The device, not the command. Without it the status line reads
+                // `frun-tui` on every window `⇧⏎` opens, which is the one thing the
+                // name is there to distinguish.
+                "-n",
+                "Pixel 10 Pro XL",
                 "-c",
                 "/p",
                 "-e",
@@ -2045,7 +2083,8 @@ mod tests {
             ]
         );
 
-        let (program, args) = tab_command("/bin/frun", "/p", &env, &extra, false);
+        let (program, args) =
+            tab_command("/bin/frun", "/p", "Pixel 10 Pro XL", &env, &extra, false);
 
         assert_eq!(program, "osascript");
 
@@ -2152,7 +2191,7 @@ mod tests {
     fn a_quote_in_an_argument_cannot_break_out() {
         let extra = vec!["--dart-define=NAME=o'brien".to_string()];
         let env = vec!["FRUN_DEVICE=x".to_string()];
-        let (_, args) = tab_command("/bin/frun", "/p", &env, &extra, false);
+        let (_, args) = tab_command("/bin/frun", "/p", "iPhone 17 Pro", &env, &extra, false);
 
         let command = &args[args.len() - 2];
 
