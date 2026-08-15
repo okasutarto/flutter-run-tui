@@ -2579,6 +2579,17 @@ boot tools use. One asymmetry stays, and it is Android's: a bootable AVD row is 
 by AVD name while `alive()` reports serials, so an emulator started outside frun
 cannot be promoted this way and waits for the next full scan.
 
+**Rechecking on a timer made `targets()` idempotent, the hard way.** That function is
+written as "Flutter's list, plus what can be booted", and it trusted its input to be
+Flutter's list: the AVD loop skipped names already present, but `simulators()` was
+appended without a duplicate check. A recheck hands it a list it produced itself, so
+every pass appended the same shut-down simulators again. On a machine with eleven of
+them the picker read `214 devices` inside a couple of minutes — a header that made the
+bug obvious and would have been invisible without the count. The fix is a duplicate
+check by id, the same rule the AVD loop already followed, and one test asserts no id
+appears twice after a list is merged into itself. **A function whose output can become
+its input has to be idempotent, and a precondition in a comment is not idempotence.**
+
 Five decisions inside the flow, each of which could have gone the other way:
 
 * **The outgoing child dies at the pick, not at the respawn.** A boot can take

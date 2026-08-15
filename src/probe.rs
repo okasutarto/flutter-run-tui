@@ -637,7 +637,20 @@ pub fn targets(reported: Vec<Device>, last_used: &str) -> Vec<Device> {
     }
 
     // Shut-down only, so a booted simulator cannot appear twice.
-    targets.extend(simulators());
+    //
+    // Deduplicated by id as well, which the AVD loop above has always done by name.
+    // This function is written as "Flutter's list, plus what can be booted", and it
+    // used to trust that its input was Flutter's list. `recheck` hands it a list this
+    // function itself produced, so every pass appended the same shut-down simulators
+    // again: with a recheck every four seconds the picker climbed past two hundred
+    // rows. Being idempotent is cheaper than remembering the precondition.
+    let known: Vec<String> = targets.iter().map(|d| d.id.clone()).collect();
+
+    targets.extend(
+        simulators()
+            .into_iter()
+            .filter(|sim| !known.contains(&sim.id)),
+    );
 
     // macOS, Chrome and friends. No boot step and nothing to wait for, which is
     // why they sit last rather than competing with a device you can see.
@@ -1170,6 +1183,32 @@ mod tests {
         assert_eq!(back.boot, None);
         assert_eq!(back.platform, Platform::Ios);
         assert!(!back.virtual_device);
+    }
+
+    /// `recheck` feeds this function its own output every four seconds, so merging
+    /// has to be idempotent.
+    ///
+    /// It was not: shut-down simulators were appended without a duplicate check, so
+    /// the picker grew by one row per simulator per recheck and reached 214 rows on a
+    /// machine with seven of them. Asserted as "no id appears twice", which holds
+    /// whatever this machine happens to report — including nothing at all, where both
+    /// lists are empty and the invariant is trivially true.
+    #[test]
+    fn merging_a_merged_list_cannot_duplicate_a_row() {
+        let once = targets(Vec::new(), "");
+        let twice = targets(once.clone(), "");
+
+        for device in &twice {
+            let seen = twice.iter().filter(|d| d.id == device.id).count();
+
+            assert_eq!(seen, 1, "{} appeared {seen} times", device.id);
+        }
+
+        assert_eq!(
+            twice.len(),
+            once.len(),
+            "a second merge changed the row count"
+        );
     }
 
     /// Anything short of the full form must be refused, because every field it is
