@@ -1061,6 +1061,17 @@ impl App {
             .map(|s| s.duration.clone())
             .unwrap_or_default();
 
+        // No `build finished in 20.2s · sync 68ms` entry here. The tracker block is
+        // not laid out during a run (`State::has_tracker`) and its two totals had to
+        // land somewhere, and this was the first answer: an entry at the head of the
+        // stream, timestamped, scrolling away with the rest of the history.
+        //
+        // The log card's title bar is the better one, and it is where they are now
+        // (3.5). A build total is a fact about the session rather than an event
+        // within it, so it should stay legible for as long as the window it describes
+        // — an entry is scrolled off by the app's own output within seconds of a
+        // chatty start — and the border row it sits on costs no rows at all, where an
+        // entry costs one of the stream.
         self.goto(State::Running);
     }
 }

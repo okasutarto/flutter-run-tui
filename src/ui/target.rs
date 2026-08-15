@@ -11,42 +11,40 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
-use crate::data::{Action, App};
+use crate::data::{Action, App, Hit};
 use crate::theme;
 use crate::widgets::{card, field, keycap, pill, separator, spread, strong, text};
 
-pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
-    let Some(device) = &app.target else {
+pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
+    if app.target.is_none() {
         return;
-    };
+    }
 
     if !plan.full_cards {
         collapsed(frame, area, app);
         return;
     }
 
-    // The control lives in the border, not in a row of its own: `target_h()` is a
-    // fixed height and every row it grows by is taken from the log window (6.2).
-    // The inset title is already there to be extended, and at MIN_W the two
-    // titles need 41 of the 58 columns inside the border.
-    //
-    // Advertised only where the key does something. Before a run there is no
-    // session to move, and with no cached list there is nothing to move it to.
-    let mut block = card("SELECTED DEVICE", theme::CYAN);
-
-    if app.state.has_build() && !app.devices.is_empty() {
-        let mut spans = vec![text("─ ", theme::BORDER)];
-
-        spans.extend(keycap(Action::Switch.key(), theme::CYAN));
-        spans.push(text(format!(" {} ", Action::Switch.label()), theme::MUTED));
-
-        block = block.title_top(Line::from(spans).right_aligned());
-    }
+    // `DEVICE INFO`, matching `PROJECT INFO` directly above it. It was
+    // `SELECTED DEVICE`, which is two naming schemes on two stacked cards, and the
+    // word it gave up was carried by the card's existence anyway: `render` returns
+    // early without a target, and `State::has_target` hides the card in every
+    // picker state, so nothing but a chosen device can put it on screen.
+    let block = card("DEVICE INFO", theme::CYAN);
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let w = inner.width;
+
+    // Advertised only where the key does something. Before a run there is no
+    // session to move, and with no cached list there is nothing to move it to.
+    //
+    // `has_build`, deliberately, and not the narrower `has_tracker` the frame uses
+    // to decide whether the tracker block is laid out: this asks whether there is a
+    // run to move, which is true throughout a run, and the tracker is absent for
+    // most of one.
+    let switch = app.state.has_build() && !app.devices.is_empty();
 
     // No active-status banner, and no command string. Both were in DESIGN.md 3.2
     // and both are gone, for four rows.
@@ -61,6 +59,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
     // `Session::spawn` builds its own argv, so nothing depended on it, and the
     // device it names is the row directly above it. Two rows plus its blank
     // separator, in the state where the log window is hungriest.
+    // Bound here rather than at the top of the function, because the `Hit` at the
+    // bottom needs `&mut app` and a borrow taken before the early returns would
+    // still be live at that point.
+    let device = app
+        .target
+        .as_ref()
+        .expect("returned above when there is no target");
+
     let mut lines = vec![field(
         w,
         "Device Target",
@@ -110,7 +116,65 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
         vec![strong(app.target_kind(), theme::PURPLE)],
     ));
 
+    // The switch control, on a row of its own inside the card.
+    //
+    // It used to ride in the border beside the title, where it cost no rows at all,
+    // and that was the whole argument for putting it there. Two things paid for
+    // moving it in. The top border is now one label and nothing else, which is what
+    // every other card's top-left says and what its top-right is for — a count, a
+    // path, a status — never a control. And a keycap drawn on a border is not
+    // clickable: `render` took `&App`, so there was nowhere to register a `Hit`, and
+    // 3.1 is explicit that a control which does nothing on click is worse than no
+    // control. As a content row it is a rectangle, so it gets one.
+    //
+    // Right-aligned, on its own row below `Type`, with a blank row between the two
+    // and no separator.
+    //
+    // The blank is what stops it reading as a fifth field's value. Sitting directly
+    // under `Type` it was the fourth row of a four-row table, right-aligned in the
+    // column the values occupy, and the eye groups by proximity before it reads
+    // brackets — so the keycap arrived as data belonging to the row above it. A blank
+    // says the table ended without spending a rule on saying it.
+    //
+    // A separator would say the same thing and say it louder than a control needs.
+    // Both cost one row; the blank is the one that does not divide the card in two.
+    let control = if switch {
+        let mut spans = keycap(Action::Switch.key(), theme::CYAN);
+        spans.push(text(format!(" {}", Action::Switch.label()), theme::MUTED));
+
+        lines.push(Line::default());
+
+        // Measured, not counted: `^D` is two cells in one glyph short of it, and the
+        // hit rectangle has to sit exactly under what was drawn.
+        //
+        // Read after the blank is pushed, so it is the control's own row and not the
+        // gap above it — a hit rectangle one row high, registered one row too early,
+        // is a click that lands on nothing.
+        let width: usize = spans.iter().map(Span::width).sum();
+        let row = lines.len() as u16;
+
+        lines.push(spread(w, Vec::new(), spans));
+
+        Some(Rect {
+            x: inner.x + inner.width.saturating_sub(width as u16),
+            y: inner.y + row,
+            width: width as u16,
+            height: 1,
+        })
+    } else {
+        None
+    };
+
     frame.render_widget(Paragraph::new(lines), inner);
+
+    // After the draw, which is what releases the borrow on `app.target` that every
+    // line above holds.
+    if let Some(area) = control {
+        app.hits.push(Hit {
+            area,
+            action: Action::Switch,
+        });
+    }
 }
 
 /// `android-arm64 (emulator-5554)`.

@@ -50,7 +50,7 @@ The interface is organized into modular TUI blocks:
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ ProjectCard: 2-Column Info (Left: Graphic Logo | Right: Metadata Table)     │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ SelectedTargetCard: Active Device Banner & Target Details (States 6-11)     │
+│ SelectedTargetCard: DEVICE INFO — Target Details + [^D] (States 6-13)       │
 ├────────────────────────────────────────────────────────────────────────────┤
 │ DYNAMIC STATE FRAME CONTENT                                                 │
 │                                                                             │
@@ -141,8 +141,32 @@ already the component describing what is being run and where.
   control that does nothing on click is worse than no control.
 
 ### 3.2 `SelectedTargetCard`
+* **Titled `DEVICE INFO`.** It was `SELECTED DEVICE`, which put two naming schemes
+  on two stacked cards — `PROJECT INFO` is directly above it. The word it gave up
+  was carried by the card's existence anyway: there is no card without a chosen
+  device, since `has_target` hides it in every picker state. `TARGET DEVICE` was the
+  other candidate and is worse, because `Device Target` is the first row inside.
+
 * **Target Details Table**, and nothing else: `Device Target`, `Platform ID`,
   `OS Version`, `Type` (Simulator / Hardware). Four rows, plus separators.
+
+* **`[^D] Switch Device` is a row inside the card, bottom-right.** It rode in the
+  top border beside the title, where it cost no rows, and two things paid for
+  bringing it in. A keycap drawn on a border cannot be clicked — there is no
+  rectangle to register, and 3.1 is explicit that a control doing nothing on click
+  is worse than no control — and every other card uses its top-right for a count, a
+  path or a status, never for a control. As a content row it gets a hit region, and
+  the top border is left saying one thing.
+
+  No separator and no blank above it. Brackets and the absence of a label facing it
+  are enough to keep it from reading as a fifth field's value, and the rule that
+  would have divided it off is a row the log window keeps instead. The card is 11
+  rows, and 6.2 charges the extra one: a row drawn past the charged height is
+  clipped in silence, which is how this card lost its `Type` field once.
+
+  Advertised only where the key does something, which is `has_build` and a non-empty
+  device list — not the narrower `has_tracker` of 3.4. There is a run to move
+  throughout a run; there is a tracker for very little of one.
 
 * **`OS Version`, not `OS Version / Arch`.** The row is Flutter's
   `sdkNameAndVersion`, and no mobile platform puts an architecture in it:
@@ -190,8 +214,14 @@ a short sequence with branches, and the branch taken is decided by how many
 devices answered.
 
 1. **`DETECTING`** (State 1): animated Braille spinner (`⠋ ⠙ ⠹ ...`) while
-   `fvm flutter devices --machine` runs. Always entered, always first.
-   Nothing below it is reachable without passing through here.
+   discovery runs. Always entered, always first. Nothing below it is reachable
+   without passing through here.
+
+   **It is answered twice, and the first answer is the one you wait for.** `adb`,
+   `simctl` and `emulator -list-avds` describe the same list in ~200ms that `fvm
+   flutter devices --machine` describes in 6-9s, so the picker opens on theirs and
+   Flutter's lands behind it as a refresh. Measured: `SELECT DEVICE` on screen inside
+   0.4s where it used to be 8-9s. See 8.9.
 
 2. **`NO_DEVICES`** (State 2): zero devices answered.
    * Header banner: `◆ NO DEVICE RUNNING` with subtitle
@@ -210,11 +240,16 @@ devices answered.
    drops macOS, "Mac Designed for iPad" and Chrome, with the stated reason
    that frun exists to run on phones. That restriction is lifted:
 
-   | Source | Targets |
-   | :--- | :--- |
-   | `emulator -list-avds` | Android AVDs |
-   | `xcrun simctl list devices available -j` | shut-down iOS/iPadOS simulators |
-   | `flutter devices --machine` | macOS desktop, Chrome, and any other platform Flutter reports |
+   | Source | Targets | Cost |
+   | :--- | :--- | ---: |
+   | `adb devices` + `getprop` | running emulators and attached Android phones | 12ms |
+   | `emulator -list-avds` | Android AVDs | 30ms |
+   | `xcrun simctl list devices available -j` | every iOS/iPadOS simulator, booted or not | 119ms |
+   | `flutter devices --machine` | macOS desktop, Chrome, physical iPhones, and any other platform Flutter reports | 6-8s |
+
+   The first three are the fast answer and the fourth is the one that completes it.
+   Only its own row is exclusive: everything above is in the picker before Flutter
+   has finished starting its Dart VM.
 
    Note the asymmetry: emulators and simulators need booting, whereas desktop
    and web are always available. Those rows go straight to launch, skipping
@@ -234,6 +269,16 @@ devices answered.
    `U+F17B` () for Android. Emoji (🍎, 🤖) are East Asian Width Wide, so they
    occupy two cells and break the column grid, and terminal emoji rendering is
    inconsistent. `frun.zsh` already ships `U+F179` today.
+
+   **The rule covers Ambiguous width too, and that is the harder half.** Wide is
+   obvious; Ambiguous measures one cell in `unicode-width` and is drawn as two by
+   any font that gives it emoji presentation, so the same string is correct in one
+   terminal and a column out in the next. Three glyphs have been caught by it:
+   `⚡` U+26A1 for hot reload, now `U+F0E7` (), and `⏹` U+23F9 and `⚠` U+26A0 on
+   the collapsed tracker row, now `U+F04D` () and `U+F071` (). The bolt's
+   symptom was an overflow past the card border; the other two opened their row, so
+   theirs was an indent that pulled the row out of line with the borders above and
+   below it (3.4).
 
 3. **`BOOTING`** (State 3): `⠋ Booting <name>...`.
    * Android waits on `sys.boot_completed` and can legitimately take
@@ -498,12 +543,13 @@ devices answered.
   to one borderless row:
 
   ```text
-  ✔ BUILD FINISHED                               Build time 20.2s   Sync 68ms
+  ⏹ STOPPED                                      Build time 20.2s   Sync 68ms
   ```
 
-  Not a size concession. At any height, in `RUNNING`, `STOPPED` and the three
-  reload frames, this is the tracker. `BUILD_FAILED` is the exception and keeps the
-  full card, because there the stage list is what the error is read against.
+  Not a size concession. At any height, in `STOPPED` and — collapsed by height
+  alone — in `BUILD_FAILED`, this is the tracker. `BUILD_FAILED` keeps the full
+  card wherever the rows allow it, because there the stage list is what the error
+  is read against.
 
   Every row it replaces had stopped moving: five labels, five frozen durations,
   and a progress bar reading `Stage 5/5` in emerald sitting directly beneath a
@@ -517,6 +563,53 @@ devices answered.
   and both halves come from one function each (`status`, `timings`) so the card and
   the row cannot drift apart — they did once, when the card said `BUILD FINISHED`
   and the row beneath it said `build finished`.
+
+* **And in `RUNNING` the row goes too.** `✔ BUILD FINISHED  Build time 20.2s
+  Sync 68ms` was the collapse's own example and is the one case it could not
+  justify. A build that succeeded and is now running has nothing to report that the
+  frame is not already reporting: the log stream underneath is streaming, which is
+  what `BUILD FINISHED` means, and the three reload frames inherit the same row for
+  the same non-reason. So `RUNNING` and the three reload states have no tracker
+  block at all, and the row plus the gap above it go to the log window.
+
+  **The two figures move into the log, as its first entry.** `session_ready` writes
+  `build finished in 20.2s · sync 68ms` at `INF` the moment both totals are final,
+  before Flutter's first line arrives, so the stream opens with the build result
+  as its head. Better than the row it replaces on three counts: it is timestamped,
+  it scrolls away like every other one-off fact, and a rebuild after `r` appends a
+  second entry rather than overwriting the first, so two builds in one session are
+  both on record. frun already speaks in the stream in its own voice — `lost
+  connection to the device`, `new tab — <name>`, `device refresh failed` — so this
+  needs no new vocabulary and no new level. The `BLD` and `OK` levels stay
+  removed.
+
+  **`STOPPED` is what the row is kept for.** It is the only place on screen that
+  distinguishes `STOPPED` from `DETACHED` from `DISCONNECTED`, and 8.8 exists
+  because those leave the device in different conditions — after Flutter's own `d`
+  the app is still live and only the tooling let go, after `^S` it is gone. Nothing
+  else carries `Ending`. The row's *arrival* then does a second job: it appears
+  because the run ended, so the frame announces the transition by growing a banner
+  rather than by changing a word somewhere.
+
+  `State::has_tracker` is the predicate, and it is deliberately narrower than
+  `has_build`. `has_build` asks whether there is a run behind the frame, which is
+  what `^D` and `^S` need to know and which stays true throughout a run.
+
+* **`DISCONNECTED` is rose, not amber.** It was amber on the argument that rose is
+  for something broken and muted is for a stop that was asked for, and a device
+  that vanished is neither. That weighed the wrong axis. Amber in this palette is
+  *in progress* — the `BUILDING` spinner, pending stage rows, the reload note, the
+  ` in use ` chip, the `^S` hint — so a terminal state wearing it competes with
+  five live ones, and a run that died is the last thing that should read as still
+  working.
+
+* **The two ending glyphs are Nerd Font.** `⏹` U+23F9 and `⚠` U+26A0 are East
+  Asian Ambiguous, one code point from the `⚡` U+26A1 that section 2 already has a
+  scar about. This row is where that is visible as an *indent* rather than as an
+  overflow: the glyph is the row's first cell, so a font drawing it with emoji
+  presentation pushes the whole row half a cell right of the card borders above
+  and below it. `theme::GLYPH_STOP` (U+F04D) and `theme::GLYPH_WARN` (U+F071)
+  measure and render one cell.
 
   **The per-stage breakdown is gone, and that is the cost.** The tracker is the
   only place it ever existed: the `BLD` and `OK` log levels were removed on the
@@ -780,9 +873,9 @@ with one exception noted at the end.
   ╚═══════════╤═══════════╝   before the step above resolves
               ▼
       ┌───────────────────┐
-      │ 1  DETECTING      │  fvm flutter devices --machine
-      └─────────┬─────────┘
-                │
+      │ 1  DETECTING      │  adb + simctl + -list-avds, ~200ms   (8.9)
+      └─────────┬─────────┘  fvm flutter devices --machine behind it,
+                │            landing as a refresh 6-8s later
                 ├── exits non-zero ──► ✖ FATAL  Failed to detect Flutter devices
                 │
                 ▼  how many answered?
@@ -1025,8 +1118,9 @@ draw rather than estimated:
   PROJECT INFO           12 rows   2 border + 1 title gap + 9 body
                                    body = metadata 6 + separators 3
                                    the logo shares these rows, it does not add any
-  SELECTED DEVICE        10 rows   2 border + 1 title gap + 7 body
-                                   body = 4 fields + 3 separators
+  DEVICE INFO            11 rows   2 border + 1 title gap + 8 body
+                                   body = 4 fields + 3 separators + 1 control row
+                                   the control row has no rule above it
   BUILD PHASE            10 rows   2 border + 1 title gap + bar + blank + 5 stages
                                    the stage count is live, so this is the tallest
                                    case: an Android build with all five phases
@@ -1034,23 +1128,28 @@ draw rather than estimated:
   footer                  1 row
   gaps between blocks     3 rows   blocks - 1, not a constant
   ────────────────────────────────
-  TOTAL                  36 rows
+  TOTAL                  37 rows
 ```
 
-That is the tallest the frame ever gets, and it is a frame with a build in it. Once
-the build settles the tracker drops to one row and the total is **27**, which is
-the figure that applies for the whole of a run. The paragraph on step 3 below is
-why.
+That is the tallest the frame ever gets, and it is a frame with a build in it.
+`RUNNING` is a different shape rather than a shorter version of it: the tracker
+block is absent there entirely (3.4), so the total is **26** — two cards, a footer
+and two gaps — and that is the figure that applies for the whole of a run.
+`STOPPED` keeps the tracker as a single row and comes to **28**.
 
-At the 106x45 target that leaves the log window **9 rows**. A five-line Dart
-exception, wrapped at 84 columns of message space, occupies **8 rows** — so one
-error fits with a row to spare, and nothing left for the next one. The cards still
-have to yield.
+At the 106x45 target that leaves the log window **19 rows** during a run, against
+the **8** a five-line Dart exception occupies when wrapped at 84 columns of message
+space. Nothing is conceded at the design size any more; the ladder below starts
+mattering at 39 rows and under.
 
-This total has come down twice, and both times the rows went to the log window
-rather than back to the layout. It was 45, leaving nothing at all, until the prompt
-bar and its gap were removed (3.6). It was 41 until the target card gave up its
-status banner and its command string, with the blank each of them needed (3.2).
+This total has come down three times, and every time the rows went to the log
+window rather than back to the layout. It was 45, leaving nothing at all, until the
+prompt bar and its gap were removed (3.6). It was 41 until the target card gave up
+its status banner and its command string, with the blank each of them needed (3.2).
+It was 27 for a run until the settled tracker's row and gap went too (3.4) — minus
+the one row the switch control took when it moved out of the card's border and onto
+a row of its own, which is the only row in this document's history to have gone the
+other way. It bought a clickable control and a top border that says one thing.
 
 **The tracker's height follows the number of rows it actually has.** `build_h`
 takes the count rather than assuming one, so the card is four rows tall while four
@@ -1106,7 +1205,11 @@ Elements are given up in this order until the floor is met, cheapest first:
 | 1 | Row separators in both cards | 6 rows |
 | 2 | Device rows go dense, one line each | ~7 rows in States 2 and 4 |
 | 3 | BuildPhaseTracker collapses to one summary line — only reachable while a build is still running, see below | 9 rows |
-| 4 | ProjectCard and SelectedTargetCard collapse to one metadata row each | ~19 rows |
+| 4 | ProjectCard and SelectedTargetCard collapse to one metadata row each | ~20 rows |
+
+Rung 3 is unreachable in `RUNNING` and the reload states for a second reason now:
+there is no tracker there to collapse (3.4). It applies to `BUILDING`, where the
+stage list is what is moving, and to `BUILD_FAILED`.
 
 **The logo is no longer a rung, and never should have been.** It was step 1, on
 the stated grounds that it freed four rows. It freed none: the artwork occupies
@@ -1331,7 +1434,8 @@ Not defects, but the places where the implementation stops short on purpose.
 **`Esc` during `DETECTING` exits, it does not cancel.** `flutter devices
 --machine` runs to completion on its worker thread either way; there is no way to
 interrupt a spawned Dart VM that is cheaper than letting it finish and dropping
-the answer.
+the answer. The frame it applies to is now ~250ms long rather than 6-8s (8.9), so
+this is a rule about a window that is hard to press a key inside of.
 
 **A `SIGTERM` from outside leaks the child.** `q` and `^C` both reap Flutter, and
 so does a normal return from the event loop. Being killed outright skips all
@@ -2041,6 +2145,12 @@ the panel into account, and the rows come from the one flexible region in the
 frame — the log window, which is `Constraint::Min(3)`. That is the honest trade
 and it should be stated in the UI's terms: opening the panel shortens the log.
 
+> **Where this landed.** The panel was rejected and the control went into the top
+> border, costing nothing. It has since come back inside the card as a single
+> right-aligned row (3.2) — one row rather than the two this mock wanted, no
+> dotted rule, and always open rather than toggled. `target_h()` charges it, which
+> is the paragraph above coming true at a tenth of the price.
+
 **The collapsed case has to be answered, not discovered.** Below the `full_cards`
 rung of the ladder (6.2) this card is *one row* — `collapsed()`, a name, an id and
 a version. A panel cannot open inside one row. Three options, and the middle one
@@ -2455,10 +2565,9 @@ No inline panel. `^D` reopens the list frun already has, over the run that is st
 alive, as a state of its own — `Switching`, slug `switch`:
 
 ```text
-   ╭─ ◆ SELECTED DEVICE ───────────────────── [^D] Switch Device ╮
+   ╭─ ◆ DEVICE INFO ─────────────────────────────────────────────╮
    │ Device Target                             Pixel 10 Pro XL  │   8  Running
-   ╰──────────────────────────────────────────────────────────────╯
-   ╭─ ◆ BUILD FINISHED ─────────── Build time 3.4s   Sync 240ms ╮
+   │                                       [^D] Switch Device    │
    ╰──────────────────────────────────────────────────────────────╯
    ╭─ ◆ APP LOGS STREAM ─────────────────────────────────────────╮
                               │ ^D
@@ -2479,11 +2588,13 @@ alive, as a state of its own — `Switching`, slug `switch`:
    → 6 Building                        → whatever 8-11 it now is
 ```
 
-**The titles are `SELECTED DEVICE`, `SELECT DEVICE` and `SWITCH DEVICE`.** One noun
+**The titles are `DEVICE INFO`, `SELECT DEVICE` and `SWITCH DEVICE`.** One noun
 for one thing: `target` and `device` were the same object under two names, and the
 list that picks one now shares its vocabulary with the card that shows it and with
-the key that changes it. The struct is still `SelectedTargetCard` in the code, which
-is a rename with no reader and can wait.
+the key that changes it. The card's title was `SELECTED DEVICE` and lost the
+adjective to `PROJECT INFO` above it (3.2), which costs this paragraph nothing — the
+noun is what the paragraph is about. The struct is still `SelectedTargetCard` in the
+code, which is a rename with no reader and can wait.
 
 `App::run_state()` — `resume.unwrap_or(state)` — is what lets the screen hide the run
 without the code losing track of it. One caller and it is load-bearing:
@@ -2797,11 +2908,19 @@ rather than rose — the run ending was asked for, and colouring it like a failu
 make a deliberate stop read as something breaking.
 
 ```text
-╭─ ◆ SELECTED DEVICE ───────────────────── [^D] Switch Device ╮
-╭─ ◆ STOPPED ────────────────── Build time 3.4s   Sync 240ms ╮
-╭─ ◆ APP LOGS STREAM ────────────────────────── [7 entries] ──╮
-  [r] Retry Build   [^D] Switch Device   [↑↓] Scroll   [e] Expand   [q] Quit
+╭─ ◆ DEVICE INFO ─────────────────────────────────────────────╮
+│                                         [^D] Switch Device  │
+╰──────────────────────────────────────────────────────────────╯
+⏹ STOPPED                       Build time 3.4s   Sync 240ms
+╭─ ◆ APP LOGS STREAM ────────────────────────── [8 entries] ──╮
+  [r] Build again   [^D] Switch Device   [↑↓] Scroll   [e] Expand   [q] Quit
 ```
+
+**This is the one frame the tracker row is kept for**, and 3.4 is where that is
+argued: `RUNNING` has no tracker block at all, so the row *arriving* is how the
+frame announces that the run is over. It is also the only place on screen that
+tells `STOPPED` from `DETACHED` from `DISCONNECTED`, which is the distinction this
+whole section exists to make.
 
 The device is left booted and the log is left intact, which is what makes `r` from
 here worth having: it is `Action::RetryBuild`, so it already brings the device back up
@@ -2869,3 +2988,86 @@ would have said so.
 
 `[h] Help` also left the row. It is Flutter's key and the only hint on the cheatsheet
 that can find itself: pressing `h` makes Flutter print its own list.
+
+### 8.9 Detection you do not wait for (built)
+
+**`DETECTING` was six to eight seconds of Dart VM startup, and almost none of it was
+being spent on the answer.** Measured on this machine, in the project frun is used on:
+
+| Command | Time | What only it can answer |
+| :--- | ---: | :--- |
+| `adb devices` | 12ms | running emulators, attached Android phones |
+| `emulator -list-avds` | 30ms | every AVD |
+| `xcrun simctl list devices available -j` | 119ms | every simulator, and which are booted |
+| `fvm flutter devices --machine` | 6113-8412ms | macOS, Mac Designed for iPad, Chrome, physical iPhones |
+
+Thirteen of the sixteen rows in the picker on that machine come from the first three,
+and they come from them *anyway*: `probe::targets` has always walked `-list-avds` and
+`simctl` for the ordering, and the 4-second recheck (8.5) has always used `adb` and
+`simctl` alone precisely because six seconds is too slow to keep a list honest. The
+three rows the wait actually bought are macOS, Mac Designed for iPad and Chrome —
+which rank last in the list by construction, being nobody's first choice.
+
+So the wait is turned around. `probe::quick_targets` asks the cheap tools, sends
+`Msg::Quick`, and the picker opens on that; `probe::devices` keeps running on the same
+thread and lands as `Msg::Devices`, which `devices_refreshed` was already built to
+swap under a live list. **Measured, under a pty, in `cwclub`,** by killing the process
+at a series of fixed times and reading the capture: `Detecting Flutter devices` alone
+at 0.25s, `SELECT DEVICE` with 13 rows and a `⠋ 13 rechecking` title at 0.4s, `16
+devices` and the macOS/Chrome rows at ~9s. The frame that used to take 8-9s takes
+under 0.4s.
+
+**Two rules make an incomplete list safe to open the picker on**, and they are the
+same two that already make the recheck safe over a live run.
+
+*It cannot be fatal.* `devices_answered` ends the process on an empty list, which is
+right for the full scan and wrong here: the cheap tools seeing nothing is exactly the
+case where a physical iPhone may be the only device on the machine. An empty
+`Msg::Quick` is dropped, `DETECTING` stays up, and `Msg::Devices` decides — including
+its `No device(s) detected`.
+
+*It cannot decide anything twice.* `Msg::Quick` acts only while `state ==
+Detecting`, so a tab that was handed a device (8.4) and is already building is
+untouched, and a full answer that somehow arrived first keeps the flow.
+
+**The one frame that can be wrong, and what corrects it.** `NO_DEVICES` reads
+`Nothing is attached. These can be started:`, and the cheap tools cannot see a
+physical iPhone — `xcrun xcdevice list --timeout 1` is the cheap route to that and is
+1420ms, ten times the rest of the fast path put together, for the rarest case. So with
+a phone plugged in and no simulator booted the first frame is the wrong one, and its
+subtitle is false rather than merely incomplete. `devices_refreshed` therefore moves
+`NO_DEVICES` to `MULTIPLE_DEVICES` when a refresh brings an attached device, in that
+direction only: a device *arriving* makes the heading wrong, while devices leaving
+does not make `SELECT DEVICE` wrong, and dropping the user out of a list they are
+choosing from is worse than a stale title. It also fixes the same staleness a recheck
+could already produce — an emulator booted from another tab while `NO_DEVICES` was up.
+
+Physical Android is covered rather than left to the full scan, and not for symmetry:
+`adb` sees it in 12ms, and a phone on the desk missing from the first list is the one
+omission that would read as a bug instead of a count that is still settling.
+`android_device` describes it the way Flutter would — `ro.product.model` for the name,
+`android_facts` for `Platform ID` and `OS Version` — so the fast row is not a
+placeholder that the slow scan has to repair. `probe::adopted` is now that same
+function, which is how a device that only ever arrives through a recheck stopped
+carrying a dash on the target card: there is no second full scan behind it to fill
+those fields in.
+
+**What the fast path is not allowed to be is a different list.** `quick_targets`
+returns through `probe::targets`, the same merge, so the rows are in the same slots the
+full answer would have put them in — verified by `--probe`, which now prints both
+answers with their timings and their frame verdicts, and the 13 shared rows appear in
+the same order in each. Anything else and the list would rearrange itself under the
+cursor at the eight-second mark, which is the wandering-row bug of 7.6 arriving by
+another route.
+
+| Verified | How |
+| :--- | :--- |
+| Fast list matches the slow list, row for row and in order | `--probe` in `cwclub`: `quick 13 rows in 202ms, frame picker` against `picker 16 rows`, the extra three being macOS, Mac Designed for iPad and Chrome |
+| The picker really opens before the scan lands | pty capture killed at 0.25s / 0.4s / 1.0s, release build: `DETECTING` alone, then `SELECT DEVICE` + `rechecking`, with no macOS row |
+| The full answer completes the list in place | same capture at 11s: title moves from `⠋ 13 rechecking` to `16 devices` |
+| Nothing else regressed | 74 tests, `cargo clippy --all-targets` clean |
+
+| Unverified | Why, and what would do it |
+| :--- | :--- |
+| `NO_DEVICES` correcting itself to the picker | Needs a physical iPhone attached with no simulator booted. The guard is three lines and reads `state == NoDevices && any attached`; a `--dump` cannot reach it because it is a transition between two live answers |
+| A physical Android in the fast list | No phone was attached during these runs. `android_device` is the same `getprop` path `android_facts` uses after every Android boot, which is exercised |

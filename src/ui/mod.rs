@@ -63,7 +63,12 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         rows.push(Constraint::Length(plan.target_h()));
     }
 
-    if app.state.has_build() {
+    // `has_tracker`, not `has_build`. A build that succeeded and is now running has
+    // no tracker block: every row of the collapsed summary is frozen, and its two
+    // numbers are in the log's first entry. The row and the gap above it go to the
+    // stream. It comes back on `Stopped`, where it is the only thing on screen that
+    // says how the run ended — and where its arrival is itself the news.
+    if app.state.has_tracker() {
         rows.push(Constraint::Length(plan.build_h(app.stages.len())));
     }
 
@@ -93,7 +98,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         i += 1;
     }
 
-    if app.state.has_build() {
+    if app.state.has_tracker() {
         build::render(frame, chunks[i], app, &plan);
         i += 1;
     }

@@ -109,10 +109,16 @@ pub fn rows(app: &App, width: u16) -> String {
 
     out.push_str(&format!("state {}   width {width}\n", app.state.slug()));
 
-    // Said once, here, and not in the per-height column. The tracker collapses on
-    // state in this frame, at every height, so listing it as something the size gave
-    // up would put a fixed fact in a column about the ladder.
-    if app.state.build_settled() {
+    // Said once, here, and not in the per-height column. Both of these are decided
+    // by state at every height, so listing either as something the size gave up
+    // would put a fixed fact in a column about the ladder.
+    //
+    // Two lines, not one, because "collapsed" and "gone" are different rows in the
+    // arithmetic underneath: a collapsed tracker still costs its row and the gap
+    // above it, and an absent one costs neither.
+    if !app.state.has_tracker() {
+        out.push_str("  tracker absent: the build succeeded and the run is live\n");
+    } else if app.state.build_settled() {
         out.push_str("  tracker collapsed: the build has settled\n");
     }
 
@@ -348,7 +354,7 @@ mod tests {
         // The target card and the tracker are off screen here, so the list has the
         // frame to itself as the first picker does.
         assert!(
-            !frame.contains("SELECTED DEVICE") && !frame.contains("Stage "),
+            !frame.contains("DEVICE INFO") && !frame.contains("Stage "),
             "the cards describing the outgoing run should be gone:\n{frame}"
         );
     }

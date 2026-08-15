@@ -142,6 +142,37 @@ impl State {
         )
     }
 
+    /// Whether the BuildPhaseTracker occupies a block of the frame.
+    ///
+    /// Narrower than `has_build`, and the two must not be merged. `has_build` is
+    /// "there is a build behind this frame", which is what the target card's `^D`
+    /// hint and `Action::StopRun` ask about; this is "the tracker has something to
+    /// say", which is a different question with a different answer in four states.
+    ///
+    /// A build that succeeded and is now running says nothing. Every row of the
+    /// collapsed summary is frozen — a word, a total and a sync figure — while the
+    /// log window directly beneath it is the only region still moving, and the two
+    /// numbers are on record in the log's first entry, timestamped, put there by
+    /// `session_ready` (3.5). So the block goes, and the row plus the gap above it
+    /// go to the stream.
+    ///
+    /// It stays in the three states where it is the only thing that says what
+    /// happened:
+    ///
+    /// * `Building`, where every row is moving.
+    /// * `BuildFailed`, where the stage list is the context for the error card.
+    /// * `Stopped`, where the row is the only place on screen distinguishing
+    ///   `STOPPED` from `DETACHED` from `DISCONNECTED`. Nothing else carries
+    ///   `Ending`, and after `d` the app is still live on the device while after
+    ///   `^S` it is gone — the difference 8.8 exists to make. The row *appearing*
+    ///   is then itself the signal that the run is over.
+    ///
+    /// `build_done` is exactly the complement: it holds for `Running` and the three
+    /// reload states and deliberately excludes `Stopped`.
+    pub fn has_tracker(self) -> bool {
+        self.has_build() && !self.build_done()
+    }
+
     /// Whether the log stream is on screen.
     ///
     /// Includes `Building`. It used to be excluded on the grounds that nothing
@@ -425,6 +456,15 @@ pub enum Msg {
     Eof,
     /// Discovery finished: one merged, ordered list of everything runnable.
     Devices(Result<Vec<Device>, String>),
+    /// The same list from the tools that answer immediately, ~150ms into the run
+    /// (`probe::quick_targets`).
+    ///
+    /// Its own message rather than the first `Devices`, because the two answers are
+    /// not interchangeable: this one may be missing macOS, Chrome and a physical
+    /// iPhone, so it is allowed to open the picker and not allowed to be fatal. An
+    /// empty answer here means "the cheap tools saw nothing", which is a question for
+    /// `Devices` rather than a verdict.
+    Quick(Vec<Device>),
     /// A boot finished, carrying the id Flutter will use and whatever else the
     /// device could be asked while the connection to it was warm.
     Booted(Result<probe::Booted, String>),

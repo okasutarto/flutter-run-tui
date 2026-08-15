@@ -31,6 +31,12 @@ const BAR_MAX: u16 = 44;
 ///
 /// The card ignores the glyph — `card()` supplies its own `◆` — and the collapsed
 /// row, having no border to hang a title on, uses it.
+///
+/// The two glyphs for a run that has ended are Nerd Font rather than the `⏹` and
+/// `⚠` that were here. Both are East Asian Ambiguous, and this row is the one place
+/// where that is visible as an *indent* rather than as an overflow: the glyph is the
+/// row's first cell, so a font giving it emoji presentation pushes the whole row a
+/// half-cell right of the card borders above and below it. See `theme::GLYPH_WARN`.
 fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
     match app.state {
         State::BuildFailed => ("✖", "BUILD FAILED", theme::ROSE),
@@ -42,18 +48,26 @@ fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
         // and only the tooling let go, which is worth knowing before pressing `r` and
         // wondering why the screen you are looking at is still there.
         State::Stopped if app.ending == Some(Ending::Detached) => {
-            ("⏹", "DETACHED", theme::MUTED)
+            (theme::GLYPH_STOP, "DETACHED", theme::MUTED)
         }
-        // Amber, between the two: rose is for something broken and muted is for a
-        // stop that was asked for, and this is neither. Nothing frun did failed,
-        // but nothing asked for this either — and it cannot be narrowed further,
-        // because a device switched off and an app that crashed arrive as the same
-        // event. The word says what closed, not why; the `ERR` line in the log is
-        // where the reason lives.
+        // Rose, with the rest of the failures. This was amber, on the argument that
+        // rose is for something broken and muted is for a stop that was asked for,
+        // and this is neither — nothing frun did failed, but nothing asked for it
+        // either.
+        //
+        // The argument was about the wrong axis. Amber is not the colour between
+        // those two here, it is the colour of *in progress*: the `BUILDING` spinner,
+        // the pending stage rows, the reload note, the ` in use ` chip, the `^S`
+        // hint. A terminal state wearing it competes with five live ones, and losing
+        // a device mid-run is the last thing that should read as still working.
+        //
+        // It still cannot be narrowed further, because a device switched off and an
+        // app that crashed arrive as the same event. The word says what closed, not
+        // why; the `ERR` line in the log is where the reason lives.
         State::Stopped if app.ending == Some(Ending::Lost) => {
-            ("⚠", "DISCONNECTED", theme::AMBER)
+            (theme::GLYPH_WARN, "DISCONNECTED", theme::ROSE)
         }
-        State::Stopped => ("⏹", "STOPPED", theme::MUTED),
+        State::Stopped => (theme::GLYPH_STOP, "STOPPED", theme::MUTED),
         s if s.build_done() => ("✔", "BUILD FINISHED", theme::EMERALD),
         _ => (app.spinner(), "BUILDING", theme::AMBER),
     }
@@ -64,7 +78,12 @@ fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
 /// Shared with the collapsed row for the same reason `status` is: the row inherits
 /// the card's right-hand group, so the two numbers keep both their wording and
 /// their horizontal position when the card goes.
-fn timings(app: &App) -> Vec<Span<'static>> {
+///
+/// And shared with the log card, which is where the pair lives for the whole of a
+/// run now that the tracker block is not on screen for one (3.4). Three call sites,
+/// one wording: the two figures are the same two figures wherever they surface, and
+/// a rename cannot reach one of them and miss the others.
+pub(super) fn timings(app: &App) -> Vec<Span<'static>> {
     vec![
         text("Build time ", theme::MUTED),
         // Live while building, final once it is not. A build time that only

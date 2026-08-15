@@ -692,6 +692,77 @@ pub fn targets(reported: Vec<Device>, last_used: &str) -> Vec<Device> {
     targets
 }
 
+/// The same list, from the tools that answer immediately.
+///
+/// **This is the fast first frame, and the numbers are the whole argument.** Measured
+/// on this machine: `fvm flutter devices --machine` **6113ms**, against 12ms for `adb
+/// devices`, 30ms for `emulator -list-avds` and 119ms for `simctl list -j`. Six
+/// seconds of `DETECTING` was buying one thing the cheap tools cannot supply, and
+/// paying for the rest twice — every AVD and every simulator in the picker comes from
+/// `-list-avds` and `simctl` either way, through the same `targets()` below.
+///
+/// So the wait is turned around: this answers in ~150ms and the frame goes up, while
+/// `devices()` keeps running behind it and lands as a refresh (`devices_refreshed` in
+/// main.rs, which was already built to swap rows under a live list).
+///
+/// What is missing until the full scan lands, honestly:
+///
+/// * **macOS and Chrome.** Only Flutter reports them, and they rank last in the picker
+///   anyway — nobody's first choice, and nothing that changes which frame is shown.
+/// * **A physical iPhone.** `xcrun xcdevice list --timeout 1` is the cheap route and
+///   is 1.4s, ten times the rest of this put together, for the one case that is also
+///   the rarest. So the frame can open as `NO_DEVICES` with a phone plugged in, and
+///   `devices_refreshed` corrects the frame when the real answer arrives.
+///
+/// Physical *Android* is covered, and that is not symmetry for its own sake: `adb`
+/// sees it in 12ms, and a phone on the desk being absent from the first list is the
+/// one omission that would make this trade feel like a bug rather than a stale count.
+pub fn quick_targets(last_used: &str) -> Vec<Device> {
+    let reported = adb_serials()
+        .iter()
+        .filter_map(|serial| android_device(serial))
+        .collect();
+
+    // The same merge the full scan goes through, so the fast list is not a different
+    // shape or a different order — it is the same list with two kinds of row missing.
+    targets(reported, last_used)
+}
+
+/// A device `adb` can see, described the way Flutter would describe it.
+///
+/// Both kinds, distinguished only by the serial: an emulator is named by its AVD
+/// (`adb emu avd name`, the join `targets()` de-duplicates on), a phone by its model.
+///
+/// `None` when the device will not answer — `offline` mid-boot, or `unauthorized`
+/// with the RSA prompt still on screen. A row that cannot be named cannot be run on
+/// either, and the next recheck picks it up once it can.
+fn android_device(serial: &str) -> Option<Device> {
+    let emulator = serial.starts_with("emulator-");
+
+    let name = match emulator {
+        true => avd_name(serial)?,
+        false => getprop(serial, "ro.product.model")?,
+    };
+
+    // Three more getprops, ~10ms each, and they are what keep the fast list from
+    // being a downgrade: `Platform ID` and `OS Version` on the target card would
+    // otherwise read `-` until the full scan landed.
+    let (target_platform, sdk) = android_facts(serial);
+
+    Some(Device {
+        id: serial.to_string(),
+        name,
+        platform: Platform::Android,
+        target_platform,
+        sdk,
+        virtual_device: emulator,
+        last_used: false,
+        // It is up. Anything with a boot is a row offering to start something that
+        // is already running.
+        boot: None,
+    })
+}
+
 /// Every AVD on the machine, raw name and pretty name.
 ///
 /// Split out because it is now read for its *order* as much as its contents.
@@ -791,17 +862,7 @@ pub fn boot_target(device: &Device) -> Option<Boot> {
 /// Every adb serial, not only emulators: a phone unplugged mid-session is the same
 /// stale row as an emulator that was shut down.
 pub fn alive() -> std::collections::HashSet<String> {
-    let mut up = std::collections::HashSet::new();
-
-    if let Some(out) = run("adb", &["devices"], QUICK) {
-        up.extend(
-            out.lines()
-                .skip(1)
-                .filter_map(|line| line.split_whitespace().next())
-                .filter(|serial| !serial.is_empty())
-                .map(str::to_string),
-        );
-    }
+    let mut up: std::collections::HashSet<String> = adb_serials().into_iter().collect();
 
     if let Some(raw) = run(
         "xcrun",
@@ -828,6 +889,30 @@ pub fn alive() -> std::collections::HashSet<String> {
     up
 }
 
+/// Every serial `adb devices` lists, in the order it lists them.
+///
+/// One place, because three callers want the same 12ms question asked three
+/// different ways: `alive` wants the set, `emulator_serials` wants the emulators, and
+/// `quick_targets` wants to describe each one.
+///
+/// Whatever state adb reports them in. An emulator is `offline` for a few seconds
+/// after launch and its identity is settled long before Android is ready, so
+/// filtering for `device` here would only move the race — and the callers that care
+/// check for themselves (`boot_avd` waits on `sys.boot_completed`, `android_device`
+/// returns `None` for anything that will not answer a `getprop`).
+fn adb_serials() -> Vec<String> {
+    let Some(out) = run("adb", &["devices"], QUICK) else {
+        return Vec::new();
+    };
+
+    out.lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|serial| !serial.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// A device that came up on its own, built from its serial alone.
 ///
 /// **This exists because `alive` and the rows disagree about what an Android device
@@ -840,28 +925,22 @@ pub fn alive() -> std::collections::HashSet<String> {
 /// had the bug: a simulator carries one UDID whether booted or shut down.
 ///
 /// Emulators only, and `None` for anything `adb emu avd name` will not answer for. A
-/// physical serial would need a `getprop` for its model name, and a physical row is
-/// never the stale-bootable case this exists for.
+/// physical device is never the stale-bootable case this exists for: it has no
+/// bootable row to go stale, so `recheck` keeps whatever row it already had.
 ///
-/// `target_platform` and `sdk` are left blank deliberately — they are Flutter's to
-/// report and the next full scan fills them in, the same trade `to_handoff` makes.
+/// `android_device` does the describing, so an adopted row arrives with
+/// `targetPlatform` and `sdk` filled in rather than blank. They used to be left for
+/// "the next full scan", which was true when discovery ran again and is not now: the
+/// recheck never calls Flutter, so a device that only ever arrived this way would have
+/// carried a dash on the target card for the rest of the session.
 pub fn adopted(serial: &str) -> Option<Device> {
     if !serial.starts_with("emulator-") {
         return None;
     }
 
-    Some(Device {
-        id: serial.to_string(),
-        name: avd_name(serial)?,
-        platform: Platform::Android,
-        target_platform: String::new(),
-        sdk: String::new(),
-        virtual_device: true,
-        last_used: false,
-        // Up, so there is nothing left to start. This is the whole point of adopting
-        // the row: it stops offering a boot and starts reading ` active `.
-        boot: None,
-    })
+    // Up, so `android_device` gives it no boot. That is the whole point of adopting
+    // the row: it stops offering a boot and starts reading ` active `.
+    android_device(serial)
 }
 
 /// Device ids that another `flutter run` is already driving.
@@ -1270,19 +1349,13 @@ fn android_target_platform(abi: &str) -> String {
 
 /// Serials of every attached emulator, whatever state adb reports them in.
 ///
-/// `offline` counts: an emulator appears that way for a few seconds after launch,
-/// and its identity is settled long before Android is ready. Waiting for `device`
-/// here would just move the race.
+/// `offline` counts, for the reason `adb_serials` gives: an emulator appears that way
+/// for a few seconds after launch and its identity is settled long before Android is
+/// ready, so waiting for `device` here would just move the race.
 fn emulator_serials() -> std::collections::HashSet<String> {
-    let Some(out) = run("adb", &["devices"], QUICK) else {
-        return std::collections::HashSet::new();
-    };
-
-    out.lines()
-        .skip(1)
-        .filter_map(|line| line.split_whitespace().next())
+    adb_serials()
+        .into_iter()
         .filter(|serial| serial.starts_with("emulator-"))
-        .map(str::to_string)
         .collect()
 }
 

@@ -82,6 +82,24 @@ pub const GLYPH_WEB: &str = "\u{f0ac}";
 /// its note about `×` being Ambiguous width and shifting the HOT CONTROLS rows.
 pub const GLYPH_BOLT: &str = "\u{f0e7}";
 
+/// Warning triangle, for a run that ended without being asked to. `U+F071`.
+///
+/// Not `⚠` U+26A0, which is the same defect as `⚡` above and one code point away
+/// from it: East Asian Ambiguous, so `unicode-width` measures one cell and a font
+/// with emoji presentation draws two. The visible symptom is not the overflow the
+/// bolt caused, because this glyph opens a line rather than sitting inside one —
+/// it is the *first* cell of the collapsed tracker row, so the extra half-cell of
+/// advance reads as an indent and the row stops lining up with the card borders
+/// above and below it.
+pub const GLYPH_WARN: &str = "\u{f071}";
+
+/// Stop square, for a run that was ended deliberately. `U+F04D`.
+///
+/// Not `⏹` U+23F9, for the reason `GLYPH_WARN` is not `⚠`. It shares the same
+/// first cell on the same row, so it would arrive at the same misalignment the
+/// moment a font gave it emoji presentation.
+pub const GLYPH_STOP: &str = "\u{f04d}";
+
 /// Filled-badge caps, giving a pill the closest thing a cell grid has to
 /// `border-radius`. Half-circles drawn to bleed to the cell edge.
 pub const PILL_L: &str = "\u{e0b6}";

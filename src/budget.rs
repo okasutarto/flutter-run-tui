@@ -171,6 +171,8 @@ impl Budget {
     ///
     /// ```text
     ///   Device Target / Platform ID / OS / Type   4
+    ///   blank                                     1
+    ///   [^D] Switch Device                        1
     ///   separators between the four fields        3   (optional)
     /// ```
     ///
@@ -180,12 +182,23 @@ impl Budget {
     /// one by construction, and the command string was a description of an argv
     /// that `Session::spawn` builds for itself. Four rows, handed to the log
     /// window.
+    ///
+    /// The last two rows are the switch control and the blank above it. The control
+    /// used to ride in the border beside the title and cost nothing; it is a real row
+    /// now, and charging both here is not optional — a row drawn past the charged
+    /// height is clipped in silence, and this is the exact card that lost its `Type`
+    /// field that way.
+    ///
+    /// A blank rather than a separator, and the row is spent either way. Under `Type`
+    /// with nothing between them the keycap read as a fifth field's value, so the gap
+    /// is doing work; a rule would do the same work and divide the card in two while
+    /// it did it.
     pub fn target_h(&self) -> u16 {
         if !self.full_cards {
             return 1;
         }
 
-        let mut body = 4;
+        let mut body = 6;
 
         if self.separators {
             body += 3;
@@ -246,7 +259,11 @@ impl Budget {
             n += 1;
         }
 
-        if state.has_build() {
+        // `has_tracker`, not `has_build`: a build that succeeded and is now running
+        // has no tracker block at all, so counting one here would reserve a gap for
+        // a block that is not laid out and leave a blank row in the middle of the
+        // frame. See `State::has_tracker`.
+        if state.has_tracker() {
             n += 1;
         }
 
@@ -265,7 +282,7 @@ impl Budget {
             rows += self.target_h();
         }
 
-        if state.has_build() {
+        if state.has_tracker() {
             rows += self.build_h(stages);
         }
 
@@ -379,21 +396,33 @@ mod tests {
     #[test]
     fn full_chrome_matches_the_spec_arithmetic() {
         // Enumerated from the rows the cards actually draw, not estimated:
-        // project 12, target 10, build 11, footer 1, three gaps.
+        // project 12, target 12, footer 1, two gaps.
+        //
+        // No tracker term at all. `Running` has no tracker block — see
+        // `State::has_tracker` — so its eleven rows and the gap above them are not
+        // something this state can spend, at any size.
         let chrome = Budget::full().chrome(State::Running, DONE);
 
         assert_eq!(
-            chrome, 36,
+            chrome, 27,
             "enumerated from the rows each card actually draws"
         );
+
+        // Where the tracker does exist, it is charged:
+        // project 12 + target 12 + tracker 10 + footer 1 + three gaps.
+        assert_eq!(Budget::full().chrome(State::Building, DONE), 38);
     }
 
     /// Everything cut from the static cards lands in the log window, and this is
     /// the arithmetic that says so.
     ///
-    /// Three removals, eight rows: the prompt bar and its gap (four), and the
-    /// target card's status banner and command string with the blank each needed
-    /// (four).
+    /// Four removals now. The prompt bar and its gap (four rows), the target card's
+    /// status banner and command string with the blank each needed (four), and the
+    /// settled tracker with the gap above it (two).
+    ///
+    /// Two rows went the other way: the switch control moved out of the target
+    /// card's border and onto a content row, and it took a blank with it to keep from
+    /// reading as a fifth field's value, so the card is twelve rows rather than ten.
     #[test]
     fn the_log_window_keeps_what_the_static_cards_gave_up() {
         let log_rows = |h: u16| {
@@ -401,10 +430,18 @@ mod tests {
             h - plan.chrome(State::Running, DONE)
         };
 
-        // At the design target, full chrome now leaves 8 rows where it once left
-        // none at all.
-        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 9);
+        // At the design target, full chrome leaves 18 rows where it once left none
+        // at all.
+        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 18);
         assert!(log_rows(45) >= LOG_MIN, "{} rows", log_rows(45));
+
+        // Nothing is conceded at the design target any more. The floor used to be
+        // defended by giving up the separators here; the tracker's two rows are what
+        // pays for them now.
+        assert_eq!(
+            Budget::solve(area(106, 45), State::Running, DONE).describe(State::Running),
+            "full"
+        );
 
         // And a window tall enough to keep every *rung* still collapses the
         // tracker, because that is not a rung any more.
@@ -419,6 +456,23 @@ mod tests {
         assert_eq!(60 - plan.chrome(State::Running, DONE), 33);
     }
 
+    /// The one state that pays for this rather than being paid: `Stopped` keeps its
+    /// tracker row, because it is the only thing on screen that says how the run
+    /// ended, and the target card's extra row is charged there too.
+    #[test]
+    fn stopped_keeps_the_row_that_says_how_the_run_ended() {
+        let plan = Budget::solve(area(106, 45), State::Stopped, DONE);
+
+        // project 12 + target 12 + tracker 1 + footer 1 + three gaps.
+        assert_eq!(plan.chrome(State::Stopped, DONE), 29);
+
+        // Still well clear of the floor, which is what makes the trade affordable.
+        assert!(45 - plan.chrome(State::Stopped, DONE) >= LOG_MIN);
+
+        // And it is a row, not a block: the expanded tracker has no claim here.
+        assert!(!plan.full_build);
+    }
+
     /// Guards the failure mode that adding the title gap caused: the Layout is
     /// split by these heights, so if `card()` grows and the budget does not, the
     /// bottom of every card is clipped in silence.
@@ -431,12 +485,14 @@ mod tests {
         // 6 content + 2 border + 1 title gap.
         assert_eq!(flat.project_h(), 9);
 
-        // 4 content + 2 border + 1 title gap.
-        assert_eq!(flat.target_h(), 7);
+        // 6 content + 2 border + 1 title gap. The last two are the switch control,
+        // which was in the border and is now a row, and the blank above it.
+        assert_eq!(flat.target_h(), 9);
 
-        // Separators add three rows to each.
+        // Separators add three rows to each. Three, not four: the control row is
+        // divided off by a blank rather than a rule.
         assert_eq!(full.project_h(), 12);
-        assert_eq!(full.target_h(), 10);
+        assert_eq!(full.target_h(), 12);
     }
 
     #[test]
@@ -589,10 +645,17 @@ mod tests {
             "separators must reclaim rows"
         );
 
-        let before = b.chrome(State::Running, DONE);
-        b.full_build = false;
+        // The tracker rung is checked against `Building`, for the same reason the
+        // device-row rung is checked against the picker: `Running` has no tracker
+        // block at all now, so the rung is inert there by design rather than broken.
+        // That is also the only state the rung is still reachable in — `solve`
+        // collapses a settled tracker before the ladder is consulted.
+        let mut mid = Budget::full();
+        let before = mid.chrome(State::Building, DONE);
+
+        mid.full_build = false;
         assert!(
-            b.chrome(State::Running, DONE) < before,
+            mid.chrome(State::Building, DONE) < before,
             "collapsing the build tracker must reclaim rows"
         );
 

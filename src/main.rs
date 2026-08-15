@@ -220,13 +220,45 @@ fn probe_report() {
 
     println!();
 
+    // The fast first list, timed against the scan below it. Both numbers, because the
+    // gap between them is the entire reason this path exists and it is a claim about
+    // *this* machine — an SSD, a warm adb server and a cold Dart VM are all in it.
+    let started = Instant::now();
+    let quick = probe::quick_targets(&last);
+    let quick_ms = started.elapsed().as_millis();
+
+    println!(
+        "quick     {} rows in {quick_ms}ms, frame {}",
+        quick.len(),
+        frame_for(&quick),
+    );
+
+    for row in &quick {
+        println!(
+            "  {}{} {:<24} {:<16} {}",
+            if row.last_used { "*" } else { " " },
+            row.platform.glyph(),
+            row.name,
+            row.id,
+            match &row.boot {
+                None => "run now".to_string(),
+                Some(boot) => format!("{boot:?}"),
+            },
+        );
+    }
+
+    println!();
+
+    let started = Instant::now();
+
     match probe::devices(&last) {
         Err(reason) => println!("devices   FATAL  {reason}"),
 
         Ok(reported) => {
             println!(
-                "reported  {} from flutter devices --machine",
-                reported.len()
+                "reported  {} from flutter devices --machine in {}ms",
+                reported.len(),
+                started.elapsed().as_millis(),
             );
 
             for d in &reported {
@@ -241,13 +273,12 @@ fn probe_report() {
             }
 
             let targets = probe::targets(reported, &probe::last_device());
-            let attached = targets.iter().any(probe::Device::attached);
 
             println!();
             println!(
                 "picker    {} rows, frame {}",
                 targets.len(),
-                if attached { "picker" } else { "no-devices" }
+                frame_for(&targets),
             );
 
             for (i, t) in targets.iter().enumerate() {
@@ -265,6 +296,14 @@ fn probe_report() {
                 );
             }
         }
+    }
+}
+
+/// Which frame a list opens, the same test `devices_answered` applies.
+fn frame_for(targets: &[probe::Device]) -> &'static str {
+    match targets.iter().any(probe::Device::attached) {
+        true => "picker",
+        false => "no-devices",
     }
 }
 
@@ -336,6 +375,17 @@ fn detect(tx: &Sender<Msg>) {
         // ` in use ` chip and the guard behind `Enter` are worthless if they arrive
         // after the pick. 25ms against the six seconds this thread is already spending.
         let _ = tx.send(Msg::Busy(probe::busy()));
+
+        // **The picker opens on this, not on the scan below.** `adb`, `simctl` and
+        // `emulator -list-avds` answer the same question in ~150ms that `fvm flutter
+        // devices --machine` answers in 6113ms, and every AVD and simulator row in the
+        // list comes from them either way — the six seconds were being spent to learn
+        // about macOS, Chrome and a physical iPhone, none of which is the device you
+        // are usually reaching for.
+        //
+        // Same thread, deliberately: the full scan is what fills in the gaps and it may
+        // as well start after a question that takes a sixth of a second.
+        let _ = tx.send(Msg::Quick(probe::quick_targets(&last)));
 
         // The bootable scan is no longer conditional. It used to run only when
         // nothing was attached, which is exactly why booting was unreachable the
@@ -742,8 +792,16 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
 
         Msg::Busy(ids) => app.busy = ids,
 
+        Msg::Quick(targets) => quick_answered(app, ctx, targets),
+
         Msg::Devices(Ok(targets)) => {
             app.refreshing = false;
+
+            // The interval is 4s from the last *answer*, not from the last request.
+            // With the fast list opening the picker at ~200ms, the full scan lands 8s
+            // later with the recheck clock long expired, so the next frame fired a
+            // recheck of an answer that was one frame old.
+            ctx.rechecked = Instant::now();
 
             if app.state == State::Detecting {
                 devices_answered(app, ctx, targets);
@@ -854,6 +912,35 @@ fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
     });
 }
 
+/// The cheap answer, ~150ms in, and the end of the six-second `DETECTING` frame.
+///
+/// Two rules make it safe to open the picker on a list that is not complete, and they
+/// are the same two that already make the 4-second recheck safe over a live run:
+///
+/// **It cannot be fatal.** `devices_answered` ends the process on an empty list, which
+/// is the right verdict for the full scan and a wrong one here — the cheap tools not
+/// seeing anything is exactly the case where a physical iPhone might be the only device
+/// on the machine. An empty answer is dropped, `DETECTING` stays up, and `Devices`
+/// decides.
+///
+/// **It cannot decide anything twice.** `state != Detecting` means a handed-over tab
+/// (8.4) is already building, or the full scan somehow beat this — either way the list
+/// belongs to whoever got there first, and `devices_refreshed` is what swaps rows after
+/// that point.
+///
+/// `refreshing` is then set for the same reason `^D` sets it: the title carries
+/// `⠋ 5 rechecking` while rows are still arriving, so a row that appears 6 seconds
+/// later reads as an answer rather than as a glitch.
+fn quick_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
+    if app.state != State::Detecting || targets.is_empty() {
+        return;
+    }
+
+    devices_answered(app, ctx, targets);
+
+    app.refreshing = true;
+}
+
 /// The device this process was handed by the tab that spawned it (8.4).
 ///
 /// **Read before the first frame, and acted on there.** The earlier version resolved
@@ -944,6 +1031,22 @@ fn devices_refreshed(app: &mut App, targets: Vec<probe::Device>) {
         .unwrap_or(0);
 
     app.scroll = 0;
+
+    // The frame is left alone with one exception, and the fast first list is what
+    // creates it: `NO_DEVICES` reads "Nothing is attached. These can be started:", and
+    // `probe::quick_targets` cannot see a physical iPhone. So a phone on the desk opened
+    // the wrong frame, and the copy on it was false rather than merely incomplete.
+    //
+    // One direction only. A device arriving means the heading is wrong now; devices
+    // *leaving* does not make `SELECT DEVICE` wrong — it is the merged list either way —
+    // and dropping the user out of a list they are choosing from is worse than a title.
+    // The cursor is deliberately not moved with it. The rule above is that the
+    // selection follows the device rather than the row number, and a frame correcting
+    // its own heading is a worse reason to take the cursor off the row the user is
+    // looking at than a reordering would be.
+    if app.state == State::NoDevices && app.devices.iter().any(probe::Device::attached) {
+        app.goto(State::MultipleDevices);
+    }
 
     fill_target(app);
 }

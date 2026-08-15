@@ -21,31 +21,25 @@ const BADGE_W: usize = 3;
 /// `HH:MM:SS`, which `probe::Clock` guarantees.
 const TIME_W: usize = 8;
 
-/// Columns the entry number gets: as many as the largest number on screen needs,
-/// and no more.
-///
-/// A fixed four used to sit here, on the grounds that a constant gutter is what
-/// keeps a wrapped row aligned with its own first line. The constant was the right
-/// idea and the wrong constant: at eight entries it right-aligned `1` into four
-/// columns, so every log line began three columns adrift of the card it is inside
-/// while the space stood empty. The invariant is that *one* number describes the
-/// gutter, not that the number never changes, so it is computed from the count and
-/// both rows read it from `gutter`.
-///
-/// The cost is a one-column shift of the message column as the log crosses 10, 100
-/// and 1000 entries. That is three reflows in a session, against a hole on screen
-/// for the first nine entries of every session.
-fn index_w(count: usize) -> usize {
-    count.max(1).to_string().len()
-}
-
-/// Width of `1␣14:32:01␣INF␣` at this entry count.
+/// Width of `14:32:01␣INF␣`.
 ///
 /// Subtracted from every message and used as the continuation indent, so the two
 /// cannot disagree.
-fn gutter(count: usize) -> u16 {
-    (index_w(count) + 1 + TIME_W + 1 + BADGE_W + 1) as u16
+///
+/// **No entry number.** A right-aligned counter opened every row and was the first
+/// thing the eye crossed on the way to the message, for a figure nothing reads: the
+/// title bar carries the total, scroll position is reported there too, and no other
+/// part of the app addresses a log line by its ordinal. It also grew — one column at
+/// 10 entries, another at 100, a fourth at 1000 — so a chatty session spent four
+/// columns of every row, and the widest gutter arrived exactly when the messages
+/// were longest. The timestamp is the same anchor with a use.
+const fn gutter() -> u16 {
+    (TIME_W + 1 + BADGE_W + 1) as u16
 }
+
+/// Title, needed as a measurement as well as a label: the two title groups share
+/// one border row, and ratatui clips rather than reflows when they meet.
+const TITLE: &str = "APP LOGS STREAM";
 
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     // Says so when the window is not at the live tail. Without it, scrolling back
@@ -57,8 +51,41 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         format!("[{} entries] ", app.logs.len())
     };
 
-    let block = card("APP LOGS STREAM", theme::CYAN)
-        .title_top(Line::from(vec![Span::raw(" "), text(count, theme::MUTED)]).right_aligned());
+    let mut right = vec![Span::raw(" ")];
+
+    // The build's two totals, immediately left of the entry count, and only in the
+    // states where the tracker block is not on screen to hold them — `Running` and
+    // the three reload frames (3.4). During a build the tracker has them, live, and
+    // on `Stopped` the collapsed row still does; printing them here as well would put
+    // the same two numbers twice on one screen.
+    //
+    // The title bar rather than a log entry, which is where they went first. A build
+    // total is a fact about the session, not an event within it, so it should not
+    // scroll away from the window it describes — and the border row costs nothing,
+    // where an entry costs a row of the stream.
+    //
+    // Dropped, not truncated, when the row cannot hold both groups. Same rule as the
+    // footer in 3.7 and for the same reason: a clipped group cannot be told from an
+    // absent one, and `[152 entries · scrolled]` at 60 columns leaves no room. The
+    // count outranks the pair, being the one that changes.
+    if !app.state.has_tracker() {
+        let timings = super::build::timings(app);
+
+        // `card()` draws `─ ◆ <title> `, and the two title groups meet in the middle
+        // of one border row.
+        let left = crate::widgets::width(TITLE) + 5;
+        let wanted: usize = timings.iter().map(Span::width).sum::<usize>() + 3;
+
+        if left + wanted + crate::widgets::width(&count) + 1 <= area.width as usize {
+            right.extend(timings);
+            right.push(Span::raw("   "));
+        }
+    }
+
+    right.push(text(count, theme::MUTED));
+
+    let block =
+        card(TITLE, theme::CYAN).title_top(Line::from(right).right_aligned());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -92,8 +119,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_stream(frame: &mut Frame, area: Rect, app: &mut App) {
-    let index_w = index_w(app.logs.len());
-    let gutter = gutter(app.logs.len());
+    let gutter = gutter();
 
     let msg_w = area.width.saturating_sub(gutter).max(8) as usize;
 
@@ -101,14 +127,10 @@ fn draw_stream(frame: &mut Frame, area: Rect, app: &mut App) {
     // entry is not one row, so the count cannot be known before wrapping.
     let mut rows: Vec<Line> = Vec::new();
 
-    for (index, log) in app.logs.iter().enumerate() {
+    for log in app.logs.iter() {
         for (i, chunk) in wrap(&log.message, msg_w).into_iter().enumerate() {
             if i == 0 {
-                let mut spans = vec![
-                    text(format!("{:>index_w$} ", index + 1), theme::BORDER),
-                    text(log.time.as_str(), theme::MUTED),
-                    Span::raw(" "),
-                ];
+                let mut spans = vec![text(log.time.as_str(), theme::MUTED), Span::raw(" ")];
 
                 spans.extend(badge(
                     format!("{:^BADGE_W$}", log.level.badge()),
@@ -121,7 +143,7 @@ fn draw_stream(frame: &mut Frame, area: Rect, app: &mut App) {
             } else {
                 // Continuation. The gutter is left empty rather than repeated:
                 // consecutive rows of one exception share a timestamp and a
-                // level, so reprinting them spends 18 columns on nothing.
+                // level, so reprinting them spends 13 columns on nothing.
                 rows.push(Line::from(vec![
                     Span::raw(" ".repeat(gutter as usize)),
                     text(chunk, message_color(log.level)),
@@ -213,49 +235,30 @@ mod tests {
     use crate::widgets::width;
 
     /// What the drawn gutter measures and what a continuation row indents by must
-    /// be the same number, at every entry count and for every level.
+    /// be the same number, for every level.
     ///
     /// Two numbers described this column before: the spans that draw it, and the
-    /// constant the continuation rows indent by. They agreed up to 99 entries and
-    /// then quietly stopped — a real run reached 908 and every wrapped line was a
-    /// column out. They also disagreed on reload rows at any count, where the
-    /// one-cell bolt made the drawn gutter two columns short.
+    /// constant the continuation rows indent by. They disagreed on reload rows,
+    /// where the one-cell bolt made the drawn gutter two columns short, and — while
+    /// the gutter still carried an entry number — above 99 entries, where a real run
+    /// reached 908 and every wrapped line was a column out.
+    ///
+    /// The entry number is gone, so the count no longer enters into it. The badge
+    /// still does: `INF` is three cells and the reload bolt is one, padded to match.
     #[test]
     fn the_drawn_gutter_matches_the_continuation_indent() {
         use crate::data::Level;
 
-        for count in [1usize, 9, 10, 99, 100, 999, 1000, 4000] {
-            for level in [Level::Inf, Level::Wrn, Level::Err, Level::Reload] {
-                let w = index_w(count);
+        for level in [Level::Inf, Level::Wrn, Level::Err, Level::Reload] {
+            let drawn = format!("{} {:^BADGE_W$} ", "14:32:01", level.badge());
 
-                let drawn = format!(
-                    "{:>w$} {} {:^BADGE_W$} ",
-                    count,
-                    "14:32:01",
-                    level.badge(),
-                );
-
-                assert_eq!(
-                    width(&drawn),
-                    gutter(count) as usize,
-                    "{count} entries at {level:?} draw {} columns, the indent is {}: {drawn:?}",
-                    width(&drawn),
-                    gutter(count),
-                );
-            }
+            assert_eq!(
+                width(&drawn),
+                gutter() as usize,
+                "{level:?} draws {} columns, the indent is {}: {drawn:?}",
+                width(&drawn),
+                gutter(),
+            );
         }
-    }
-
-    /// The point of computing it: the first entry of a session starts against the
-    /// card's content edge rather than three columns inside it.
-    #[test]
-    fn a_short_log_does_not_reserve_columns_it_cannot_use() {
-        assert_eq!(index_w(1), 1);
-        assert_eq!(gutter(1), 15, "three columns narrower than the old constant");
-
-        // And it still grows to the 18 that a four-digit count needs, which is
-        // what the fixed constant was.
-        assert_eq!(index_w(4000), 4);
-        assert_eq!(gutter(4000), 18);
     }
 }
