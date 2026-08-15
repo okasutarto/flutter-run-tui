@@ -71,7 +71,7 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
     let hints: Vec<(&str, &str, ratatui::style::Color, Option<Action>)> = match app.state {
         State::Detecting | State::Booting => vec![("^C", "Cancel", theme::ROSE, None)],
 
-        State::NoDevices | State::MultipleDevices => {
+        State::MultipleDevices => {
             let mut hints = vec![
                 ("↑↓", "Move", theme::CYAN, None),
                 ("⏎", "Launch", theme::EMERALD, None),

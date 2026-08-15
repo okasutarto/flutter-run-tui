@@ -37,7 +37,13 @@ const BAR_MAX: u16 = 44;
 /// where that is visible as an *indent* rather than as an overflow: the glyph is the
 /// row's first cell, so a font giving it emoji presentation pushes the whole row a
 /// half-cell right of the card borders above and below it. See `theme::GLYPH_WARN`.
-fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
+/// The three `Stopped` arms are read by the target card rather than by anything in
+/// this file: the tracker block is not on screen in that state (`has_tracker`), and
+/// those words are statements about the device, so they are a pill on the card that
+/// describes it (3.2). They stay here because this is the one function that maps a
+/// state to a word, a glyph and a colour, and splitting it is how the card and the
+/// row came to disagree the first time.
+pub(super) fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
     match app.state {
         State::BuildFailed => ("✖", "BUILD FAILED", theme::ROSE),
         // Muted rather than rose: the run ending was asked for, and colouring it

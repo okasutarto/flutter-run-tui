@@ -63,11 +63,12 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         rows.push(Constraint::Length(plan.target_h()));
     }
 
-    // `has_tracker`, not `has_build`. A build that succeeded and is now running has
-    // no tracker block: every row of the collapsed summary is frozen, and its two
-    // numbers are in the log's first entry. The row and the gap above it go to the
-    // stream. It comes back on `Stopped`, where it is the only thing on screen that
-    // says how the run ended — and where its arrival is itself the news.
+    // `has_tracker`, not `has_build`: only `Building` and `BuildFailed` have a
+    // tracker block. Once a build has settled every row of it is frozen, and the two
+    // facts worth keeping went to the components that own them — the totals to the
+    // log card's title, the ending word to a pill on the target card. What that buys
+    // beyond the row and its gap is that the log window no longer changes height
+    // when a run ends.
     if app.state.has_tracker() {
         rows.push(Constraint::Length(plan.build_h(app.stages.len())));
     }
@@ -114,7 +115,6 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
 
     match app.state {
         State::Detecting => detecting(frame, middle, app),
-        State::NoDevices => devices::render_bootable(frame, middle, app, &plan),
         State::Booting => devices::render_booting(frame, middle, app),
         State::MultipleDevices => devices::render_picker(frame, middle, app, &plan),
         State::SingleDevice => devices::render_single(frame, middle, app),

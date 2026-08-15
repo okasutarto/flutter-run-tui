@@ -57,7 +57,7 @@ pub struct Budget {
     /// while a build is in progress. Once the build has settled the tracker holds
     /// nothing that changes — five labels and their frozen durations — so it has
     /// no claim on nine rows at any size, and `solve` switches it off before the
-    /// first concession is considered. See `State::build_settled`.
+    /// first concession is considered. See `State::has_tracker`.
     ///
     /// It stays in the ladder for the `BUILDING` and `BUILD_FAILED` cases, where
     /// the rows are load-bearing but a very short terminal may still have to have
@@ -321,10 +321,18 @@ impl Budget {
         let mut budget = Self::full();
         let floor = Self::floor(state);
 
-        // Before the ladder, not inside it. A settled tracker is collapsed at every
-        // size, so this is not a concession the height forced and there is no
-        // configuration in which the height buys it back.
-        if state.build_settled() {
+        // Before the ladder, not inside it, and spent for the state rather than by
+        // the height. A state with no tracker block cannot buy anything by
+        // collapsing one, so the rung has to be marked used or `concede` will spend
+        // it on nothing and take the next one as well — which is exactly the defect
+        // the logo rung had (6.2).
+        //
+        // This used to read `build_settled()`, from when a finished build still
+        // showed a one-row summary and the argument was that its rows were frozen.
+        // The summary is gone: its totals are in the log card's title and its ending
+        // word is a pill on the target card, so the condition is now simply whether
+        // the block exists at all.
+        if !state.has_tracker() {
             budget.full_build = false;
         }
 
@@ -347,12 +355,12 @@ impl Budget {
         if !self.roomy_devices {
             given_up.push("dense devices");
         }
-        // Only when the size forced it. Once the build has settled the tracker is
-        // collapsed in every configuration, so naming it here would report a
-        // concession the layout did not make — and the footer prints this string, so
-        // it would have sat there reading `[build collapsed]` for the whole of every
-        // run. That is the same defect 6.3 describes for the expanded log view.
-        if !self.full_build && !state.build_settled() {
+        // Only when the size forced it, which means only where there is a tracker to
+        // collapse. `solve` marks this rung used in every other state, so without the
+        // guard the footer would sit there reading `[build collapsed]` for the whole
+        // of every run, naming a concession the layout never made. Same defect 6.3
+        // describes for the expanded log view.
+        if !self.full_build && state.has_tracker() {
             given_up.push("build collapsed");
         }
         if !self.full_cards {
@@ -456,21 +464,23 @@ mod tests {
         assert_eq!(60 - plan.chrome(State::Running, DONE), 33);
     }
 
-    /// The one state that pays for this rather than being paid: `Stopped` keeps its
-    /// tracker row, because it is the only thing on screen that says how the run
-    /// ended, and the target card's extra row is charged there too.
+    /// `Stopped` is laid out exactly like a live run: two cards, a footer, two gaps.
+    ///
+    /// This replaces a test asserting the opposite — that `Stopped` kept a tracker
+    /// row, being the only thing on screen that said how the run ended. It is not:
+    /// the ending is a pill on the target card's control row now, so the row went,
+    /// and the point of it going is the assertion below.
     #[test]
-    fn stopped_keeps_the_row_that_says_how_the_run_ended() {
+    fn a_stopped_run_is_laid_out_like_a_live_one() {
         let plan = Budget::solve(area(106, 45), State::Stopped, DONE);
 
-        // project 12 + target 12 + tracker 1 + footer 1 + three gaps.
-        assert_eq!(plan.chrome(State::Stopped, DONE), 29);
+        assert_eq!(
+            plan.chrome(State::Stopped, DONE),
+            plan.chrome(State::Running, DONE),
+            "the log window must not change height when the run ends"
+        );
 
-        // Still well clear of the floor, which is what makes the trade affordable.
         assert!(45 - plan.chrome(State::Stopped, DONE) >= LOG_MIN);
-
-        // And it is a row, not a block: the expanded tracker has no claim here.
-        assert!(!plan.full_build);
     }
 
     /// Guards the failure mode that adding the title gap caused: the Layout is

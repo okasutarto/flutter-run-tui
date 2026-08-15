@@ -227,11 +227,7 @@ fn probe_report() {
     let quick = probe::quick_targets(&last);
     let quick_ms = started.elapsed().as_millis();
 
-    println!(
-        "quick     {} rows in {quick_ms}ms, frame {}",
-        quick.len(),
-        frame_for(&quick),
-    );
+    println!("quick     {} rows in {quick_ms}ms", quick.len());
 
     for row in &quick {
         println!(
@@ -275,11 +271,7 @@ fn probe_report() {
             let targets = probe::targets(reported, &probe::last_device());
 
             println!();
-            println!(
-                "picker    {} rows, frame {}",
-                targets.len(),
-                frame_for(&targets),
-            );
+            println!("picker    {} rows", targets.len());
 
             for (i, t) in targets.iter().enumerate() {
                 println!(
@@ -296,14 +288,6 @@ fn probe_report() {
                 );
             }
         }
-    }
-}
-
-/// Which frame a list opens, the same test `devices_answered` applies.
-fn frame_for(targets: &[probe::Device]) -> &'static str {
-    match targets.iter().any(probe::Device::attached) {
-        true => "picker",
-        false => "no-devices",
     }
 }
 
@@ -687,10 +671,7 @@ fn event_loop(app: &mut App, ctx: &mut Ctx, art: &mut Logo) -> io::Result<()> {
             && !app.refreshing
             && !app.devices.is_empty()
             && ctx.rechecked.elapsed() >= RECHECK
-            && matches!(
-                app.state,
-                State::NoDevices | State::MultipleDevices | State::Switching
-            )
+            && matches!(app.state, State::MultipleDevices | State::Switching)
         {
             ctx.rechecked = Instant::now();
             app.refreshing = true;
@@ -892,8 +873,6 @@ fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
         return;
     }
 
-    let attached = targets.iter().any(probe::Device::attached);
-
     app.devices = targets;
     app.scroll = 0;
 
@@ -905,11 +884,14 @@ fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
     // that answers `Enter` with a refusal.
     app.selected_device = app.first_pickable();
 
-    app.goto(if attached {
-        State::MultipleDevices
-    } else {
-        State::NoDevices
-    });
+    // One frame, always. There used to be a branch here on
+    // `targets.iter().any(Device::attached)`, sending an unattached list to
+    // `NO_DEVICES` — and it never took that arm: `attached` is
+    // `platform.needs_boot()`, which counts bootable rows, so one installed simulator
+    // was enough to decide it. The state it chose is gone with it (7.6): the merged
+    // list is the same rows in the same order, and ` active ` on a row says what
+    // `Nothing is attached` said about the absence of one.
+    app.goto(State::MultipleDevices);
 }
 
 /// The cheap answer, ~150ms in, and the end of the six-second `DETECTING` frame.
@@ -1032,22 +1014,11 @@ fn devices_refreshed(app: &mut App, targets: Vec<probe::Device>) {
 
     app.scroll = 0;
 
-    // The frame is left alone with one exception, and the fast first list is what
-    // creates it: `NO_DEVICES` reads "Nothing is attached. These can be started:", and
-    // `probe::quick_targets` cannot see a physical iPhone. So a phone on the desk opened
-    // the wrong frame, and the copy on it was false rather than merely incomplete.
-    //
-    // One direction only. A device arriving means the heading is wrong now; devices
-    // *leaving* does not make `SELECT DEVICE` wrong — it is the merged list either way —
-    // and dropping the user out of a list they are choosing from is worse than a title.
-    // The cursor is deliberately not moved with it. The rule above is that the
-    // selection follows the device rather than the row number, and a frame correcting
-    // its own heading is a worse reason to take the cursor off the row the user is
-    // looking at than a reordering would be.
-    if app.state == State::NoDevices && app.devices.iter().any(probe::Device::attached) {
-        app.goto(State::MultipleDevices);
-    }
-
+    // The frame is left alone, and there is now only one frame a list can open, so
+    // there is nothing here to correct. A `NO_DEVICES` -> picker fix-up was written in
+    // this spot for the physical iPhone the cheap tools cannot see (8.9); reading why
+    // it could never fire is what showed that the state it corrected to was the only
+    // state either answer ever reached, and both are gone.
     fill_target(app);
 }
 
@@ -1305,10 +1276,7 @@ fn key_press(
                 return Ok(false);
             }
 
-            if matches!(
-                app.state,
-                State::NoDevices | State::MultipleDevices | State::Detecting
-            ) {
+            if matches!(app.state, State::MultipleDevices | State::Detecting) {
                 // 130, the shell's convention for "cancelled at a prompt", which
                 // is what the implementation being replaced returned.
                 app.exit_code = 130;
@@ -1378,10 +1346,7 @@ fn key_press(
         // visible at all.
         KeyCode::Enter
             if key.modifiers.contains(KeyModifiers::SHIFT)
-                && matches!(
-                    app.state,
-                    State::NoDevices | State::MultipleDevices | State::Switching
-                ) =>
+                && matches!(app.state, State::MultipleDevices | State::Switching) =>
         {
             return Ok(apply(app, ctx, Action::NewTab));
         }
@@ -1392,10 +1357,7 @@ fn key_press(
         // screen: everywhere else a digit is Flutter's, and it has to arrive
         // unchanged.
         KeyCode::Char(c @ '1'..='9')
-            if matches!(
-                app.state,
-                State::NoDevices | State::MultipleDevices | State::Switching
-            ) =>
+            if matches!(app.state, State::MultipleDevices | State::Switching) =>
         {
             let index = c as usize - '1' as usize;
 
@@ -1440,10 +1402,7 @@ fn key_press(
 /// `Enter` means "select" in the two states that offer a list, and nothing
 /// anywhere else.
 fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
-    if !matches!(
-        app.state,
-        State::NoDevices | State::MultipleDevices | State::Switching
-    ) {
+    if !matches!(app.state, State::MultipleDevices | State::Switching) {
         forward(ctx, b"\r");
         return false;
     }
@@ -1792,7 +1751,11 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
                 return false;
             };
 
-            let id = app.target.as_ref().map(|d| d.id.clone()).unwrap_or_default();
+            let id = app
+                .target
+                .as_ref()
+                .map(|d| d.id.clone())
+                .unwrap_or_default();
 
             app.boot_name = app
                 .target
@@ -2162,7 +2125,10 @@ mod tests {
         // In place: the cursor is on the row the user was looking at, and this is the
         // moment it becomes runnable.
         assert_eq!(rows[1].id, "emulator-5554");
-        assert!(rows[1].boot.is_none(), "an emulator that is up needs no boot");
+        assert!(
+            rows[1].boot.is_none(),
+            "an emulator that is up needs no boot"
+        );
         assert_eq!(rows[0].id, "Pixel_10_Pro_XL", "the other AVD is untouched");
 
         // Nothing to replace: a device with no bootable row of its own is still news.

@@ -710,9 +710,16 @@ pub fn targets(reported: Vec<Device>, last_used: &str) -> Vec<Device> {
 /// * **macOS and Chrome.** Only Flutter reports them, and they rank last in the picker
 ///   anyway — nobody's first choice, and nothing that changes which frame is shown.
 /// * **A physical iPhone.** `xcrun xcdevice list --timeout 1` is the cheap route and
-///   is 1.4s, ten times the rest of this put together, for the one case that is also
-///   the rarest. So the frame can open as `NO_DEVICES` with a phone plugged in, and
-///   `devices_refreshed` corrects the frame when the real answer arrives.
+///   is 1.4s, ten times the rest of this put together, for the rarest case. It shows up
+///   as a row when the full scan lands, like macOS and Chrome.
+///
+/// Neither gap can change *which frame* opens, which is the part that would have been
+/// worth 1.4s. `devices_answered` branches on `Device::attached`, and that is
+/// `platform.needs_boot()` — every iOS and Android row, bootable ones included. The
+/// AVD and simulator rows deciding it are the same rows in both lists, from the same
+/// two tools. The only answer this can give that the full scan would not is *nothing*,
+/// on a machine with no AVDs, no simulators and no adb device, which is why
+/// `Msg::Quick` is not allowed to be fatal.
 ///
 /// Physical *Android* is covered, and that is not symmetry for its own sake: `adb`
 /// sees it in 12ms, and a phone on the desk being absent from the first list is the

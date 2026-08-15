@@ -1214,7 +1214,11 @@ mod tests {
         // than opening its own, so `Preparing build` and `Building with Xcode` are
         // one row that changed its name.
         assert_eq!(app.stages.len(), 3, "the skipped path should run three");
-        assert_eq!(app.expected_stages(), 4, "the estimate stays an upper bound");
+        assert_eq!(
+            app.expected_stages(),
+            4,
+            "the estimate stays an upper bound"
+        );
 
         assert!(
             app.state.build_done(),
@@ -1248,7 +1252,10 @@ mod tests {
         // The real sequence, with a gap where Flutter goes silent while already
         // building. On a cold iOS build that stretch is 7 to 16 seconds.
         let script: [(&str, u64); 5] = [
-            ("Launching lib/main.dart on iPhone 17 Pro in debug mode...", 400),
+            (
+                "Launching lib/main.dart on iPhone 17 Pro in debug mode...",
+                400,
+            ),
             ("Running Xcode build...", 100),
             ("Xcode build done.                      0.450s", 0),
             ("Syncing files to device iPhone 17 Pro...     81ms", 0),
@@ -1293,7 +1300,10 @@ mod tests {
         let mut app = App::new(State::Building);
         app.begin_build();
 
-        feed(&mut app, "Launching lib/main.dart on iPhone 17 Pro in debug mode...");
+        feed(
+            &mut app,
+            "Launching lib/main.dart on iPhone 17 Pro in debug mode...",
+        );
 
         assert_eq!(app.stages.len(), 2);
         assert_eq!(app.stages[1].label, "Preparing build");
@@ -1339,10 +1349,8 @@ mod tests {
 
         // Nothing acknowledges it. Wind the deadline into the past rather than
         // sleeping out ACK_TIMEOUT.
-        app.pending
-            .as_mut()
-            .expect("a pending reload")
-            .deadline = Some(Instant::now() - Duration::from_millis(1));
+        app.pending.as_mut().expect("a pending reload").deadline =
+            Some(Instant::now() - Duration::from_millis(1));
 
         app.tick_pending();
 
@@ -1376,7 +1384,11 @@ mod tests {
         );
 
         app.tick_pending();
-        assert_eq!(app.state, State::ReloadInFlight, "it should still be running");
+        assert_eq!(
+            app.state,
+            State::ReloadInFlight,
+            "it should still be running"
+        );
 
         feed(&mut app, "Reloaded 3 of 1824 libraries in 212ms.");
         assert_eq!(app.state, State::Running);
@@ -1393,10 +1405,8 @@ mod tests {
         let mut app = App::new(State::Running);
 
         app.request_reload(Kind::Reload);
-        app.pending
-            .as_mut()
-            .expect("a pending reload")
-            .deadline = Some(Instant::now() - Duration::from_millis(1));
+        app.pending.as_mut().expect("a pending reload").deadline =
+            Some(Instant::now() - Duration::from_millis(1));
         app.tick_pending();
 
         assert_eq!(app.state, State::ReloadDropped);
@@ -1549,9 +1559,7 @@ mod tests {
             );
 
             assert!(
-                app.stages
-                    .last()
-                    .is_some_and(|s| s.key == StageKey::Ready),
+                app.stages.last().is_some_and(|s| s.key == StageKey::Ready),
                 "{mode}: the build should end on Application Running"
             );
         }
@@ -1579,7 +1587,10 @@ mod tests {
         let mut app = App::new(State::Building);
         app.begin_build();
 
-        feed(&mut app, "Launching lib/main.dart on iPhone 17 Pro in debug mode...");
+        feed(
+            &mut app,
+            "Launching lib/main.dart on iPhone 17 Pro in debug mode...",
+        );
         feed(&mut app, "Running Xcode build...");
 
         let settled: Vec<(String, String)> = app

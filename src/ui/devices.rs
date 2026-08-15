@@ -11,63 +11,18 @@ use crate::data::{Action, App, Device, Hit, State};
 use crate::theme;
 use crate::widgets::{card, elide, pill, spread, strong, text};
 
-/// State 2. Zero devices answered, so offer everything launchable.
-pub fn render_bootable(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
-    let block = card("NO DEVICE RUNNING", theme::AMBER).title_top(
-        Line::from(vec![
-            Span::raw(" "),
-            text(format!("{} targets ", app.devices.len()), theme::MUTED),
-        ])
-        .right_aligned(),
-    );
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    // Slot layout, not a line list: each row below is its own widget, so a
-    // blank row is an empty slot rather than a pushed `Line::default()`.
-    //
-    // Only the device list is flexible. Everything else is one row, and the
-    // blanks are declared here so the indices below stay readable.
-    const SUBTITLE: usize = 0;
-    const TITLE: usize = 2;
-    const LIST: usize = 4;
-
-    let rows = Layout::vertical([
-        Constraint::Length(1), // subtitle
-        Constraint::Length(1), // blank
-        Constraint::Length(1), // "Start a Device"
-        Constraint::Length(1), // blank
-        Constraint::Min(2),    // the list
-    ])
-    .split(inner);
-
-    frame.render_widget(
-        Paragraph::new(Line::from(text(
-            "Nothing is attached. These can be started:",
-            theme::MUTED,
-        ))),
-        rows[SUBTITLE],
-    );
-
-    frame.render_widget(
-        Paragraph::new(Line::from(strong("Start a Device", theme::TEXT))),
-        rows[TITLE],
-    );
-
-    list(frame, rows[LIST], app, plan);
-
-    // No hint row, and the blank above it went with it. It read
-    // `⚡ Use ↑↓ arrow keys & Enter to launch device` on the left and
-    // `Press Enter to launch` on the right — the same instruction twice in one
-    // row, and both of it a third time on the footer, which carries `↑↓ Move`,
-    // `⏎ Launch` and `Esc Cancel` in exactly this state.
-    //
-    // Unlike SELECT DEVICE, there was nothing else on the row to keep: no
-    // ordering note, no status, so the whole slot is the list's now. This is the
-    // state with the most rows to show — every bootable target rather than the
-    // attached ones — so two rows back is two more targets before it scrolls.
-}
+// State 2, `NO DEVICE RUNNING`, was rendered here and is gone.
+//
+// It drew the same rows this file's picker draws, from the same `list()`, under an
+// amber `Nothing is attached. These can be started:` — and it could not be reached.
+// `devices_answered` branched on `Device::attached`, which is `platform.needs_boot()`
+// and so counts bootable rows too, so a single installed simulator made the picker the
+// only answer. Nothing booted opens `SELECT DEVICE` with every row offering a boot,
+// which is 7.6's merged list doing what the heading used to say.
+//
+// The rows it did not have are worth naming, because they are the reason not to bring
+// it back as a variant: a subtitle and a `Start a Device` heading, two rows spent
+// saying what the chips on the rows say, in the frame with the most targets to show.
 
 /// State 4. Two or more answered, so pick one.
 pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
@@ -90,9 +45,8 @@ pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget
         format!("{} devices ", app.devices.len())
     };
 
-    let block = card(title, theme::CYAN).title_top(
-        Line::from(vec![Span::raw(" "), text(count, theme::MUTED)]).right_aligned(),
-    );
+    let block = card(title, theme::CYAN)
+        .title_top(Line::from(vec![Span::raw(" "), text(count, theme::MUTED)]).right_aligned());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

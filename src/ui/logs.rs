@@ -54,10 +54,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     let mut right = vec![Span::raw(" ")];
 
     // The build's two totals, immediately left of the entry count, and only in the
-    // states where the tracker block is not on screen to hold them — `Running` and
-    // the three reload frames (3.4). During a build the tracker has them, live, and
-    // on `Stopped` the collapsed row still does; printing them here as well would put
-    // the same two numbers twice on one screen.
+    // states where the tracker block is not on screen to hold them (3.4). That is
+    // every state this card appears in except `Building`, where the tracker has them
+    // and has them live; printing them here as well would put the same two numbers
+    // twice on one screen.
+    //
+    // `Stopped` reads them from here too, now that the collapsed summary row is gone.
+    // Which is the point of keying this on `has_tracker` rather than on a list of
+    // states: the two facts move together, so the pair is shown in exactly the frames
+    // where nothing else is showing it.
     //
     // The title bar rather than a log entry, which is where they went first. A build
     // total is a fact about the session, not an event within it, so it should not
@@ -84,8 +89,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 
     right.push(text(count, theme::MUTED));
 
-    let block =
-        card(TITLE, theme::CYAN).title_top(Line::from(right).right_aligned());
+    let block = card(TITLE, theme::CYAN).title_top(Line::from(right).right_aligned());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

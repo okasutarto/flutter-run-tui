@@ -56,7 +56,7 @@ The interface is organized into modular TUI blocks:
 │                                                                             │
 │  Discovery                                                                  │
 │  ├─ State 1:  FlutterDeviceManager (DETECTING)                              │
-│  ├─ State 2:  FlutterDeviceManager (NO_DEVICES - Launchable Targets)        │
+│  ├─ State 2:  removed — the picker is the only list, see 3.3 and 8.10       │
 │  ├─ State 3:  FlutterDeviceManager (BOOTING)                                │
 │  ├─ State 4:  FlutterDeviceManager (MULTIPLE_DEVICES - picker)              │
 │  └─ State 5:  FlutterDeviceManager (SINGLE_DEVICE - superseded, see 7.6)    │
@@ -150,13 +150,44 @@ already the component describing what is being run and where.
 * **Target Details Table**, and nothing else: `Device Target`, `Platform ID`,
   `OS Version`, `Type` (Simulator / Hardware). Four rows, plus separators.
 
+* **How the run ended is a pill in the title bar**: `STOPPED`, `DETACHED`,
+  `DISCONNECTED`, from `Ending`, in `STOPPED` only.
+
+  ```text
+  ╭─ ◆ DEVICE INFO ──────────────────────────   DISCONNECTED  ╮
+  ```
+
+  On this card because all three are statements about the *device*: after `d` the app
+  is still running on it, after `^S` it is gone, after a `Lost` the connection to it
+  is what broke. In the title bar because that slot was empty here and is a status
+  slot everywhere else — `~/cwclub`, `5 devices`, `N targets`, `[7 entries]` — so
+  this closes the one card that was an exception rather than inventing a place.
+
+  `PROJECT INFO` was the other candidate and is wrong twice over. Nothing about a
+  project is disconnected, and its top-right is already spent on the cwd, so at any
+  real path length it would force a drop rule whose choices are the news or a path
+  you know by heart. It is also the region of the frame that has not changed all
+  session, which is the region the eye has learned to skip.
+
+  No `Status` label, because no other title slot has one and the position already
+  says the value describes the whole card. A labelled `Status` field row under `Type`
+  was the alternative and costs two rows — the row and its separator — which is
+  exactly what 3.4 had just reclaimed by removing the tracker block. It would also
+  force a value for the whole of a run, and `Running` there says nothing a streaming
+  log window does not. Empty until something ends is what makes the pill's arrival
+  the signal.
+
+  A pill rather than a bare word, matching the chips on a device row, since this is a
+  state the device is in. On a border its fill interrupts the rule, which is how a
+  badge on a frame edge should read. Glyph outside the fill.
+
 * **`[^D] Switch Device` is a row inside the card, bottom-right.** It rode in the
   top border beside the title, where it cost no rows, and two things paid for
   bringing it in. A keycap drawn on a border cannot be clicked — there is no
   rectangle to register, and 3.1 is explicit that a control doing nothing on click
   is worse than no control — and every other card uses its top-right for a count, a
   path or a status, never for a control. As a content row it gets a hit region, and
-  the top border is left saying one thing.
+  the top border went to the status the slot was always for.
 
   No separator and no blank above it. Brackets and the absence of a label facing it
   are enough to keep it from reading as a fifth field's value, and the rule that
@@ -223,18 +254,25 @@ devices answered.
    Flutter's lands behind it as a refresh. Measured: `SELECT DEVICE` on screen inside
    0.4s where it used to be 8-9s. See 8.9.
 
-2. **`NO_DEVICES`** (State 2): zero devices answered.
-   * Header banner: `◆ NO DEVICE RUNNING` with subtitle
-     `Nothing is attached. These can be started:`.
-   * Title section: `Start a Device`, no category filter tabs.
-   * Action trigger: `Enter`, transitioning to State 3 when the row needs booting
-     first. **No per-row verb.** This carried `▶ Run` on every row, first as a
-     `Start`/`Run` split and then uniformly, and it ended up saying what the footer
-     says once: `[⏎] Launch` here, `[⏎] Switch` in State 12. Seven columns per row
-     repeated down the list for one shared answer, which is the same duplication
-     that took the hint row out of this card. The one row that keeps a verb is the
-     one where `Enter` does *not* build — ` ⏎ Keep ` on the running row in State 12
-     (8.5).
+2. **`NO_DEVICES`** (State 2): **removed, see 8.10.** It read `◆ NO DEVICE RUNNING`
+   over `Nothing is attached. These can be started:` and a `Start a Device` heading,
+   and it drew the same rows the picker draws, from the same code. It was also
+   unreachable — `devices_answered` branched on `Device::attached`, which counts every
+   iOS and Android row including the bootable ones — so one installed simulator made
+   the picker the only answer. Nothing booted now opens `SELECT DEVICE` with every row
+   offering a boot, which is 7.6's merged list saying what the amber heading said.
+
+   The numbers of the other states are left as they are. They are labels shared with
+   the code and quoted throughout this document, not indices, and renumbering eleven
+   states to close a gap would invalidate every cross-reference to buy tidiness.
+
+   **No per-row verb**, which was decided here and still holds for the picker. Rows
+   carried `▶ Run`, first as a `Start`/`Run` split and then uniformly, and it ended up
+   saying what the footer says once: `[⏎] Launch`, or `[⏎] Switch` in State 12. Seven
+   columns per row repeated down the list for one shared answer, which is the same
+   duplication that took the hint row out of the card. The one row that keeps a verb is
+   the one where `Enter` does *not* build — ` ⏎ Keep ` on the running row in State 12
+   (8.5).
 
    **Every target, not just mobile.** The existing implementation deliberately
    drops macOS, "Mac Designed for iPad" and Chrome, with the stated reason
@@ -583,17 +621,26 @@ devices answered.
   needs no new vocabulary and no new level. The `BLD` and `OK` levels stay
   removed.
 
-  **`STOPPED` is what the row is kept for.** It is the only place on screen that
-  distinguishes `STOPPED` from `DETACHED` from `DISCONNECTED`, and 8.8 exists
-  because those leave the device in different conditions — after Flutter's own `d`
-  the app is still live and only the tooling let go, after `^S` it is gone. Nothing
-  else carries `Ending`. The row's *arrival* then does a second job: it appears
-  because the run ended, so the frame announces the transition by growing a banner
-  rather than by changing a word somewhere.
+  **And `STOPPED` does not keep it either.** The row survived one more round on the
+  grounds that it was the only place distinguishing `STOPPED` from `DETACHED` from
+  `DISCONNECTED` — the distinction 8.8 exists to make, since after Flutter's own `d`
+  the app is still live on the device and after `^S` it is gone. That was a reason to
+  keep the *words*, not a reason to keep a block. They are a pill in the target
+  card's title bar now (3.2), which is where a fact about the device belongs and
+  which costs nothing.
 
-  `State::has_tracker` is the predicate, and it is deliberately narrower than
-  `has_build`. `has_build` asks whether there is a run behind the frame, which is
-  what `^D` and `^S` need to know and which stays true throughout a run.
+  What that buys, beyond the row and the blank above it, is worth more than either:
+  **the log window no longer changes height when a run ends.** The banner used to
+  arrive and push every line of the stream down two rows, at the moment the user is
+  most likely to be reading one. `chrome(STOPPED)` now equals `chrome(RUNNING)`.
+
+  The pill's *arrival* still does the second job the banner did — it appears because
+  the run ended, so the transition is announced by something showing up rather than
+  by a word changing in place, which the eye is much worse at catching.
+
+  `State::has_tracker` is the predicate, and it is `BUILDING | BUILD_FAILED`. It is
+  deliberately narrower than `has_build`, which asks whether there is a run behind
+  the frame — what `^D` and `^S` need to know, and true throughout a run.
 
 * **`DISCONNECTED` is rose, not amber.** It was amber on the argument that rose is
   for something broken and muted is for a stop that was asked for, and a device
@@ -878,25 +925,24 @@ with one exception noted at the end.
                 │            landing as a refresh 6-8s later
                 ├── exits non-zero ──► ✖ FATAL  Failed to detect Flutter devices
                 │
-                ▼  how many answered?
-    ┌───────────┼────────────────────────────┐
-    │ 0         │ 1                          │ 2+
-    ▼           ▼                            ▼
-┌─────────┐ ┌─────────────────┐   ┌────────────────────┐
-│ 2  NO_  │ │ 5  SINGLE_      │   │ 4  MULTIPLE_       │
-│ DEVICES │ │ DEVICE          │   │ DEVICES  (picker)  │
-└────┬────┘ │ auto-selected,  │   │ last used on top   │
-     │      │ no picker       │   └─────┬─────────┬────┘
-     │      └────────┬────────┘         │         │
-     │ no bootable            ┌─ Esc ───┘         │ Enter
-     │ targets at all         ▼                   │
-     ├──► ✖ FATAL      ✖ CANCELLED (130)          │
-     │    No device(s) detected                   │
-     ▼                                            │
-┌─────────────────┐                               │
+                ├── nothing at all ──► ✖ FATAL  No device(s) detected
+                │
+                ▼  one list, always (8.10)
+      ┌──────────────────────────────────────────────┐
+      │ 4  MULTIPLE_DEVICES  (picker)                │
+      │    running, in use and last used on top,     │
+      │    then every bootable target                │
+      └───┬──────────────────────────────────────┬───┘
+          │ Esc                                  │ Enter
+          ▼                                      │
+   ✖ CANCELLED (130)                             │
+     ┌─────────── needs booting ─────────────────┤
+     │                                           │ attached, nothing to start
+     ▼                                           │
+┌─────────────────┐                              │
 │ 3  BOOTING      │  avd: poll sys.boot_completed, 180s cap
 │ ⠋ + elapsed     │  sim: open -a Simulator, simctl bootstatus -b
-└────┬───────┬────┘                               │
+└────┬───────┬────┘                              │
      │       └── timeout / failure ──► ✖ FATAL  did not finish booting
      │                                           │
      └───────────────┬───────────────────────────┘
@@ -1118,9 +1164,9 @@ draw rather than estimated:
   PROJECT INFO           12 rows   2 border + 1 title gap + 9 body
                                    body = metadata 6 + separators 3
                                    the logo shares these rows, it does not add any
-  DEVICE INFO            11 rows   2 border + 1 title gap + 8 body
-                                   body = 4 fields + 3 separators + 1 control row
-                                   the control row has no rule above it
+  DEVICE INFO            12 rows   2 border + 1 title gap + 9 body
+                                   body = 4 fields + 3 separators + blank + control
+                                   the run status is a title-bar pill, not a row
   BUILD PHASE            10 rows   2 border + 1 title gap + bar + blank + 5 stages
                                    the stage count is live, so this is the tallest
                                    case: an Android build with all five phases
@@ -1128,28 +1174,35 @@ draw rather than estimated:
   footer                  1 row
   gaps between blocks     3 rows   blocks - 1, not a constant
   ────────────────────────────────
-  TOTAL                  37 rows
+  TOTAL                  38 rows
 ```
 
 That is the tallest the frame ever gets, and it is a frame with a build in it.
 `RUNNING` is a different shape rather than a shorter version of it: the tracker
-block is absent there entirely (3.4), so the total is **26** — two cards, a footer
-and two gaps — and that is the figure that applies for the whole of a run.
-`STOPPED` keeps the tracker as a single row and comes to **28**.
+block is absent there entirely (3.4), so the total is **27** — two cards, a footer
+and two gaps.
 
-At the 106x45 target that leaves the log window **19 rows** during a run, against
-the **8** a five-line Dart exception occupies when wrapped at 84 columns of message
-space. Nothing is conceded at the design size any more; the ladder below starts
-mattering at 39 rows and under.
+**`STOPPED` is 27 as well, and that is deliberate.** Every fact the tracker's summary
+row carried has a home that costs nothing — the two totals in the log card's title,
+the ending word as a pill in the target card's title — so the two frames are the same
+shape and the log window does not resize when a run ends. It used to grow a banner and
+push every line of the stream down two rows, at the moment the user is most likely to
+be reading one.
+
+At the 106x45 target that leaves the log window **18 rows**, against the **8** a
+five-line Dart exception occupies when wrapped at 84 columns of message space. Nothing
+is conceded at the design size any more; the ladder below starts mattering at 39 rows
+and under.
 
 This total has come down three times, and every time the rows went to the log
 window rather than back to the layout. It was 45, leaving nothing at all, until the
 prompt bar and its gap were removed (3.6). It was 41 until the target card gave up
 its status banner and its command string, with the blank each of them needed (3.2).
-It was 27 for a run until the settled tracker's row and gap went too (3.4) — minus
-the one row the switch control took when it moved out of the card's border and onto
-a row of its own, which is the only row in this document's history to have gone the
-other way. It bought a clickable control and a top border that says one thing.
+It was 27 for a run until the settled tracker's row and gap went too (3.4) — offset
+by the two rows the switch control took when it moved out of the card's border onto a
+row of its own with a blank above it, the only rows in this document's history to have
+gone the other way. They bought a clickable control, and they vacated the title slot
+the run status now uses.
 
 **The tracker's height follows the number of rows it actually has.** `build_h`
 takes the count rather than assuming one, so the card is four rows tall while four
@@ -1561,13 +1614,18 @@ what the copy says. The **picker** lists everything Flutter reported, because th
 is the screen whose whole purpose is choosing. `Device::attached()` is the one
 predicate, and a test pins it.
 
-**Half of that is superseded by 7.6.** The counting rule stands: it is what keeps
-`NO_DEVICES` reachable and its subtitle true. What does not stand is the branch it
-fed — skipping the picker when exactly one device is attached. Running it for real
-showed why: with only the iPhone simulator up there is no way to ask for Android,
-because booting is a choice and that branch removes it. The merged single-list
-picker in 7.6 replaces it, and `Device::attached()` survives as the sort key
-rather than as a branch condition.
+**Half of that is superseded by 7.6, and the other half by 8.10.** What went first was
+the branch it fed — skipping the picker when exactly one device is attached. Running it
+for real showed why: with only the iPhone simulator up there is no way to ask for
+Android, because booting is a choice and that branch removes it. The merged single-list
+picker in 7.6 replaces it.
+
+The counting rule itself was kept here on the grounds that it is "what keeps
+`NO_DEVICES` reachable and its subtitle true", and that turned out to be false the
+moment the lists merged. `Device::attached()` is `platform.needs_boot()`, so the
+bootable rows 7.6 added to the list count as attached, and the count it guards can no
+longer be zero on a machine with one simulator installed. 8.10 removes the state rather
+than the rule: `attached()` survives as the sort key it had already become.
 
 **3. pty and the Flutter parser.** The bulk of the work, and where all the
 regression risk lives. `portable-pty` to spawn, then the state machine from
@@ -2466,7 +2524,7 @@ it cannot are not the same parts.
 
 | Verified | How |
 | :--- | :--- |
-| The frame, at every width | `--dump picker\|no-devices\|switch`. At `MIN_W` the row measures 59 of 60 columns with its words intact, which is what the arithmetic in 3.7 predicted |
+| The frame, at every width | `--dump picker\|switch`. At `MIN_W` the row measures 59 of 60 columns with its words intact, which is what the arithmetic in 3.7 predicted |
 | What the new tab is told | Three tests on `tab_command`/`handoff_env`: the device travels in `FRUN_DEVICE`, `extra` travels with it, `PATH` travels, and a `'` in a flag cannot break out of the quoting |
 | The spawn | The AppleScript run against the real Ghostty: a tab opened, and a command in it reported back `FRUN_DEVICE`, the working directory, and `fvm` and `adb` resolving on the handed `PATH` |
 | `⇧Enter`, end to end | Driven by Ghostty's own `send key … modifiers "shift"` into a running frun: the arm fired in `NoDevices` and in `MultipleDevices`, `osascript` exited 0, and the tab it opened returned its id. This is also what caught the screen-stack bug above |
@@ -2908,19 +2966,18 @@ rather than rose — the run ending was asked for, and colouring it like a failu
 make a deliberate stop read as something breaking.
 
 ```text
-╭─ ◆ DEVICE INFO ─────────────────────────────────────────────╮
+╭─ ◆ DEVICE INFO ────────────────────────────────   STOPPED  ╮
 │                                         [^D] Switch Device  │
 ╰──────────────────────────────────────────────────────────────╯
-⏹ STOPPED                       Build time 3.4s   Sync 240ms
-╭─ ◆ APP LOGS STREAM ────────────────────────── [8 entries] ──╮
+╭─ ◆ APP LOGS STREAM ──── Build time 3.4s   Sync 240ms  [8 entries] ╮
   [r] Build again   [^D] Switch Device   [↑↓] Scroll   [e] Expand   [q] Quit
 ```
 
-**This is the one frame the tracker row is kept for**, and 3.4 is where that is
-argued: `RUNNING` has no tracker block at all, so the row *arriving* is how the
-frame announces that the run is over. It is also the only place on screen that
-tells `STOPPED` from `DETACHED` from `DISCONNECTED`, which is the distinction this
-whole section exists to make.
+**Which word appears is the whole of this section**, and it is the title-bar pill of
+3.2 that carries it: `STOPPED` and `DETACHED` in muted, `DISCONNECTED` in rose. There
+is no tracker block here and no summary row — `chrome(STOPPED)` equals
+`chrome(RUNNING)`, so nothing on screen moves when the run ends, and the pill
+appearing is the announcement. 3.4 has the argument for that trade.
 
 The device is left booted and the log is left intact, which is what makes `r` from
 here worth having: it is `Action::RetryBuild`, so it already brings the device back up
@@ -3030,17 +3087,26 @@ its `No device(s) detected`.
 Detecting`, so a tab that was handed a device (8.4) and is already building is
 untouched, and a full answer that somehow arrived first keeps the flow.
 
-**The one frame that can be wrong, and what corrects it.** `NO_DEVICES` reads
-`Nothing is attached. These can be started:`, and the cheap tools cannot see a
-physical iPhone — `xcrun xcdevice list --timeout 1` is the cheap route to that and is
-1420ms, ten times the rest of the fast path put together, for the rarest case. So with
-a phone plugged in and no simulator booted the first frame is the wrong one, and its
-subtitle is false rather than merely incomplete. `devices_refreshed` therefore moves
-`NO_DEVICES` to `MULTIPLE_DEVICES` when a refresh brings an attached device, in that
-direction only: a device *arriving* makes the heading wrong, while devices leaving
-does not make `SELECT DEVICE` wrong, and dropping the user out of a list they are
-choosing from is worse than a stale title. It also fixes the same staleness a recheck
-could already produce — an emulator booted from another tab while `NO_DEVICES` was up.
+**The fast list cannot open a different frame, and finding out why removed code.**
+A `NO_DEVICES` → `MULTIPLE_DEVICES` correction was written into `devices_refreshed`
+first, on the assumption that a physical iPhone — invisible to the cheap tools, and
+1420ms away through `xcrun xcdevice list --timeout 1` — would open the wrong frame with
+`Nothing is attached. These can be started:` on it. It could never fire.
+
+`devices_answered` branches on `Device::attached`, which is `platform.needs_boot()`:
+every iOS and Android row, **bootable ones included**. So the branch is decided by the
+AVD and simulator rows, and those are the same rows in both lists, from the same two
+tools. A non-empty fast list always holds at least one of them — `quick_targets` cannot
+produce a desktop or web row at all — so the frame is already the picker, and an empty
+fast list is dropped without deciding anything. The correction was deleted rather than
+kept as insurance: unreachable code that looks like a safeguard is worse than neither.
+
+**A consequence worth recording, and it is not this change's.** Because `attached`
+counts bootable rows, `NO_DEVICES` (State 2) was unreachable on any machine with a
+single AVD or simulator installed — which is every machine frun is used on. That is
+7.6's rule ("the picker is always shown") arriving at its logical end, and it predates
+8.9: the fast list neither caused it nor made it worse, it only made the dead branch
+visible while the fast path was being reasoned about. 8.10 removes the state.
 
 Physical Android is covered rather than left to the full scan, and not for symmetry:
 `adb` sees it in 12ms, and a phone on the desk missing from the first list is the one
@@ -3069,5 +3135,58 @@ another route.
 
 | Unverified | Why, and what would do it |
 | :--- | :--- |
-| `NO_DEVICES` correcting itself to the picker | Needs a physical iPhone attached with no simulator booted. The guard is three lines and reads `state == NoDevices && any attached`; a `--dump` cannot reach it because it is a transition between two live answers |
 | A physical Android in the fast list | No phone was attached during these runs. `android_device` is the same `getprop` path `android_facts` uses after every Android boot, which is exercised |
+| The empty-fast-list path | Needs a machine with no AVDs, no simulators and no adb device. Reachable by reading it: `Msg::Quick` returns on `targets.is_empty()`, leaving `DETECTING` up until `Msg::Devices` answers, which is the behaviour that existed before 8.9 |
+
+### 8.10 State 2 removed (built)
+
+**`NO_DEVICES` could not be reached, and the frame it would have shown was the picker
+with two rows spent on a heading.** Both halves have to be said, because either alone
+argues for a different fix.
+
+*Unreachable.* `devices_answered` branched on `targets.iter().any(Device::attached)`,
+and `attached` is `platform.needs_boot()` — true of every iOS and Android row,
+**including the bootable ones 7.6 merged into the list**. On this machine that is 2 AVDs
+and 11 simulators, so the predicate is true with nothing running at all, and State 4 was
+the only arm the branch ever took. The `NO_DEVICES` arm survived because the reasoning
+that introduced the predicate (7.4, "Departure: what how many answered counts") was
+written before the lists merged and was never re-read afterwards.
+
+*Redundant.* `render_bootable` called the same `list()` the picker calls, with the same
+rows in the same order. What it added was `NO DEVICE RUNNING` in amber, the subtitle
+`Nothing is attached. These can be started:`, and a `Start a Device` heading — two rows,
+in the frame with the most targets to show, saying what the rows say for themselves:
+every row has a `boot` and none has an ` active ` chip.
+
+So the fix is not to repair the predicate. Making `attached` mean
+`boot.is_none() && needs_boot()` would have brought the screen back for the common case
+of nothing being booted, and bought a second list frame to keep true — which is the
+class of bug 8.9 had just finished tracing.
+
+What was removed: the `State::NoDevices` variant and its `ALL` entry, its `no-devices`
+slug, `ui::devices::render_bootable`, its arms in `ui::mod::render`, `chrome`'s footer
+hints, `mock_devices`, `State::has_target`, and the branch in `devices_answered`, which
+is now one `goto`. `State::ALL` is 12 rather than 13, so `--states`, `--all` and every
+harness that walks it follow without being told.
+
+**The numbers of the other states are left alone.** They are labels this document and
+the code share — 8.5 is "State 12", 3.4 talks about "State 6" — and closing the gap
+would rewrite every cross-reference in 3,000 lines to buy tidiness. State 2 is now a
+number with a note on it, in the state table in 1 and in 3.3.
+
+| Verified | How |
+| :--- | :--- |
+| The state is gone from every surface | `--states` lists 12 slugs with no `no-devices`; `--dump no-devices` answers `unknown state "no-devices"` and prints the 12 that exist |
+| The picker still renders | `--dump picker 90x30` |
+| Nothing referenced it | `grep -rn NoDevices\|render_bootable src/` is empty apart from the comments recording the removal, and the crate compiles |
+
+| Unverified | Why |
+| :--- | :--- |
+| The one machine it was reachable on | Flutter with no AVDs, no simulators and no phone — a Linux CI box, or a Mac without Xcode. There the list is macOS and Chrome, `attached` is false, and State 2 would have drawn. It now opens the picker with those two rows, which is the same list under a title that does not claim anything about attachment |
+
+**Still dead, and left alone deliberately: `SingleDevice` (State 5).** Nothing sets it —
+`devices_answered` is the only path into the picker states and it never names it — so it
+is reachable only through `--dump single` and the demo walk. It was already marked
+*superseded, see 7.6* in the state table, for the same reason State 2 is gone: 7.6
+auto-launched a lone device and using it disproved the idea. Removing it is the same
+edit as this one and belongs in its own change, with its own decision.

@@ -117,9 +117,7 @@ pub fn rows(app: &App, width: u16) -> String {
     // arithmetic underneath: a collapsed tracker still costs its row and the gap
     // above it, and an absent one costs neither.
     if !app.state.has_tracker() {
-        out.push_str("  tracker absent: the build succeeded and the run is live\n");
-    } else if app.state.build_settled() {
-        out.push_str("  tracker collapsed: the build has settled\n");
+        out.push_str("  tracker absent: no build is in progress in this frame\n");
     }
 
     out.push('\n');

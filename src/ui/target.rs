@@ -11,7 +11,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
-use crate::data::{Action, App, Hit};
+use crate::data::{Action, App, Hit, State};
 use crate::theme;
 use crate::widgets::{card, field, keycap, pill, separator, spread, strong, text};
 
@@ -30,7 +30,52 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // word it gave up was carried by the card's existence anyway: `render` returns
     // early without a target, and `State::has_target` hides the card in every
     // picker state, so nothing but a chosen device can put it on screen.
-    let block = card("DEVICE INFO", theme::CYAN);
+    let mut block = card("DEVICE INFO", theme::CYAN);
+
+    // How the run ended, as a pill in the title bar. `STOPPED`, `DETACHED`,
+    // `DISCONNECTED`.
+    //
+    // These were the whole reason the tracker block stayed on screen after a build —
+    // one row plus the blank above it, carried through every frame of a stopped
+    // session so that three words could be said once. This slot costs nothing, and it
+    // was empty: `^D` vacated it when it moved inside the card, and every other card
+    // uses its top-right for a count, a path or a status. A status is the plainest
+    // case of that, so filling it here closes the one exception rather than inventing
+    // an idiom.
+    //
+    // On *this* card because the three words are statements about the device. After
+    // Flutter's own `d` the app is still running on it; after `^S` it is gone; after a
+    // `Lost` the connection to it is what broke. `PROJECT INFO` was the other
+    // candidate and is wrong twice over: nothing about a project is disconnected, and
+    // its top-right is already spent on the cwd — which at any real path length would
+    // have forced a drop rule where the thing to drop is either the news or a path you
+    // know by heart.
+    //
+    // No `Status` label, because nothing else in a title slot has one: `5 devices`,
+    // `[7 entries]` and `~/cwclub` are all bare, and the position is what says the
+    // value describes the card as a whole rather than one row of it.
+    //
+    // A pill rather than a bare word, matching the chips on a device row: this is a
+    // state the device is in, which is what those chips are for. Sitting on the border
+    // its fill interrupts the rule, which is how a badge on a frame edge is supposed
+    // to read. The glyph stays outside the fill, where a colour behind a word does not
+    // have to compete with a symbol on top of it.
+    //
+    // Only in `Stopped`. A live run has nothing to report here that the streaming log
+    // window below is not reporting continuously and more precisely, and leaving the
+    // slot empty until then is what makes the pill's *arrival* the signal — the eye
+    // catches a thing appearing far more reliably than a word changing in place. That
+    // property is the one thing worth preserving from the banner this replaces.
+    if app.state == State::Stopped {
+        let (glyph, label, color) = super::build::status(app);
+
+        let mut spans = vec![text("─ ", theme::BORDER), strong(glyph, color), Span::raw(" ")];
+
+        spans.extend(pill(format!(" {label} "), color));
+        spans.push(Span::raw(" "));
+
+        block = block.title_top(Line::from(spans).right_aligned());
+    }
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -138,31 +183,40 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     //
     // A separator would say the same thing and say it louder than a control needs.
     // Both cost one row; the blank is the one that does not divide the card in two.
-    let control = if switch {
-        let mut spans = keycap(Action::Switch.key(), theme::CYAN);
-        spans.push(text(format!(" {}", Action::Switch.label()), theme::MUTED));
+    let mut right = Vec::new();
 
-        lines.push(Line::default());
+    if switch {
+        right.extend(keycap(Action::Switch.key(), theme::CYAN));
+        right.push(text(format!(" {}", Action::Switch.label()), theme::MUTED));
+    }
 
+    // The row is charged in `target_h` unconditionally, so it is drawn
+    // unconditionally: skipping it when empty would leave a blank row above the
+    // bottom border in the states that have no control, and drawing an empty
+    // `spread` costs the same nothing.
+    let control = {
         // Measured, not counted: `^D` is two cells in one glyph short of it, and the
         // hit rectangle has to sit exactly under what was drawn.
         //
         // Read after the blank is pushed, so it is the control's own row and not the
         // gap above it — a hit rectangle one row high, registered one row too early,
         // is a click that lands on nothing.
-        let width: usize = spans.iter().map(Span::width).sum();
+        let width: usize = right.iter().map(Span::width).sum();
+
+        lines.push(Line::default());
         let row = lines.len() as u16;
 
-        lines.push(spread(w, Vec::new(), spans));
+        lines.push(spread(w, Vec::new(), right));
 
-        Some(Rect {
+        // No control, no region. `spread` pads an empty group to nothing, so the
+        // rectangle would be zero-wide at the right border — a click target that
+        // cannot be hit but is still consulted on every mouse event.
+        (width > 0).then(|| Rect {
             x: inner.x + inner.width.saturating_sub(width as u16),
             y: inner.y + row,
             width: width as u16,
             height: 1,
         })
-    } else {
-        None
     };
 
     frame.render_widget(Paragraph::new(lines), inner);

@@ -28,11 +28,18 @@ pub use crate::probe::{Device, Platform};
 /// one, so it has no place in the flow order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
-    /// 1. `fvm flutter devices --machine` is running.
+    /// 1. Discovery is running (8.9).
     Detecting,
-    /// 2. Nothing is attached; offer everything launchable.
-    NoDevices,
     /// 3. Booting a simulator or emulator, possibly for minutes.
+    ///
+    /// State 2 is gone, and the numbers of the others are left alone: they are labels
+    /// this file shares with DESIGN.md, not indices into `ALL`. `NO_DEVICES` offered
+    /// every launchable target under `Nothing is attached`, which is what the picker
+    /// has done since the lists were merged (7.6) — with the same rows, in the same
+    /// order, and with ` active ` and ` last used ` saying what its amber heading said.
+    /// It was also unreachable: `devices_answered` branched on `Device::attached`, and
+    /// that counts every iOS and Android row including the bootable ones, so one
+    /// installed simulator was enough to make the picker the only answer.
     Booting,
     /// 4. Two or more devices attached; pick one.
     MultipleDevices,
@@ -68,9 +75,8 @@ pub enum State {
 }
 
 impl State {
-    pub const ALL: [State; 13] = [
+    pub const ALL: [State; 12] = [
         State::Detecting,
-        State::NoDevices,
         State::Booting,
         State::MultipleDevices,
         State::SingleDevice,
@@ -87,7 +93,6 @@ impl State {
     pub fn slug(self) -> &'static str {
         match self {
             State::Detecting => "detecting",
-            State::NoDevices => "no-devices",
             State::Booting => "booting",
             State::MultipleDevices => "picker",
             State::SingleDevice => "single",
@@ -115,11 +120,7 @@ impl State {
     pub fn has_target(self) -> bool {
         !matches!(
             self,
-            State::Detecting
-                | State::NoDevices
-                | State::Booting
-                | State::MultipleDevices
-                | State::Switching
+            State::Detecting | State::Booting | State::MultipleDevices | State::Switching
         )
     }
 
@@ -144,33 +145,29 @@ impl State {
 
     /// Whether the BuildPhaseTracker occupies a block of the frame.
     ///
-    /// Narrower than `has_build`, and the two must not be merged. `has_build` is
-    /// "there is a build behind this frame", which is what the target card's `^D`
-    /// hint and `Action::StopRun` ask about; this is "the tracker has something to
-    /// say", which is a different question with a different answer in four states.
+    /// Only while a build is happening or has just broken. Narrower than
+    /// `has_build`, and the two must not be merged: `has_build` is "there is a build
+    /// behind this frame", which is what the target card's `^D` hint and
+    /// `Action::StopRun` ask about and which stays true throughout a run, while this
+    /// is "the tracker has something to say" — true for a small part of one.
     ///
-    /// A build that succeeded and is now running says nothing. Every row of the
-    /// collapsed summary is frozen — a word, a total and a sync figure — while the
-    /// log window directly beneath it is the only region still moving, and the two
-    /// numbers are on record in the log's first entry, timestamped, put there by
-    /// `session_ready` (3.5). So the block goes, and the row plus the gap above it
-    /// go to the stream.
+    /// Everything the tracker held after a build stopped moving has been rehoused,
+    /// and each fact went to the component that owns it:
     ///
-    /// It stays in the three states where it is the only thing that says what
-    /// happened:
+    /// * **The two totals** are in the log card's title bar (3.5). A build total is a
+    ///   fact about the session, and the log window is the region it describes.
+    /// * **How the run ended** — `STOPPED`, `DETACHED`, `DISCONNECTED` — is a pill on
+    ///   the target card's control row (3.2). Those three words are statements about
+    ///   the *device*: after `d` the app is still live on it, after `^S` it is gone,
+    ///   and after a `Lost` the connection to it is what broke.
     ///
-    /// * `Building`, where every row is moving.
-    /// * `BuildFailed`, where the stage list is the context for the error card.
-    /// * `Stopped`, where the row is the only place on screen distinguishing
-    ///   `STOPPED` from `DETACHED` from `DISCONNECTED`. Nothing else carries
-    ///   `Ending`, and after `d` the app is still live on the device while after
-    ///   `^S` it is gone — the difference 8.8 exists to make. The row *appearing*
-    ///   is then itself the signal that the run is over.
-    ///
-    /// `build_done` is exactly the complement: it holds for `Running` and the three
-    /// reload states and deliberately excludes `Stopped`.
+    /// Both new homes are rows that already exist, so the block's row and the blank
+    /// above it go to the log window — and, more to the point, the log window no
+    /// longer changes height when a run ends. It used to grow a banner and push
+    /// everything in the stream down two rows, at the moment the user is most likely
+    /// to be reading it.
     pub fn has_tracker(self) -> bool {
-        self.has_build() && !self.build_done()
+        matches!(self, State::Building | State::BuildFailed)
     }
 
     /// Whether the log stream is on screen.
@@ -216,7 +213,7 @@ impl State {
     /// Used for far more than the tracker: `q` is only forwardable once Flutter is
     /// reading keys, and a reload before that would be sent to Gradle. Which is why
     /// `Stopped` is not here — there is no child behind that frame — and why the
-    /// tracker asks `build_settled` instead.
+    /// tracker asks `has_tracker` instead.
     pub fn build_done(self) -> bool {
         matches!(
             self,
@@ -224,21 +221,15 @@ impl State {
         )
     }
 
-    /// Whether the tracker's rows have stopped moving, which is what collapses it.
-    ///
-    /// `build_done` plus `Stopped`, and the difference matters: a stopped run's
-    /// tracker is every bit as static as a running one's, yet `build_done` says no
-    /// because that question is about a live child. While the two were conflated
-    /// `Stopped` was ranked as though its build were still in progress, so at 45
-    /// rows it paid the separators *and* the roomy device rows to keep ten rows of
-    /// finished timings — in the one state whose entire purpose is reading the log.
-    ///
-    /// `BuildFailed` is excluded and stays expanded. The failure note names which
-    /// stage broke, so there the stage list is the context for the error card
-    /// rather than history.
-    pub fn build_settled(self) -> bool {
-        self.build_done() || self == State::Stopped
-    }
+    // `build_settled()` was here — `build_done() || self == Stopped`, "the tracker's
+    // rows have stopped moving, which is what collapses it". Both of its callers are
+    // gone: `Budget::solve` asks `has_tracker` (is there a block at all) and
+    // `ui::build` no longer draws the settled one-row summary, because its totals went
+    // to the log card's title and its ending word to a pill on the target card.
+    //
+    // Deleted rather than left for a third caller that might want it. The distinction
+    // it drew is still available — `has_build() && !has_tracker()` is the same set —
+    // and a predicate nothing calls is a claim about the frame that nothing checks.
 }
 
 // ============================================================
@@ -1410,8 +1401,8 @@ fn mock_devices(state: State) -> Vec<Device> {
         target_platform: String::new(),
         sdk: String::new(),
         virtual_device: platform.needs_boot(),
-        // Set on one row below rather than here, so `--dump no-devices` shows the
-        // case the chip exists for: the device you always reach for is off.
+        // Set on one row below rather than here, so `--dump picker` shows the case the
+        // chip exists for: the device you always reach for is off.
         last_used: false,
         boot: Some(boot),
     };
@@ -1424,7 +1415,7 @@ fn mock_devices(state: State) -> Vec<Device> {
     match state {
         // Every launchable target, not just phones. Desktop and web are always
         // available and need no boot.
-        State::NoDevices | State::Booting => vec![
+        State::Booting => vec![
             bootable(
                 "Pixel_10_Pro_XL",
                 "Pixel 10 Pro XL",

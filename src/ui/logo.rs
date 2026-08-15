@@ -107,7 +107,10 @@ impl Logo {
         self.follow_cell_size();
 
         let cell = self.picker.font_size();
-        let key = (Size::new(area.width, area.height), (cell.width, cell.height));
+        let key = (
+            Size::new(area.width, area.height),
+            (cell.width, cell.height),
+        );
 
         if self.built_for != Some(key) {
             self.protocol = self.build(key.0);
