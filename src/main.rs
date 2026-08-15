@@ -37,7 +37,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 
-use data::{Action, App, Level, Msg, State};
+use data::{Action, App, Ending, Level, Msg, State};
 use flutter::Session;
 use ui::logo::Logo;
 
@@ -453,9 +453,23 @@ fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> 
 
     enable_raw_mode()?;
 
+    // Mouse capture is NOT enabled here. Capturing takes text selection away
+    // from the terminal, and copying a stack trace out of the log window is a
+    // large part of what that window is for. `m` turns it on when the scroll
+    // wheel or a clickable control is wanted.
+    execute!(io::stdout(), EnterAlternateScreen)?;
+
     // `⇧⏎` (8.4). Without this, `Enter`, `⇧Enter` and `^Enter` are all CR on the
     // wire and crossterm reports `KeyCode::Enter` with an empty modifier set, so the
     // arm in `key_press` could never fire.
+    //
+    // **After the alternate screen, and that ordering is the whole bug this comment
+    // exists for.** The Kitty protocol keeps a separate flag stack per screen, so a
+    // push on the main screen is not in effect on the alternate one. Pushed first,
+    // measured: `⇧⏎` produced no event in frun at all, while the same push in a
+    // program that never leaves the main screen reported `Enter + SHIFT` correctly.
+    // The pop is paired with it and runs *before* `LeaveAlternateScreen` for the same
+    // reason.
     //
     // Pushed whether or not the query above said yes: a terminal that does not
     // understand the sequence ignores it, and asking again here would be a second
@@ -469,12 +483,6 @@ fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> 
         io::stdout(),
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     )?;
-
-    // Mouse capture is NOT enabled here. Capturing takes text selection away
-    // from the terminal, and copying a stack trace out of the log window is a
-    // large part of what that window is for. `m` turns it on when the scroll
-    // wheel or a clickable control is wanted.
-    execute!(io::stdout(), EnterAlternateScreen)?;
 
     let result = event_loop(&mut app, &mut ctx, &mut art);
 
@@ -918,10 +926,10 @@ fn child_exited(app: &mut App, ctx: &mut Ctx) {
         .and_then(Session::exit_code)
         .unwrap_or(1);
 
-    // Asked for (8.8). The child is gone, frun is not: the log stays readable, the
-    // device stays booted, and `r` builds again.
-    if app.stopping {
-        app.stopping = false;
+    // An ending frun knows about (8.8): `^S`, or Flutter's own detach. The child is
+    // gone, frun is not — the log stays readable, the device stays booted, and `r`
+    // builds again.
+    if app.ending.is_some() {
         ctx.session = None;
 
         app.end_build();
@@ -1094,10 +1102,27 @@ fn key_press(
             }
         }
 
+        // Flutter's detach, forwarded like any other key of its own — and recorded on
+        // the way past.
+        //
+        // Not an interception: `d` still reaches Flutter and still detaches. What frun
+        // gains is knowing *why* the pty is about to close. Without it, detach and
+        // Flutter quitting are the same event, so `D` read as a graceful shutdown and
+        // took frun with it while the app carried on running on the device.
+        //
+        // Only once the interactive session is live, because that is the only time
+        // Flutter can read the key. Setting it during a build would leave a flag that
+        // outlives the keypress and turn the next crash into a false detach.
+        KeyCode::Char(c @ ('d' | 'D')) if app.state.build_done() => {
+            app.ending = Some(Ending::Detached);
+
+            let mut buf = [0u8; 4];
+            forward(ctx, c.encode_utf8(&mut buf).as_bytes());
+        }
+
         // Every key not claimed above is Flutter's, per DESIGN.md 5.1: `h` help,
-        // `d` detach, `c` clear, `p` debug paint, `o` platform toggle, `w` widget
-        // tree, and more. Intercepting them would silently remove functionality
-        // that works today.
+        // `c` clear, `p` debug paint, `o` platform toggle, `w` widget tree, and more.
+        // Intercepting them would silently remove functionality that works today.
         KeyCode::Char(c) => {
             let mut buf = [0u8; 4];
             forward(ctx, c.encode_utf8(&mut buf).as_bytes());
@@ -1520,7 +1545,7 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
                 return false;
             }
 
-            app.stopping = true;
+            app.ending = Some(Ending::Stopped);
 
             // Before the interactive session opens there is no `q` to read: a build
             // is Gradle or Xcode, and only a signal reaches it.

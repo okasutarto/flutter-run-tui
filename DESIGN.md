@@ -928,7 +928,8 @@ Flutter untouched.
 | `^C` | Force stop — SIGINT forwarded to Flutter (`⏹`), ends the process | Any |
 | `^D` | Switch device — reopen the target list over the live run (8.5) | States 6-11, 13 |
 | `^S` | Stop the run and stay in frun (8.8) | States 6, 8-11 |
-| `r` | Build again, after a stop | State 13 |
+| `d` / `D` | Flutter's detach, forwarded — and frun stays, in state 13 (8.8) | States 8-11 |
+| `r` | Build again, after a stop or a detach | State 13 |
 | `m` | Toggle mouse capture | Global |
 
 `:` is not bound. It used to open the command prompt, which is gone (3.6), so the
@@ -2115,15 +2116,30 @@ modifier set and an arm matching on `SHIFT` never fires. Nothing about `⇧Enter
 special here; every modified `Enter` has the same problem. It becomes
 distinguishable once the Kitty keyboard protocol is pushed:
 
-* `PushKeyboardEnhancementFlags(DISAMBIGUATE_ESCAPE_CODES)` beside
-  `enable_raw_mode()`, popped in the teardown that already runs
-  `LeaveAlternateScreen`.
+* `PushKeyboardEnhancementFlags(DISAMBIGUATE_ESCAPE_CODES)`, **after
+  `EnterAlternateScreen`**, popped *before* `LeaveAlternateScreen`.
 * It touches only what frun *reads*. The bytes frun forwards to Flutter are ones
   frun writes itself (5.1), so the pty side is unchanged, and `KeyEventKind::Press`
   is already filtered in `key_press`, so nothing new arrives on key release.
 * Verify by hand, three commands: `printf '\e[>1u'`, then `cat -v` and press the
   keys, then `printf '\e[<u'`. Plain `Enter` is `^M`; under the protocol `⇧Enter`
   is `^[[13;2u`.
+
+**That ordering is not a detail, and it was the first bug this shipped with.** The
+protocol keeps **one flag stack per screen**, so a push made on the main screen is
+not in effect on the alternate screen the app then switches to. Pushed before
+`EnterAlternateScreen`, the flags applied to a screen frun was about to leave, and
+`⇧Enter` produced *no event at all* in frun — not a plain `Enter`, nothing — while
+the identical push in a program that never leaves the main screen reported
+`Enter + SHIFT` correctly. That asymmetry is what made it findable: the terminal was
+answering `\e[?1u` and delivering `\e[13;2u` on the main screen the whole time.
+
+Measured, in this order, which is also the order worth reaching for next time
+something like this happens: the terminal reports the flags active and sends
+`\e[13;2u`; a throwaway binary using this crate's own crossterm reports
+`Enter + SHIFT, kind Press`; frun's `key_press` sees nothing. Two of the three agree,
+so the disagreement is frun's, and the only thing frun does differently is the
+alternate screen.
 
 **Whether to advertise it needs a query, and the query has one honest home.**
 `supports_keyboard_enhancement()` writes an escape sequence and reads the reply off
@@ -2313,16 +2329,21 @@ it cannot are not the same parts.
 | :--- | :--- |
 | The frame, at every width | `--dump picker\|no-devices\|switch`. At `MIN_W` the row measures 59 of 60 columns with its words intact, which is what the arithmetic in 3.7 predicted |
 | What the new tab is told | Three tests on `tab_command`/`handoff_env`: the device travels in `FRUN_DEVICE`, `extra` travels with it, `PATH` travels, and a `'` in a flag cannot break out of the quoting |
-| The spawn, by hand | The AppleScript run against the real Ghostty: a tab opened, and a command in it reported back `FRUN_DEVICE`, the working directory, and `fvm` and `adb` resolving on the handed `PATH`. `OSC 2` likewise — the tab reported its own name back as `iPhone 17 Pro · cwclub` |
+| The spawn | The AppleScript run against the real Ghostty: a tab opened, and a command in it reported back `FRUN_DEVICE`, the working directory, and `fvm` and `adb` resolving on the handed `PATH` |
+| `⇧Enter`, end to end | Driven by Ghostty's own `send key … modifiers "shift"` into a running frun: the arm fired in `NoDevices` and in `MultipleDevices`, `osascript` exited 0, and the tab it opened returned its id. This is also what caught the screen-stack bug above |
+| `name_tab()`, in real use | The live session's tab reads `iPhone 17 Pro · cwclub`, read back through AppleScript from the tab itself |
 
 | Unverified | Why, and what would do it |
 | :--- | :--- |
-| `⇧Enter` arriving | Needs a keypress in Ghostty under the pushed flags. The escape form is confirmed (`^[[13;2u`), but that the arm fires is not |
-| `handed_over()` | Needs a real project and a device: found-and-attached, found-and-needs-boot, and gone are three paths and none has run |
-| `name_tab()` in place | `OSC 2` is proven; that `launch()` reaches it on all three paths — first pick, boot, switch — is read from the code, not observed |
+| `handed_over()` | Needs a real project and a device. Found-and-attached, found-and-needs-boot, and gone are three paths and none has run. The mock walk proves the *spawn* is handed `FRUN_DEVICE=Pixel_10_Pro_XL`; what the receiving process does with it is still only read from the code |
+| `name_tab()` on the boot and switch paths | The first pick is observed. That `launch()` is also reached through `Msg::Booted` and through a switch is read from the code |
 
-The same shape as 8.5, whose respawn is also unrun for the same reason, and the same
-conclusion: **exercise it by hand before believing it.**
+**How `⇧Enter` was driven, since it is worth reusing.** Ghostty's AppleScript
+dictionary can synthesise input (`send key "enter" to <terminal> modifiers "shift"`),
+so a real keypress into a real frun in a real terminal is scriptable — no hands. That
+turns "needs a human" into "needs eight seconds", and it is how the screen-stack bug
+went from *the user says it does not work* to a measured cause. The one thing it
+cannot drive is a device, which is why the row above it is still unrun.
 
 #### The in-app tab bar, and what it would cost
 
@@ -2752,6 +2773,31 @@ The switch list also stops claiming the app is on that device: ` running ` and
 ` ⏎ Keep ` are drawn only when the banked state is a live run. From `Stopped` the
 device is still booted but the app on it is gone, and the row's ` active ` and
 ` last used ` chips are all that remain true of it.
+
+**Flutter's own `d` lands here too, and used to close frun.** `d`/`D` is detach —
+it ends `flutter run` and leaves the app running on the device — and 5.1 forwards it
+like any other key of Flutter's. The pty then closes, and a closing pty is all
+`child_exited` had to go on, so a detach read as Flutter quitting and took frun with
+it while the app carried on running two feet away.
+
+The fix is to record it rather than intercept it. `d` still reaches Flutter and still
+detaches; frun notes on the way past *why* the pty is about to close, and `App::ending`
+carries which of the two happened — `Stopped` for `^S`, `Detached` for `d` — so the
+frame can say `DETACHED` where the app is still up and `STOPPED` where it is not. The
+flag is only set once the interactive session is live, which is the only time Flutter
+can read the key; setting it during a build would outlive the keypress and turn the
+next crash into a false detach.
+
+Detach is worth having as an ending, and worth nothing as a shortcut back. Measured on
+an iOS simulator, `d` returns in 0.2s and the app survives — verified by its process
+and its listening socket — but `flutter attach` never reconnects to it: not by
+discovery (150s), not with `--debug-url` from the URL `flutter run` printed (that URL
+belongs to DDS, which dies with the tool), not with `--host-vmservice-port` and
+`--disable-service-auth-codes`, and not when pointed straight at the port the app is
+actually listening on. Four ways, all `Connection refused` or a wait that never ends.
+So coming back costs a full `flutter run` — 20s on that project — and `[r] Build
+again` is the same key either way. Hot restart, for the comparison, answered in 0.5s.
+That is the argument for not ending a run you only wanted to restart.
 
 **One thing this exposed in the footer.** The hint row had no truncation rule at all.
 Only the diagnostics group knew how to drop itself, and its fit test measured the

@@ -6,7 +6,7 @@ use ratatui::widgets::{Padding, Paragraph};
 use ratatui::Frame;
 
 use crate::budget::Budget;
-use crate::data::{App, State};
+use crate::data::{App, Ending, State};
 use crate::theme;
 use crate::widgets::{alert_card, card, spread, strong, text};
 
@@ -36,6 +36,14 @@ fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
         State::BuildFailed => ("✖", "BUILD FAILED", theme::ROSE),
         // Muted rather than rose: the run ending was asked for, and colouring it
         // like a failure would make a deliberate stop read as something going wrong.
+        //
+        // Two words for one state, because the device is left in opposite conditions.
+        // After `^S` the app is gone. After Flutter's own `d` the app is still running
+        // and only the tooling let go, which is worth knowing before pressing `r` and
+        // wondering why the screen you are looking at is still there.
+        State::Stopped if app.ending == Some(Ending::Detached) => {
+            ("⏹", "DETACHED", theme::MUTED)
+        }
         State::Stopped => ("⏹", "STOPPED", theme::MUTED),
         s if s.build_done() => ("✔", "BUILD FINISHED", theme::EMERALD),
         _ => (app.spinner(), "BUILDING", theme::AMBER),

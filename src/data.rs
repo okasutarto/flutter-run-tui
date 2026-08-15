@@ -517,6 +517,18 @@ impl Action {
     }
 }
 
+/// How a run ended, when it ended on purpose.
+///
+/// The two look identical from the pty — the child closes it and goes — and they
+/// leave the device in opposite states, so the frame afterwards has to name which.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ending {
+    /// `^S`: Flutter was asked to shut down, and the app went with it.
+    Stopped,
+    /// `d`/`D`, Flutter's own key: the tool let go and the app is still running.
+    Detached,
+}
+
 /// A clickable region, rebuilt every frame.
 ///
 /// ratatui has no hit testing: it draws into a cell buffer and forgets the
@@ -565,12 +577,17 @@ pub struct App {
     /// is not the one being run.
     pub target: Option<Device>,
 
-    /// `^S` was pressed and the child has not closed the pty yet (8.8).
+    /// Why the run is ending, when frun asked for it or watched it be asked for
+    /// (8.8).
     ///
-    /// What it decides is what `child_exited` does with the death: a stop lands on
-    /// `Stopped`, anything else is the end of the process. Without it a graceful
-    /// stop and Flutter shutting itself down are the same event.
-    pub stopping: bool,
+    /// What it decides is what `child_exited` does with the death: an ending frun
+    /// knows about lands on `Stopped`, anything else is the end of the process.
+    /// Without it, a graceful stop, a detach and Flutter quitting on its own are one
+    /// indistinguishable event — the pty closing.
+    ///
+    /// Kept after the child is gone rather than cleared, because the `STOPPED` frame
+    /// has to say which of the two happened. `begin_build` clears it.
+    pub ending: Option<Ending>,
 
     /// Discovery is running again behind a list that is already on screen (8.5).
     ///
@@ -689,7 +706,7 @@ impl App {
             log_scroll: 0,
 
             target: None,
-            stopping: false,
+            ending: None,
             refreshing: false,
             resume: None,
 
@@ -1021,6 +1038,9 @@ impl App {
     pub fn begin_build(&mut self) {
         self.stages.clear();
         self.failure = None;
+        // Whatever ended the last run is history now, and the tracker's title is
+        // about to be about this one.
+        self.ending = None;
         self.exit_code = 0;
         self.build_started = Instant::now();
         self.build_time = "-".into();
