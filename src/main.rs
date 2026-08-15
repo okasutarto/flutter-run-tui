@@ -22,7 +22,7 @@ mod widgets;
 
 use std::io::{self, Write};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
@@ -340,6 +340,17 @@ fn detect(tx: &Sender<Msg>) {
     });
 }
 
+/// How often a list on screen is rechecked against the machine.
+///
+/// Device lists go stale with nobody touching them. Measured on this machine: two
+/// booted simulators shut themselves down inside a minute, unasked — and a simulator
+/// booted *after* detection sat in the list as a row offering to boot it. The chips
+/// are claims about right now, so they have to be re-earned while they are on screen.
+///
+/// Four seconds against ~265ms of `adb`/`simctl` on a worker thread. The full scan
+/// this replaces is 6s and would be unusable at any interval.
+const RECHECK: Duration = Duration::from_secs(4);
+
 /// Recheck the cached list, without paying for discovery again.
 ///
 /// `detect()` cannot be reused here. It runs `fvm flutter devices --machine`, which
@@ -366,8 +377,32 @@ fn recheck(app: &App, ctx: &Ctx) {
 
         let real: Vec<probe::Device> = cached
             .into_iter()
-            .filter(|device| {
-                !device.attached() || !device.virtual_device || alive.contains(&device.id)
+            .filter_map(|mut device| {
+                if !device.attached() || !device.virtual_device {
+                    return Some(device);
+                }
+
+                let up = alive.contains(&device.id);
+
+                match (device.boot.is_some(), up) {
+                    // Booted since the list was built, by frun or by hand. Clearing
+                    // `boot` is what turns the row from "press Enter to start this"
+                    // into a device that is ready, which is the whole of the ` active `
+                    // chip. Without this a simulator brought up after detection sat in
+                    // the list offering to boot something already running.
+                    (true, true) => {
+                        device.boot = None;
+                        Some(device)
+                    }
+
+                    // Gone. Dropped rather than rewritten, because `targets()` puts it
+                    // back as a bootable row from `simctl`/`-list-avds` with the
+                    // spelling those tools use — an AVD comes back under its AVD name,
+                    // not the serial it was running as.
+                    (false, false) => None,
+
+                    _ => Some(device),
+                }
             })
             .collect();
 
@@ -416,6 +451,8 @@ struct Ctx {
     session: Option<Session>,
     /// Extra arguments to pass through to Flutter, kept for a retried build.
     extra: Vec<String>,
+    /// When the device list was last checked against the machine.
+    rechecked: Instant,
     /// Set when the loop should return.
     done: bool,
 }
@@ -448,6 +485,9 @@ fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> 
         tx,
         session: None,
         extra,
+        // Detection has just been fired and its answer is the first list, so the
+        // clock starts here rather than at the epoch.
+        rechecked: Instant::now(),
         done: false,
     };
 
@@ -542,6 +582,23 @@ fn event_loop(app: &mut App, ctx: &mut Ctx, art: &mut Logo) -> io::Result<()> {
         // An unacknowledged r/R has a deadline, and nothing arriving on the
         // channel can be relied on to notice it has passed.
         app.tick_pending();
+
+        // Whichever list is up, keep it true. Nothing else on screen makes a claim
+        // about the world that the world can invalidate on its own.
+        if app.live
+            && !app.refreshing
+            && !app.devices.is_empty()
+            && ctx.rechecked.elapsed() >= RECHECK
+            && matches!(
+                app.state,
+                State::NoDevices | State::MultipleDevices | State::Switching
+            )
+        {
+            ctx.rechecked = Instant::now();
+            app.refreshing = true;
+
+            recheck(app, ctx);
+        }
 
         if ctx.done {
             return Ok(());
@@ -741,38 +798,37 @@ fn devices_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
     } else {
         State::NoDevices
     });
-
-    handed_over(app, ctx);
 }
 
 /// The device this process was handed by the tab that spawned it (8.4).
 ///
-/// Resolved here, against this process's own scan, which is what keeps a boot in the
-/// tab that waits for it: the spawning tab picked a row and nothing else, so a
-/// shut-down AVD takes its three minutes on this tab's `Booting` frame.
+/// **Read before the first frame, and acted on there.** The earlier version resolved
+/// the handoff inside `devices_answered`, which meant the new tab sat on `DETECTING`
+/// through its own `fvm flutter devices --machine` — six seconds — before starting a
+/// build that never needed the answer. `flutter run -d <id>` resolves its own device,
+/// and everything the frame shows in the meantime came over with the id.
 ///
-/// `enter()` is reused rather than reimplemented, so the boot-or-launch branch and
-/// the id it launches with stay in one place. That also means an Android AVD handed
-/// over by name is reconciled to its serial by the code that already does it.
+/// Discovery still runs, in the background, because `^D` needs a list to open and
+/// `devices_refreshed` is already built to swap rows under a live run. It also fills
+/// in `Platform ID` and `OS Version`, which are the two fields deliberately left out
+/// of the handoff.
 ///
-/// Read once, and only from `State::Detecting`: a later `^D` in this tab must be the
-/// user's choice, not a repeat of the one the variable carries.
-///
-/// Not finding it is not fatal. The device may have gone between two scans, or the
-/// variable may be stale in an exported shell, and the picker is a better answer to
-/// both than an error — it is already on screen with the same rows.
+/// A value that is not a full handoff is logged and ignored, and the picker comes up
+/// as usual. Five fields or nothing: the platform decides whether a boot is even
+/// possible and `virtual_device` decides whether frun may shut the device down, so a
+/// guess there is worse than a keystroke.
 fn handed_over(app: &mut App, ctx: &mut Ctx) {
-    let Some(id) = std::env::var(HANDOFF).ok().filter(|id| !id.is_empty()) else {
+    let Some(line) = std::env::var(HANDOFF).ok().filter(|l| !l.is_empty()) else {
         return;
     };
 
-    match app.devices.iter().position(|device| device.id == id) {
-        Some(index) => {
-            app.selected_device = index;
-            enter(app, ctx);
-        }
+    match probe::Device::from_handoff(&line) {
+        Some(device) => start(app, ctx, device),
 
-        None => app.log(Level::Wrn, &format!("{HANDOFF}={id} is not attached")),
+        None => app.log(
+            Level::Wrn,
+            &format!("{HANDOFF} is not a device this frun can start"),
+        ),
     }
 }
 

@@ -2532,6 +2532,22 @@ drag the user out of their session into the picker, and a failed scan would end 
 that was working. And **the selection follows the device, not the row number**, since
 discovery reorders by what is running.
 
+**Every list is rechecked while it is on screen, every four seconds.** Not only the
+switch list: the first picker had no refresh at all, and it makes the same claim. The
+case that forced it was reported as "two devices are running and only one says
+`active`", and the discovery was correct — `--probe` shows both as ready when both are
+up. What was wrong was the age of the answer. Measured while chasing it: two booted
+simulators shut themselves down inside a minute with nobody asking, and a simulator
+booted *after* detection sat in the list offering to boot something already running.
+The chips are claims about right now, so they are re-earned rather than remembered.
+
+That made the recheck a two-way street. A row that is up and marked bootable has its
+`boot` cleared — which is the whole of the ` active ` chip — and a row marked ready
+that no longer answers is dropped, so `targets()` puts it back under the spelling the
+boot tools use. One asymmetry stays, and it is Android's: a bootable AVD row is keyed
+by AVD name while `alive()` reports serials, so an emulator started outside frun
+cannot be promoted this way and waits for the next full scan.
+
 Five decisions inside the flow, each of which could have gone the other way:
 
 * **The outgoing child dies at the pick, not at the respawn.** A boot can take

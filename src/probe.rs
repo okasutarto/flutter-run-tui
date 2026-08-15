@@ -339,6 +339,27 @@ impl Platform {
     pub fn needs_boot(self) -> bool {
         matches!(self, Platform::Ios | Platform::Android)
     }
+
+    /// For `Device::to_handoff`. Not `Debug`: that is a formatting of a type, and
+    /// nothing should be able to rename a variant and change a wire format.
+    fn tag(self) -> &'static str {
+        match self {
+            Platform::Ios => "ios",
+            Platform::Android => "android",
+            Platform::Desktop => "desktop",
+            Platform::Web => "web",
+        }
+    }
+
+    fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "ios" => Some(Platform::Ios),
+            "android" => Some(Platform::Android),
+            "desktop" => Some(Platform::Desktop),
+            "web" => Some(Platform::Web),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -363,6 +384,76 @@ pub struct Device {
 }
 
 impl Device {
+    /// This row, flattened into one line, for the tab a `⇧⏎` spawns (8.4).
+    ///
+    /// **What this exists to avoid is a second discovery.** The first version handed
+    /// over the id alone and let the new process resolve it against its own scan,
+    /// which meant `fvm flutter devices --machine` — six seconds of Dart VM startup —
+    /// before a build that needed none of it. The spawning tab already knows the row;
+    /// the point of a handoff is that the answer travels with the question.
+    ///
+    /// Only the fields the new process cannot wait for: the id it runs, the name its
+    /// card and its tab title show, the platform behind the glyph, whether it is
+    /// virtual — `release_target` shuts virtual devices down, so guessing that one
+    /// would kill a physical phone — and how to boot it when it is not up.
+    /// `target_platform` and `sdk` are display-only and arrive with the background
+    /// scan, so they are left out rather than duplicated.
+    ///
+    /// Tab-separated: device names, AVD names and simulator ids all contain spaces
+    /// and colons, and none of them contains a tab.
+    pub fn to_handoff(&self) -> String {
+        let boot = match &self.boot {
+            None => String::new(),
+            Some(Boot::Avd(name)) => format!("avd:{name}"),
+            Some(Boot::Sim(id)) => format!("sim:{id}"),
+        };
+
+        [
+            self.id.as_str(),
+            self.name.as_str(),
+            self.platform.tag(),
+            if self.virtual_device { "1" } else { "0" },
+            boot.as_str(),
+        ]
+        .join("\t")
+    }
+
+    /// The other half of `to_handoff`.
+    ///
+    /// All five fields or nothing. A value with fewer is not a device this process
+    /// can start without asking questions, and starting on a guess is worse than
+    /// showing the picker: the platform decides the glyph and whether a boot is even
+    /// possible, and `virtual_device` decides whether frun may shut the thing down.
+    pub fn from_handoff(line: &str) -> Option<Device> {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [id, name, platform, virtual_device, boot] = fields[..] else {
+            return None;
+        };
+
+        if id.is_empty() {
+            return None;
+        }
+
+        let boot = match boot.split_once(':') {
+            Some(("avd", name)) => Some(Boot::Avd(name.to_string())),
+            Some(("sim", id)) => Some(Boot::Sim(id.to_string())),
+            _ => None,
+        };
+
+        Some(Device {
+            id: id.to_string(),
+            name: name.to_string(),
+            platform: Platform::from_tag(platform)?,
+            target_platform: String::new(),
+            sdk: String::new(),
+            virtual_device: virtual_device == "1",
+            // The row it came from was the one under the cursor, not necessarily the
+            // remembered one, and `choose` is about to write this id there anyway.
+            last_used: false,
+            boot,
+        })
+    }
+
     /// Whether this counts as attached, which is what decides the discovery
     /// branch in DESIGN.md 4.
     ///
