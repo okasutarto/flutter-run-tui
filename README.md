@@ -60,7 +60,7 @@ frun uses the **Cyberpunk Neon** accent palette:
 | Lime | `#B8FF6A` | success and healthy states |
 | Yellow | `#FFE66D` | pending and warning states |
 | Magenta | `#F715AB` | errors and destructive actions |
-| Purple | `#9201CB` | virtual devices and secondary runtime tags |
+| Purple | `#CC4DFF` | virtual devices and secondary runtime tags |
 
 To use your own theme, edit the colour constants in [`src/theme.rs`](src/theme.rs), then rebuild frun. The UI consumes these semantic tokens, so keep their intended roles—success, warning, error, focus, and virtual—when choosing replacement colours.
 

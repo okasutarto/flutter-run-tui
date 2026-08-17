@@ -397,7 +397,7 @@ fn draw_row(
             Span::raw("  ")
         },
         // Nerd Font, single-width. Emoji would be two cells and break the grid.
-        strong(device.platform.glyph(), theme::PURPLE),
+        strong(device.platform.glyph(), platform_color(device.platform)),
         Span::raw("  "),
         if selected {
             strong(device.name.as_str(), theme::TEXT)
@@ -468,4 +468,14 @@ fn draw_row(
     };
 
     frame.render_widget(Paragraph::new(line).style(style), area);
+}
+
+/// Platform identity colours leave cyan for focus and structure.
+fn platform_color(platform: crate::data::Platform) -> ratatui::style::Color {
+    match platform {
+        crate::data::Platform::Android => theme::EMERALD,
+        crate::data::Platform::Ios => theme::TEXT,
+        crate::data::Platform::Desktop => theme::AMBER,
+        crate::data::Platform::Web => theme::PURPLE,
+    }
 }

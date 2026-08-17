@@ -50,9 +50,19 @@ pub const AMBER: Color = Color::Rgb(255, 230, 109);
 /// Cyberpunk Neon Powerline magenta, `#F715AB`. Failures, stack traces.
 pub const ROSE: Color = Color::Rgb(247, 21, 171);
 
-/// Cyberpunk Neon Powerline purple, `#9201CB`. Simulator and emulator badges
-/// only.
-pub const PURPLE: Color = Color::Rgb(146, 1, 203);
+/// Cyberpunk Neon Powerline purple, brightened to `#CC4DFF`. Simulator and
+/// emulator badges, and the card borders that carry them.
+///
+/// The prompt's own purple is `#9201CB` — HSL(283°, 99%, 40%) — and at that
+/// lightness it is the one accent in this palette that does not survive being
+/// text: 2.75:1 against `INK`, against a `CYAN` at 12:1 and a `ROSE` at 4.7:1.
+/// The value here holds the hue and the saturation and lifts lightness to 65%,
+/// which lands at 5.4:1. That number is doing two jobs, because `PURPLE` is the
+/// only accent used at both polarities: foreground for the `virtual` tag and the
+/// Dart version, and background under `INK` for the `last used` pill. A hue
+/// rotation would have bought the same contrast, but 283° is what separates this
+/// token from `ROSE` at 320°, and the two appear on the same device row.
+pub const PURPLE: Color = Color::Rgb(204, 77, 255);
 
 // ============================================================
 // Glyphs
