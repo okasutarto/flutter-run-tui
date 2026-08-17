@@ -21,10 +21,11 @@ pub const SURFACE: Color = Color::Rgb(24, 24, 27);
 
 /// Ink for text drawn on top of a filled badge.
 ///
-/// The specified canvas colour is never used to paint the background: filling
+/// Cyberpunk Neon Powerline navy, `#070E34`. The specified canvas colour is
+/// never used to paint the background: filling
 /// cells would destroy terminal transparency and blur. It exists only here,
 /// where a real background does exist.
-pub const INK: Color = Color::Rgb(12, 14, 20);
+pub const INK: Color = Color::Rgb(7, 14, 52);
 
 // ============================================================
 // Text
@@ -40,20 +41,24 @@ pub const MUTED: Color = Color::Rgb(113, 113, 122);
 // Functional
 // ============================================================
 
-/// `text-cyan-400` #38BDF8. Section headers, selection, active focus.
-pub const CYAN: Color = Color::Rgb(56, 189, 248);
+/// Cyberpunk Neon Powerline cyan, `#34EDF3`. Section headers, selection,
+/// active focus.
+pub const CYAN: Color = Color::Rgb(52, 237, 243);
 
-/// `text-emerald-400` #34D399. Success, completed stages, clean git.
-pub const EMERALD: Color = Color::Rgb(52, 211, 153);
+/// Cyberpunk Neon Powerline lime, `#B8FF6A`. Success, completed stages,
+/// clean git.
+pub const EMERALD: Color = Color::Rgb(184, 255, 106);
 
-/// `text-amber-300` #FBBF24. Branch tags, pending stages, warnings.
-pub const AMBER: Color = Color::Rgb(251, 191, 36);
+/// Cyberpunk Neon Powerline yellow, `#FFE66D`. Branch tags, pending stages,
+/// warnings.
+pub const AMBER: Color = Color::Rgb(255, 230, 109);
 
-/// `text-rose-400` #F87171. Failures, stack traces.
-pub const ROSE: Color = Color::Rgb(248, 113, 113);
+/// Cyberpunk Neon Powerline magenta, `#F715AB`. Failures, stack traces.
+pub const ROSE: Color = Color::Rgb(247, 21, 171);
 
-/// `text-purple-300` #C084FC. Simulator and emulator badges only.
-pub const PURPLE: Color = Color::Rgb(192, 132, 252);
+/// Cyberpunk Neon Powerline purple, `#9201CB`. Simulator and emulator badges
+/// only.
+pub const PURPLE: Color = Color::Rgb(146, 1, 203);
 
 // ============================================================
 // Glyphs

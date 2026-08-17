@@ -403,6 +403,7 @@ fn detect(tx: &Sender<Msg>) {
 /// Four seconds against ~265ms of `adb`/`simctl` on a worker thread. The full scan
 /// this replaces is 6s and would be unusable at any interval.
 const RECHECK: Duration = Duration::from_secs(4);
+const GIT_RECHECK: Duration = Duration::from_secs(1);
 
 /// Recheck the cached list, without paying for discovery again.
 ///
@@ -544,6 +545,8 @@ struct Ctx {
     extra: Vec<String>,
     /// When the device list was last checked against the machine.
     rechecked: Instant,
+    /// When the Git status badge was last refreshed.
+    git_rechecked: Instant,
     /// Set when the loop should return.
     done: bool,
 }
@@ -579,6 +582,7 @@ fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> 
         // Detection has just been fired and its answer is the first list, so the
         // clock starts here rather than at the epoch.
         rechecked: Instant::now(),
+        git_rechecked: Instant::now(),
         done: false,
     };
 
@@ -677,6 +681,14 @@ fn event_loop(app: &mut App, ctx: &mut Ctx, art: &mut Logo) -> io::Result<()> {
         // An unacknowledged r/R has a deadline, and nothing arriving on the
         // channel can be relied on to notice it has passed.
         app.tick_pending();
+
+        if app.live && ctx.git_rechecked.elapsed() >= GIT_RECHECK {
+            ctx.git_rechecked = Instant::now();
+
+            // ponytail: synchronous Git polling can stutter on unusually slow
+            // worktrees; move it to a worker only if that becomes observable.
+            app.dirty = probe::git_dirty();
+        }
 
         // Whichever list is up, keep it true. Nothing else on screen makes a claim
         // about the world that the world can invalidate on its own.

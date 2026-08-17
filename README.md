@@ -50,6 +50,20 @@
 > [!NOTE]
 > macOS is the tested platform. `xcrun`, `pgrep` and the Ghostty AppleScript path are macOS-only; the Android half and the tmux new-tab path are not.
 
+## Theme
+
+frun uses the **Cyberpunk Neon** accent palette:
+
+| Token | Colour | Use |
+| :--- | :--- | :--- |
+| Cyan | `#34EDF3` | focus and informational accents |
+| Lime | `#B8FF6A` | success and healthy states |
+| Yellow | `#FFE66D` | pending and warning states |
+| Magenta | `#F715AB` | errors and destructive actions |
+| Purple | `#9201CB` | virtual devices and secondary runtime tags |
+
+To use your own theme, edit the colour constants in [`src/theme.rs`](src/theme.rs), then rebuild frun. The UI consumes these semantic tokens, so keep their intended roles—success, warning, error, focus, and virtual—when choosing replacement colours.
+
 ## Install
 
 ```bash

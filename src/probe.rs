@@ -153,13 +153,19 @@ pub fn project() -> Project {
         name,
         version,
         branch: git(&["branch", "--show-current"]).unwrap_or_else(|| "-".into()),
-        dirty: git(&["status", "--porcelain"])
-            .map(|out| out.lines().filter(|l| !l.trim().is_empty()).count())
-            .unwrap_or(0),
+        dirty: git_dirty(),
         flutter: "-".into(),
         dart: "-".into(),
         cwd: pretty_cwd(),
     }
+}
+
+/// Count of changed files in the current Git worktree. Zero includes an absent
+/// repository, which is the harmless value the ProjectCard already displays.
+pub fn git_dirty() -> usize {
+    git(&["status", "--porcelain"])
+        .map(|out| out.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0)
 }
 
 /// `name:` and `version:` from `pubspec.yaml`.
