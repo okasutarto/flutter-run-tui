@@ -6,15 +6,9 @@ use ratatui::style::Color;
 // Surfaces
 // ============================================================
 
-/// Card borders. `border-zinc-700` #3F3F46.
-///
-/// DESIGN.md v1 specified #2A2A2C, which rendered as effectively invisible in
-/// Ghostty: the cards stopped reading as containers and the screen became
-/// floating text with coloured headings. The v1 value assumes a CSS border on
-/// an opaque panel, but a terminal draws box glyphs against the user's own
-/// background, which is rarely that dark and is often translucent. v1.3
-/// moved to zinc-700, which is the same conclusion.
-pub const BORDER: Color = Color::Rgb(63, 63, 70);
+/// Cyberpunk Neon Powerline cyan, `#34EDF3`. Card borders, separators, and
+/// keycap outlines.
+pub const BORDER: Color = Color::Rgb(52, 237, 243);
 
 /// Selected-row background. One step up from the canvas, nothing more.
 pub const SURFACE: Color = Color::Rgb(24, 24, 27);

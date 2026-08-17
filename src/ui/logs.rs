@@ -89,7 +89,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 
     right.push(text(count, theme::MUTED));
 
-    let block = card(TITLE, theme::CYAN).title_top(Line::from(right).right_aligned());
+    let block = card(TITLE, theme::PURPLE).title_top(Line::from(right).right_aligned());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

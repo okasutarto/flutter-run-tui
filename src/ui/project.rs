@@ -65,7 +65,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
         return;
     }
 
-    let block = card("PROJECT INFO", theme::CYAN).title_top(
+    let block = card("PROJECT INFO", theme::PURPLE).title_top(
         Line::from(vec![
             Span::raw(" "),
             text(app.cwd.as_str(), theme::MUTED),

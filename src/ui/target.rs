@@ -30,7 +30,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // word it gave up was carried by the card's existence anyway: `render` returns
     // early without a target, and `State::has_target` hides the card in every
     // picker state, so nothing but a chosen device can put it on screen.
-    let mut block = card("DEVICE INFO", theme::CYAN);
+    let mut block = card("DEVICE INFO", theme::PURPLE);
 
     // What the run is doing, as a pill in the title bar: `RUNNING`, then `STOPPED`,
     // `DETACHED` or `DISCONNECTED` depending on how it ended.

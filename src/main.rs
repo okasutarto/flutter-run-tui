@@ -2249,6 +2249,7 @@ mod tests {
                 session: None,
                 extra: Vec::new(),
                 rechecked: Instant::now(),
+                git_rechecked: Instant::now(),
                 done: false,
             };
 

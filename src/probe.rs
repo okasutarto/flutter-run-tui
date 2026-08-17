@@ -1472,6 +1472,27 @@ fn boot_sim(udid: &str) -> Result<Booted, String> {
         .ok_or_else(|| "did not finish booting".to_string())
 }
 
+fn avd_boot_finished(ready: bool, reported_by_adb: Option<bool>) -> Result<bool, &'static str> {
+    match (ready, reported_by_adb) {
+        (true, _) => Ok(true),
+        (false, Some(false)) => Err("emulator stopped while booting"),
+        _ => Ok(false),
+    }
+}
+
+/// Whether a successful `adb devices` snapshot still contains `serial`.
+/// `None` means adb itself failed, which is not proof that the emulator stopped.
+fn adb_reports(serial: &str) -> Option<bool> {
+    let out = run("adb", &["devices"], QUICK)?;
+
+    Some(
+        out.lines()
+            .skip(1)
+            .filter_map(|line| line.split_whitespace().next())
+            .any(|found| found == serial),
+    )
+}
+
 fn boot_avd(name: &str) -> Result<Booted, String> {
     // `nohup`, so the emulator ignores the hangup when frun exits.
     //
@@ -1541,7 +1562,9 @@ fn boot_avd(name: &str) -> Result<Booted, String> {
         .map(|out| out.trim().trim_end_matches('\r') == "1")
         .unwrap_or(false);
 
-        if ready {
+        let reported_by_adb = ready.then_some(true).or_else(|| adb_reports(&serial));
+
+        if avd_boot_finished(ready, reported_by_adb)? {
             let (target_platform, sdk) = android_facts(&serial);
 
             return Ok(Booted {
@@ -1691,6 +1714,17 @@ pub fn remember_device(id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_avd_that_disappears_stops_waiting_for_boot() {
+        assert_eq!(
+            avd_boot_finished(false, Some(false)),
+            Err("emulator stopped while booting")
+        );
+
+        // An adb hiccup is not evidence that the emulator was stopped.
+        assert_eq!(avd_boot_finished(false, None), Ok(false));
+    }
 
     /// 8.4: the row has to survive the trip to another process, or the tab it starts
     /// has to run a discovery to learn what the tab that spawned it already knew.

@@ -45,7 +45,7 @@ pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget
         format!("{} devices ", app.devices.len())
     };
 
-    let block = card(title, theme::CYAN)
+    let block = card(title, theme::PURPLE)
         .title_top(Line::from(vec![Span::raw(" "), text(count, theme::MUTED)]).right_aligned());
 
     let inner = block.inner(area);
