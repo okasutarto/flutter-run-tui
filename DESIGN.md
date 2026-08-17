@@ -124,7 +124,9 @@ already the component describing what is being run and where.
   * `Version`: `1.4.0+12`
   * `Branch`: `main`
   * `Git Status`: `✔ clean`
-  * **3-Column Technical Stats Row**: `Flutter` (`3.27.1`), `Dart` (`3.7.2`), `Runtime` (`(FVM)`).
+  * **3-Column Technical Stats Row**: `Flutter` (`3.27.1`), `Dart` (`3.7.2`),
+    `Runtime` (`(FVM)`, `(SDK)`, or the version manager's own name — whatever
+    `probe::toolchain` resolved, see 8.11).
 * **Row Separators**: a hairline rule between metadata rows, in the border
   colour. Costs 3 rows; see 6.2 for what that displaces.
 * **Widths follow the terminal.** Values right-align to the card border and the
@@ -960,9 +962,13 @@ with one exception noted at the end.
   read project metadata          name, version (pubspec) · branch, dirty count (git)
        │
        ▼
+  resolve the toolchain           FRUN_FLUTTER · .fvmrc + fvm · flutter on PATH   (8.11)
+       │                          once per process; every Flutter call goes through it
+       ▼
   read SDK versions
-    ├─ fast   .fvm/flutter_sdk or .fvmrc → bin/cache/flutter.version.json
-    └─ slow   fvm flutter --version --machine   ⠋ 3-4s, boots the Dart VM
+    ├─ fast   fvm    .fvm/flutter_sdk or .fvmrc → bin/cache/flutter.version.json
+    ├─ fast   plain  which flutter → <sdk>/bin/cache/flutter.version.json
+    └─ slow   flutter --version --machine   ⠋ 3-4s, boots the Dart VM
        │
        ▼
   ╔═══════════════════════╗
@@ -971,7 +977,7 @@ with one exception noted at the end.
               ▼
       ┌───────────────────┐
       │ 1  DETECTING      │  adb + simctl + -list-avds, ~200ms   (8.9)
-      └─────────┬─────────┘  fvm flutter devices --machine behind it,
+      └─────────┬─────────┘  flutter devices --machine behind it,
                 │            landing as a refresh 6-8s later
                 ├── exits non-zero ──► ✖ FATAL  Failed to detect Flutter devices
                 │
@@ -1005,7 +1011,7 @@ with one exception noted at the end.
         ╚════════════╤═══════════╝
                      ▼
       ┌──────────────────────────┐
-      │ 6  BUILDING              │  pty spawn: fvm flutter run -d <id>
+      │ 6  BUILDING              │  pty spawn: <toolchain> run -d <id>
       │                          │
       │  stages are platform-    │  iOS      pod install → Xcode build
       │  dependent, not a fixed  │  Android  Gradle task → install APK
@@ -1498,7 +1504,7 @@ transcript line by line rather than asserting on a rendered frame.
   data.rs      App state, the 11-variant State enum, mock data per state
   budget.rs    responsive ladder; owns every component height
   widgets.rs   pill, badge, keycap, card, spread, field, separator, elide, wrap
-  probe.rs     pubspec, git, FVM manifest, device discovery, boot
+  probe.rs     pubspec, git, toolchain + SDK manifest, device discovery, boot
   flutter.rs   pty session + the Flutter output parser
   dump.rs      TestBackend -> Buffer -> ANSI, plus hit probing and row reports
   ui/          mod (assembly), project, target, devices, build, logs, chrome, logo
@@ -1575,7 +1581,7 @@ What is in the tree, and what was declined.
 | `ratatui` + `ratatui-image` + `image` | rendering, and the logo as a real image |
 | `textwrap` + `unicode-width` | log wrapping and column arithmetic |
 | `serde_json` | `flutter devices --machine`, `simctl list -j`, `flutter.version.json`, `.fvmrc` |
-| `portable-pty` | spawning `fvm flutter run` behind a pty |
+| `portable-pty` | spawning `flutter run` behind a pty |
 
 **Declined after the plan named them.** Recorded so they are not reconsidered
 from scratch:
@@ -3247,3 +3253,101 @@ is reachable only through `--dump single` and the demo walk. It was already mark
 *superseded, see 7.6* in the state table, for the same reason State 2 is gone: 7.6
 auto-launched a lone device and using it disproved the idea. Removing it is the same
 edit as this one and belongs in its own change, with its own decision.
+
+### 8.11 The toolchain is resolved, not assumed (built)
+
+**`fvm` was hard-coded in three argv strings, and that made the tool unusable for
+anyone who does not use FVM.** Not degraded — unusable. `Session::spawn`,
+`probe::devices` and `probe::sdk_versions_slow` each built their own
+`CommandBuilder::new("fvm")` / `run("fvm", &["flutter", …])`, so on a machine
+where Flutter came from a tarball, Homebrew, asdf, mise or puro the first spawn
+died with `fvm: command not found`, the device scan returned `Err`, and DESIGN.md
+4 turns that into `✖ FATAL Failed to detect Flutter devices`. The header said
+`Runtime (FVM)` because a literal in `ui::project` said so.
+
+**What made this a small change is what FVM actually is.** `fvm flutter run`
+resolves the version a project pins and execs that SDK's own `flutter` with the
+arguments it was handed. So FVM is not a different way of running Flutter, it is
+two words in front of one — and the whole of the difference fits in a struct:
+
+```rust
+pub struct Toolchain {
+    program: String,     // fvm | flutter | whatever FRUN_FLUTTER names
+    lead: Vec<String>,   // ["flutter"] under FVM, empty otherwise
+    label: String,       // the Runtime column
+    fvm: bool,           // where the version manifest is looked for
+}
+```
+
+**Four rules, in order, and the order is the design.**
+
+| Order | Rule | Runtime |
+| ---: | :--- | :--- |
+| 1 | `FRUN_FLUTTER` is set, parsed as an executable path or shell words | whatever it names |
+| 2 | `.fvmrc` or `.fvm/` present **and** `fvm` on `PATH` | `FVM` |
+| 3 | `flutter` on `PATH` | `SDK` |
+| 4 | `fvm` on `PATH` and `flutter` not | `FVM` |
+| — | neither | `SDK`, so the failure names `flutter` |
+
+**Both halves of rule 2 are the rule.** A `.fvmrc` is a checked-in file, so it
+travels to machines that have no FVM on them, where honouring it would fail every
+spawn on a file that describes someone else's setup. And `fvm` installed against a
+project that pins nothing is an indirection that resolves to the global SDK
+anyway. Either half alone is a wrong answer that looks like a right one.
+
+**One decision, asked by everyone, in a `OnceLock`.** The alternative — each call
+site probing for itself — is a build that goes through `fvm` while the header
+reports the version of a different SDK on `PATH`, and both halves being
+individually defensible is exactly what would make that bug survive being looked
+at. `argv()` returns the program and its prefix as one vector for the same reason:
+`lead` without `program` is `flutter run` handed to `fvm`, and `program` without
+`lead` is `fvm run`, which is not a command FVM has.
+
+**The version manifest follows the same decision, and got faster for non-FVM
+users as a side effect.** 7.3 item 1 reads `bin/cache/flutter.version.json`
+rather than paying 3-4 seconds for `--version --machine`; that path is now found
+two components up from the `flutter` on `PATH` when FVM is not in play.
+`canonicalize` is what makes that work rather than nearly work — Homebrew leaves a
+symlink in `/opt/homebrew/bin`, and two up from *that* is `/opt/homebrew`, which
+has no `bin/cache`. A wrapper (`mise`, `puro`) always uses
+`sdk_versions_slow`, because a separate `flutter` on `PATH` may select a different
+SDK and its manifest would make the header lie about what the wrapper will run.
+
+**`which` is a `PATH` walk, not a spawn.** `std::env::split_paths` plus a mode
+test is two `stat`s against a process and a pipe, `which` is a builtin in some
+shells and a separate binary in others, and — the actual reason —
+`split_paths` is the same resolution `Command` and `CommandBuilder` will perform
+later. The answer has to be the binary that will really run.
+
+**Nothing in the process table needed changing, and that is not luck.**
+`probe::busy` matches `flutter` + a bare `run` + `-d`, never `fvm`, because FVM
+execs the SDK's own binary — so a `pgrep -fl flutter` line reads
+`~/fvm/versions/3.35.0/bin/flutter run -d …` under FVM and
+`~/development/flutter/bin/flutter run -d …` without it. The ` in use ` chip was
+already toolchain-blind.
+
+**What is on screen is what was resolved.** The `Runtime` column, the `DETECTING`
+screen's command line, and the first line of `--probe` all read the same
+`Toolchain`. The mock App holds `Toolchain::fvm()` unconditionally, so `--dump`
+frames stay comparable across machines — a layout harness whose output depends on
+which laptop ran it is not a harness.
+
+**`FRUN_FLUTTER` travels with a `⇧Enter` handoff**, next to `PATH` and
+`FVM_CACHE_PATH` and for the same reason 8.4 gives: the second tab re-resolves
+everything itself, so a variable that changes the answer has to arrive with the
+device or the two tabs build with different SDKs.
+
+| Verified | How |
+| :--- | :--- |
+| Rule 2, on a real FVM project | `--probe` in a project pinning `3.29.3`: `runtime FVM  fvm flutter run -d <id>`, versions `3.29.3 / 3.7.2` from `flutter.version.json` — the pinned SDK, not the newer one on `PATH` |
+| Rule 3, same machine | `--probe` in a project with no `.fvmrc`: `runtime SDK  flutter run -d <id>`, versions `3.44.9 / 3.12.2`, matching the manifest under `~/development/flutter` |
+| Rule 1 outranks rule 2 | `FRUN_FLUTTER=/…/flutter/bin/flutter` in the FVM project reports `SDK` and that explicit SDK's versions |
+| A wrapper with its own arguments | `FRUN_FLUTTER='mise exec flutter --'` → `runtime mise  mise exec flutter -- run -d <id>` |
+| Rule 2 declines without `fvm` | `PATH` stripped of `/opt/homebrew/bin` in the FVM project falls back to `SDK` instead of failing |
+| Neither present | `PATH=/usr/bin:/bin` reports `SDK` and `versions unresolved`, no panic and no hang |
+| Mock frames unchanged | `--dump detecting` from a non-FVM project still prints `fvm flutter devices --machine`; the collapsed header still ends `Dart 3.7.2  FVM`; `--rows running` still reports 25 rows of full chrome |
+
+| Unverified | Why |
+| :--- | :--- |
+| The pty spawn without FVM | Needs a build on a machine whose only Flutter is a plain one. `Session::spawn` and `probe::devices` take their argv from the same `Toolchain::argv` that `--probe` prints and that `probe::devices` was driven through live, so what is untested is the pty, not the argv |
+| asdf and puro specifically | Neither is installed here. asdf's shim directory is `<sdk>/bin/flutter` after `canonicalize` and so is covered by rule 3; puro needs `FRUN_FLUTTER` and was exercised only through the `mise` shape |

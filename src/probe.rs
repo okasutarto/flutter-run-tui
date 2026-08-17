@@ -3,7 +3,8 @@
 //!
 //! DESIGN.md 7.3 items 1, 2 and 4. All of it is `Command` plus a little
 //! parsing, so it lives in one module rather than three: the shared parts (a
-//! spawn helper with a timeout, and the FVM SDK path) are the reason.
+//! spawn helper with a timeout, and the toolchain every Flutter call goes
+//! through) are the reason.
 //!
 //! No new dependency does any of this. `git2` for two `git` calls, a YAML crate
 //! for two `pubspec.yaml` lines, or a regex engine for `split(':')` would each
@@ -12,6 +13,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -213,17 +215,259 @@ pub fn home() -> PathBuf {
 }
 
 // ============================================================
+// Toolchain
+// ============================================================
+
+/// How Flutter is reached on this machine.
+///
+/// **FVM is a wrapper and nothing else.** `fvm flutter run` resolves the version
+/// a project pins and execs that SDK's own `flutter` with the arguments it was
+/// given, so the only difference between an FVM machine and a plain one is two
+/// words at the front of an argv. Those two words used to be hard-coded in three
+/// places, which made the tool unusable — `fvm: command not found`, on the first
+/// spawn — for anyone whose Flutter came from a tarball, Homebrew, asdf, mise or
+/// puro.
+///
+/// **Resolved once, and everything goes through it.** `run`, `devices` and the
+/// pty spawn all ask this, so a build cannot go through `fvm` while the header
+/// reports the version of a different SDK on `PATH`. `OnceLock` because the
+/// answer involves a `PATH` walk and two `stat`s and cannot change under a
+/// running process: nothing here installs a version manager mid-session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Toolchain {
+    /// The program to spawn: `fvm`, `flutter`, or whatever `FRUN_FLUTTER` names.
+    program: String,
+
+    /// The arguments that precede Flutter's own subcommand. `["flutter"]` under
+    /// FVM, empty when `flutter` is called directly.
+    lead: Vec<String>,
+
+    /// What the ProjectCard's `Runtime` column says (DESIGN.md 3.1).
+    label: String,
+
+    /// Whether the SDK is FVM's to resolve.
+    ///
+    /// Decides where the fast version manifest is looked for — under `.fvm`, or
+    /// next to the binary on `PATH` — and nothing else. Not derivable from
+    /// `label`, which is display text.
+    fvm: bool,
+}
+
+impl Toolchain {
+    /// FVM, unconditionally. For mock data (`--dump`) and for the two rules in
+    /// `resolve` that choose it.
+    ///
+    /// Public because the mock App needs it: `--dump` frames are how this
+    /// codebase verifies layout, so what they show cannot depend on which
+    /// machine renders them.
+    pub fn fvm() -> Self {
+        Self {
+            program: "fvm".into(),
+            lead: vec!["flutter".into()],
+            label: "FVM".into(),
+            fvm: true,
+        }
+    }
+
+    /// The SDK called directly, with no manager in front of it.
+    fn sdk() -> Self {
+        Self {
+            program: "flutter".into(),
+            lead: Vec::new(),
+            label: "SDK".into(),
+            fvm: false,
+        }
+    }
+
+    /// The `Runtime` column: `FVM`, `SDK`, or the wrapper's own name.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// The full argv for a Flutter subcommand, program included.
+    ///
+    /// Callers are handed one vector rather than a program and a prefix to
+    /// assemble themselves, because the two must not be able to drift apart:
+    /// `lead` without `program` is `flutter run` handed to `fvm`, and `program`
+    /// without `lead` is `fvm run`, which is not a command FVM has.
+    pub fn argv(&self, args: &[&str]) -> Vec<String> {
+        let mut argv = Vec::with_capacity(1 + self.lead.len() + args.len());
+
+        argv.push(self.program.clone());
+        argv.extend(self.lead.iter().cloned());
+        argv.extend(args.iter().map(|a| a.to_string()));
+
+        argv
+    }
+
+    /// The same command as a person would type it, for the `DETECTING` screen,
+    /// `--probe` and spawn failures.
+    pub fn display(&self, args: &[&str]) -> String {
+        self.argv(args).join(" ")
+    }
+}
+
+/// The toolchain this process will use, decided on first ask.
+pub fn toolchain() -> &'static Toolchain {
+    static RESOLVED: OnceLock<Toolchain> = OnceLock::new();
+
+    RESOLVED.get_or_init(resolve)
+}
+
+/// Four rules, in order, and the order is the whole design.
+///
+/// 1. **`FRUN_FLUTTER`**, parsed as an executable path or shell words, so both a
+///    path containing spaces and a wrapper that needs arguments fit. An explicit
+///    answer outranks every guess below, including a project that pins FVM.
+/// 2. **FVM, when the project pins it and `fvm` can be run.** Both halves are
+///    required. A `.fvmrc` on a machine without FVM installed is a checked-in
+///    file describing someone else's setup, and honouring it would fail every
+///    spawn; `fvm` installed on a project that pins nothing adds an indirection
+///    that resolves to the global SDK anyway.
+/// 3. **`flutter` on `PATH`**, which is every other install.
+/// 4. **`fvm` on `PATH`** when `flutter` is not — a machine where FVM is the only
+///    Flutter there is, in a project that has not pinned a version yet.
+///
+/// Falls through to the plain SDK, so a machine with neither fails on `flutter`
+/// rather than on `fvm`: the message then names the thing that is actually
+/// missing.
+fn resolve() -> Toolchain {
+    if let Some(raw) = std::env::var("FRUN_FLUTTER")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        let mut words = override_argv(&raw).into_iter();
+
+        let program = words.next().unwrap_or_else(|| "flutter".into());
+        let lead: Vec<String> = words.collect();
+        let fvm = base(&program) == "fvm";
+
+        return Toolchain {
+            label: label_for(&program),
+            program,
+            lead,
+            fvm,
+        };
+    }
+
+    if pins_fvm() && on_path("fvm") {
+        return Toolchain::fvm();
+    }
+
+    if on_path("flutter") {
+        return Toolchain::sdk();
+    }
+
+    if on_path("fvm") {
+        return Toolchain::fvm();
+    }
+
+    Toolchain::sdk()
+}
+
+/// Parse the explicit command without confusing spaces in an executable path
+/// with separators between argv entries.
+///
+/// Shell assignment removes the quotes around a value, so
+/// `FRUN_FLUTTER='/Applications/Flutter SDK/bin/flutter'` arrives here as a bare
+/// path containing a space. If that complete value is executable it is the
+/// program. Otherwise shell parsing supports wrappers and quoted arguments such
+/// as `mise exec flutter --` or `'/path with spaces/wrapper' flutter`.
+fn override_argv(raw: &str) -> Vec<String> {
+    let raw = raw.trim();
+
+    if executable(Path::new(raw)) {
+        return vec![raw.to_string()];
+    }
+
+    shell_words::split(raw).unwrap_or_else(|_| vec![raw.to_string()])
+}
+
+/// Whether this project asks for a specific SDK through FVM.
+///
+/// Either of FVM's own two markers counts. `.fvmrc` is the current one and
+/// `.fvm/` is what older versions wrote (and what `fvm use` still fills with the
+/// `flutter_sdk` symlink), so a project set up by any FVM release is recognised
+/// by one of them.
+fn pins_fvm() -> bool {
+    Path::new(".fvmrc").exists() || Path::new(".fvm").exists()
+}
+
+/// `FVM` for FVM, `SDK` for Flutter itself, otherwise the wrapper's own name.
+///
+/// The column answers "what decides which SDK this is", so `asdf`, `mise` or
+/// `puro` is the useful answer for those and there is no list of them to keep:
+/// whatever `FRUN_FLUTTER` names is what gets shown.
+fn label_for(program: &str) -> String {
+    match base(program) {
+        "fvm" => "FVM".into(),
+        "flutter" => "SDK".into(),
+        other => other.to_string(),
+    }
+}
+
+/// The last path component, for a program that may have been given as a path.
+fn base(program: &str) -> &str {
+    program.rsplit('/').next().unwrap_or(program)
+}
+
+/// Where a program on `PATH` actually is.
+///
+/// A `PATH` walk and not `which`: this is two `stat`s against a spawn plus a
+/// pipe, and `which` is a shell builtin in some shells and a different program in
+/// others. `split_paths` is also the same resolution `Command` and
+/// `CommandBuilder` will do later, which is the point — the answer has to be the
+/// binary that will really run.
+fn which(program: &str) -> Option<PathBuf> {
+    // A program given as a path is not a `PATH` lookup at all.
+    if program.contains('/') {
+        let path = PathBuf::from(program);
+
+        return executable(&path).then_some(path);
+    }
+
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(program))
+        .find(|candidate| executable(candidate))
+}
+
+fn on_path(program: &str) -> bool {
+    which(program).is_some()
+}
+
+/// A file with an execute bit, which is what `PATH` resolution means.
+///
+/// The mode test matters: a directory called `flutter` on `PATH`, or a
+/// non-executable leftover, would otherwise resolve as the toolchain and every
+/// spawn after it would fail.
+fn executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// Run a Flutter subcommand through whichever toolchain this machine has.
+fn flutter(args: &[&str], limit: Duration) -> Option<String> {
+    let argv = toolchain().argv(args);
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+
+    run(argv[0], &argv[1..], limit)
+}
+
+// ============================================================
 // SDK versions
 // ============================================================
 
 /// Framework and Dart versions, from the SDK's own manifest.
 ///
-/// `fvm flutter --version --machine` reports the same two values and costs 3-4
+/// `flutter --version --machine` reports the same two values and costs 3-4
 /// seconds because it boots the Dart VM. `bin/cache/flutter.version.json` is a
 /// plain file that is already on disk. The shell implementation worked this out
 /// and this is the same conclusion.
 pub fn sdk_versions() -> Option<(String, String)> {
-    let manifest = fvm_sdk()?.join("bin/cache/flutter.version.json");
+    let manifest = sdk_root()?.join("bin/cache/flutter.version.json");
     let json: Value = serde_json::from_str(&std::fs::read_to_string(manifest).ok()?).ok()?;
 
     let flutter = json
@@ -244,9 +488,13 @@ pub fn sdk_versions() -> Option<(String, String)> {
     Some((flutter, dart))
 }
 
-/// Slow path, for a project FVM has not materialised an SDK for yet.
+/// Slow path, for an SDK whose manifest this cannot find on disk.
+///
+/// Reached when FVM has not materialised the pinned version yet, and when the
+/// toolchain is a wrapper whose own location says nothing about where the SDK
+/// ended up. Asking Flutter always works; it just costs a Dart VM.
 pub fn sdk_versions_slow() -> Option<(String, String)> {
-    let raw = run("fvm", &["flutter", "--version", "--machine"], SLOW)?;
+    let raw = flutter(&["--version", "--machine"], SLOW)?;
 
     // Flutter prepends its own notices to this, so take the JSON object rather
     // than assuming the output starts with one.
@@ -264,6 +512,53 @@ pub fn sdk_versions_slow() -> Option<(String, String)> {
             .unwrap_or("-")
             .to_string(),
     ))
+}
+
+/// Where the SDK that will actually build this project lives.
+///
+/// Two shapes, because the question is two different questions. Under FVM the
+/// SDK is a version in a cache that the project names, and the binary on `PATH`
+/// is a wrapper that has nothing to do with it. Without FVM the binary *is* the
+/// SDK's own, so its path is the answer.
+///
+/// Dispatching on the resolved toolchain rather than probing both is what keeps
+/// the header honest: a machine can easily have `fvm` *and* a `flutter` on
+/// `PATH`, and reporting the version of whichever was found first would put a
+/// version in the header that the build never uses.
+fn sdk_root() -> Option<PathBuf> {
+    if toolchain().fvm {
+        fvm_sdk()
+    } else {
+        path_sdk()
+    }
+}
+
+/// The SDK behind a `flutter` that is called directly.
+///
+/// `<sdk>/bin/flutter` is the layout of every install that is not a version
+/// manager — a git clone, a tarball, Homebrew's cask, asdf's shim directory — so
+/// the root is two components up from the binary.
+///
+/// `canonicalize` is what makes that true rather than usually true: Homebrew
+/// leaves a symlink in `/opt/homebrew/bin`, and two components up from *that* is
+/// `/opt/homebrew`, which has no `bin/cache` and would send every startup down
+/// the 3-4 second slow path.
+///
+/// A wrapper (`mise`, `puro`) cannot use this fast path: a different `flutter`
+/// may also be on `PATH`, but its manifest says nothing about the SDK selected by
+/// the wrapper. Returning `None` sends wrappers through `sdk_versions_slow`,
+/// which asks the exact command that will build the project.
+fn path_sdk() -> Option<PathBuf> {
+    let program = &toolchain().program;
+
+    if base(program) != "flutter" {
+        return None;
+    }
+
+    let exe = std::fs::canonicalize(which(program.as_str())?).ok()?;
+
+    // <sdk>/bin/flutter → <sdk>
+    Some(exe.parent()?.parent()?.to_path_buf())
 }
 
 /// Resolve the SDK this project pins.
@@ -388,7 +683,7 @@ impl Device {
     ///
     /// **What this exists to avoid is a second discovery.** The first version handed
     /// over the id alone and let the new process resolve it against its own scan,
-    /// which meant `fvm flutter devices --machine` — six seconds of Dart VM startup —
+    /// which meant `flutter devices --machine` — six seconds of Dart VM startup —
     /// before a build that needed none of it. The spawning tab already knows the row;
     /// the point of a handoff is that the answer travels with the question.
     ///
@@ -465,13 +760,12 @@ impl Device {
     }
 }
 
-/// `fvm flutter devices --machine`, with the fields the shell version threw
-/// away.
+/// `flutter devices --machine`, with the fields the shell version threw away.
 ///
 /// Returns `Err` only when the command itself failed, which DESIGN.md 4 treats
 /// as fatal. An empty list is a successful answer of "nothing", not an error.
 pub fn devices(last_used: &str) -> Result<Vec<Device>, String> {
-    let raw = run("fvm", &["flutter", "devices", "--machine"], SLOW)
+    let raw = flutter(&["devices", "--machine"], SLOW)
         .ok_or_else(|| "Failed to detect Flutter devices".to_string())?;
 
     let start = raw

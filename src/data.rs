@@ -45,7 +45,7 @@ pub enum State {
     MultipleDevices,
     /// 5. Exactly one; no picker is shown.
     SingleDevice,
-    /// 6. `fvm flutter run` is building.
+    /// 6. `flutter run` is building.
     Building,
     /// 7. The build died before an interactive session opened.
     BuildFailed,
@@ -319,7 +319,7 @@ impl Platform {
 pub enum StageKey {
     /// Opened when the pty spawns, before Flutter has said anything.
     ///
-    /// Covers `fvm` resolving the pinned SDK, the Dart VM booting flutter_tools,
+    /// Covers the toolchain resolving the SDK, the Dart VM booting flutter_tools,
     /// and flutter_tools starting up. Nothing in Flutter's output brackets this
     /// span — its first line is what *ends* it — so without a row opened by frun
     /// itself these seconds have no indicator at all.
@@ -639,6 +639,15 @@ pub struct App {
     pub dart: String,
     pub cwd: String,
 
+    /// How Flutter is reached on this machine, for the `Runtime` column (3.1)
+    /// and the command the `DETECTING` screen says it is running.
+    ///
+    /// Carried on the App rather than read from `probe` at render time so that
+    /// mock frames stay deterministic: `--dump` is how layout is verified, and a
+    /// frame that says `FVM` on one machine and `SDK` on another cannot be
+    /// compared against anything.
+    pub toolchain: probe::Toolchain,
+
     // Devices.
     pub devices: Vec<Device>,
     pub selected_device: usize,
@@ -772,6 +781,7 @@ impl App {
         app.flutter = project.flutter;
         app.dart = project.dart;
         app.cwd = project.cwd;
+        app.toolchain = probe::toolchain().clone();
         app.live = true;
         app.state = State::Detecting;
 
@@ -789,6 +799,11 @@ impl App {
             flutter: "-".into(),
             dart: "-".into(),
             cwd: "~".into(),
+
+            // FVM, because the mock frames were captured against it and
+            // `App::live` overwrites this with the real answer. Nothing here
+            // touches the machine.
+            toolchain: probe::Toolchain::fvm(),
 
             devices: Vec::new(),
             selected_device: 0,
@@ -919,7 +934,7 @@ impl App {
     /// Whether some *other* run holds this device (8.4).
     ///
     /// **The exclusion is what makes this readable rather than merely true.**
-    /// `probe::busy` reads the process table, and this tab's own `fvm flutter run -d`
+    /// `probe::busy` reads the process table, and this tab's own `flutter run -d`
     /// is in it — so without the second half, the device you are running on would
     /// wear ` in use ` in your own switch list, next to ` running `, and `⏎ Keep`
     /// would refuse the row it exists to offer. The target is compared rather than a
@@ -1558,7 +1573,7 @@ fn mock_stages(state: State) -> Vec<Stage> {
     // the parser now guarantees and the mock has to show the same shape or the
     // dumps verify a layout the live flow cannot produce.
     //
-    // `Starting Flutter` is charged the startup gap: fvm, the Dart VM and
+    // `Starting Flutter` is charged the startup gap: the toolchain, the Dart VM and
     // flutter_tools, which is the span no Flutter output brackets.
     match state {
         // iOS: CocoaPods then Xcode. Gradle never appears here.

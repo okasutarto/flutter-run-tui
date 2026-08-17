@@ -186,7 +186,10 @@ fn stats(frame: &mut Frame, area: Rect, app: &App) {
         (
             vec![
                 text("Runtime ", theme::MUTED),
-                strong("(FVM)", theme::PURPLE),
+                // `(FVM)`, `(SDK)`, or the wrapper's own name. The column says
+                // what decides which SDK this is, which is not the same question
+                // as the two versions beside it.
+                strong(format!("({})", app.toolchain.label()), theme::PURPLE),
             ],
             2,
         ),
@@ -241,7 +244,7 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
             text(app.flutter.as_str(), theme::TEXT),
             text("  Dart ", theme::MUTED),
             text(app.dart.as_str(), theme::TEXT),
-            text("  FVM", theme::MUTED),
+            text(format!("  {}", app.toolchain.label()), theme::MUTED),
         ],
     );
 

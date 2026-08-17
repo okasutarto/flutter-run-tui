@@ -165,7 +165,13 @@ fn detecting(frame: &mut Frame, area: Rect, app: &App) {
             text("  Detecting Flutter devices...", theme::TEXT),
         ]),
         Line::default(),
-        Line::from(text("  fvm flutter devices --machine", theme::MUTED)),
+        // The command that is actually running, not a fixed string that used to
+        // be one: without FVM this is `flutter devices --machine`, and a screen
+        // naming a command the machine cannot run is worse than naming none.
+        Line::from(text(
+            format!("  {}", app.toolchain.display(&["devices", "--machine"])),
+            theme::MUTED,
+        )),
     ];
 
     frame.render_widget(Paragraph::new(lines), area);

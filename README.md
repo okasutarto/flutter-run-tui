@@ -3,12 +3,12 @@
 
   # flutter-run-tui
 
-  *A terminal UI for `fvm flutter run` — device picker, build stages and app logs in one frame*
+  *A terminal UI for `flutter run` — device picker, build stages and app logs in one frame*
 
   ![Rust](https://img.shields.io/badge/Rust-2021-000000?logo=rust&style=flat-square)
   ![ratatui](https://img.shields.io/badge/ratatui-0.30.2-38bdf8?style=flat-square)
   ![Platform](https://img.shields.io/badge/platform-macOS-71717a?style=flat-square)
-  ![Flutter](https://img.shields.io/badge/Flutter-via%20FVM-02569B?logo=flutter&style=flat-square)
+  ![Flutter](https://img.shields.io/badge/Flutter-FVM%20or%20plain%20SDK-02569B?logo=flutter&style=flat-square)
 
   [Features](#features) • [Requirements](#requirements) • [Install](#install) • [Usage](#usage) • [Keyboard](#keyboard) • [Screens](#screens) • [Development](#development)
 </div>
@@ -23,7 +23,7 @@
 
 ## Features
 
-- **A picker that opens in under half a second.** `adb`, `emulator -list-avds` and `simctl` answer the same question in ~200ms that `fvm flutter devices --machine` answers in 6-9s. The list opens on theirs; Flutter's lands behind it as a refresh and fills in the rows only it knows about (macOS, Chrome, physical iPhones).
+- **A picker that opens in under half a second.** `adb`, `emulator -list-avds` and `simctl` answer the same question in ~200ms that `flutter devices --machine` answers in 6-9s. The list opens on theirs; Flutter's lands behind it as a refresh and fills in the rows only it knows about (macOS, Chrome, physical iPhones).
 - **One merged device list.** Running devices and bootable targets in a single list, ordered by what is running, what another `flutter run` is already using, and what you used last. `active`, `in use`, `last used` and `running` are per-row chips, re-earned every 4 seconds while the list is on screen.
 - **Boot from the picker.** A shut-down simulator or AVD is a row you can press `Enter` on: `simctl bootstatus -b` for iOS, `sys.boot_completed` polling for Android with a 180s cap, an elapsed clock while it happens, then straight into the build.
 - **Build stages with honest timings.** Rows are opened by what Flutter actually prints, per platform, and one row is always spinning: a row is closed by its successor arriving, at the same instant it is charged. Settled numbers never move afterwards.
@@ -41,7 +41,7 @@
 | | |
 | :--- | :--- |
 | **Rust** | stable toolchain, 2021 edition |
-| **FVM** | `fvm` on `PATH` — every Flutter call goes through it (`fvm flutter run`) |
+| **Flutter** | `flutter` on `PATH`, or `fvm` for a project that pins a version. Detected, not configured — see [Toolchain](#toolchain) |
 | **Android** | `adb` and `emulator` for phones and AVDs |
 | **iOS** | Xcode command line tools for `xcrun simctl` |
 | **Font** | A Nerd Font (JetBrains Mono Nerd Font, Fira Code Nerd Font). Platform glyphs and pill caps are Nerd Font code points, chosen because emoji are double-width and break the column grid |
@@ -97,11 +97,42 @@ Exit codes are part of the interface, so a script wrapping `frun` can tell the c
 | `130` | the pick was cancelled with `Esc` |
 | *Flutter's own* | the build failed |
 
+### Toolchain
+
+FVM is a wrapper: `fvm flutter run` resolves the version a project pins and execs that SDK's own `flutter`. So the only thing that differs on a machine without FVM is two words at the front of an argv, and frun works that out for itself, once per process, from the project and your `PATH`:
+
+| Order | Rule | Runtime |
+| ---: | :--- | :--- |
+| 1 | `FRUN_FLUTTER` is set | whatever it names |
+| 2 | the project has `.fvmrc` or `.fvm/` **and** `fvm` is on `PATH` | `FVM` |
+| 3 | `flutter` is on `PATH` | `SDK` |
+| 4 | only `fvm` is on `PATH` | `FVM` |
+
+Both halves of rule 2 are required. A checked-in `.fvmrc` on a machine without FVM describes someone else's setup, so frun falls back to your own `flutter` rather than failing every spawn on `fvm: command not found`.
+
+Whatever it picks is on screen: the ProjectCard's `Runtime` column reads `(FVM)` or `(SDK)`, the `DETECTING` screen names the command it is running, and `frun --probe` prints the decision first.
+
+```bash
+frun --probe | head -1
+# runtime   SDK  flutter run -d <id>
+```
+
+The same decision drives the SDK version in the header. Under FVM that is `bin/cache/flutter.version.json` inside the pinned version; otherwise it is the one next to the `flutter` on your `PATH`, found by resolving the symlink Homebrew and asdf leave behind. Either way it is a file read, not a 3-4 second `flutter --version`.
+
+For a version manager frun does not know, name the command and it will be used verbatim:
+
+```bash
+FRUN_FLUTTER='mise exec flutter --' frun     # Runtime (mise)
+FRUN_FLUTTER=puro                  frun      # Runtime (puro)
+FRUN_FLUTTER=/opt/flutter/bin/flutter frun   # Runtime (SDK)
+```
+
 ### Environment
 
 | Variable | Effect |
 | :--- | :--- |
 | `FRUN_NO_QUERY` | Skips the two terminal capability queries. Use it when the logo probe or the keyboard-protocol probe hangs (a bare pty, some task runners): both wait on a reply from stdin, and a terminal that never answers costs 2s each and can leave stdin unreadable. The logo falls back to halfblocks and `⇧Enter` is left working but unadvertised |
+| `FRUN_FLUTTER` | The Flutter command, parsed as an executable path or shell words, outranking every rule in [Toolchain](#toolchain). Executable paths may contain spaces. Passed to a `⇧Enter` tab so both resolve the same SDK |
 | `FRUN_DEVICE` | The handoff a `⇧Enter` tab is started with: one tab-separated device row. Set by frun, not by hand |
 | `FVM_CACHE_PATH` | Honoured when resolving the pinned SDK, and passed to a new tab so both resolve the same one |
 | `TMUX` | When set, `⇧Enter` uses `tmux new-window`; otherwise Ghostty via `osascript` |
@@ -145,7 +176,7 @@ Sixteen devices in one list, opened on the fast path rather than waiting on Flut
 
 <img src="assets/screens/02-building.png" alt="the build phase tracker, stage two of four" width="660">
 
-`Starting Flutter` closed at 4.6s and `Building with Xcode` is spinning at 17.6s, with `Stage 2/4` and the bar keyed to the platform's own count. `Starting Flutter` is frun's own row: it covers `fvm` resolving the SDK, the Dart VM booting and flutter_tools starting, which is 3-8s that Flutter announces nowhere. `Sync -` because nothing has been reloaded yet.
+`Starting Flutter` closed at 4.6s and `Building with Xcode` is spinning at 17.6s, with `Stage 2/4` and the bar keyed to the platform's own count. `Starting Flutter` is frun's own row: it covers the toolchain resolving the SDK, the Dart VM booting and flutter_tools starting, which is 3-8s that Flutter announces nowhere. `Sync -` because nothing has been reloaded yet.
 
 ### Switch device
 

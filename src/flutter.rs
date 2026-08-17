@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
 use crate::data::{App, Level, Msg, Stage, StageKey, State};
+use crate::probe;
 
 /// How long Flutter gets to acknowledge an `r`/`R` before the key is presumed
 /// dropped.
@@ -45,7 +46,8 @@ pub const ACK_TIMEOUT: Duration = Duration::from_secs(4);
 // Session
 // ============================================================
 
-/// A running `fvm flutter run`.
+/// A running `flutter run`, through whatever toolchain `probe::toolchain`
+/// resolved.
 pub struct Session {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     writer: Box<dyn Write + Send>,
@@ -94,18 +96,28 @@ impl Session {
             })
             .map_err(|e| format!("could not open a pty: {e}"))?;
 
-        let mut cmd = CommandBuilder::new("fvm");
-        cmd.args(["flutter", "run", "-d", device]);
+        // Not `fvm flutter run` any more. The toolchain is resolved once per
+        // process from the project and the `PATH`, so this is `fvm flutter run`
+        // on a machine that pins a version through FVM and `flutter run` on one
+        // that does not — and the version the header reports came from the same
+        // decision.
+        let toolchain = probe::toolchain();
+        let argv = toolchain.argv(&["run", "-d", device]);
+
+        let mut cmd = CommandBuilder::new(&argv[0]);
+        cmd.args(&argv[1..]);
         cmd.args(extra);
 
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
         }
 
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| format!("could not start fvm flutter run: {e}"))?;
+        let child = pair.slave.spawn_command(cmd).map_err(|e| {
+            format!(
+                "could not start {}: {e}",
+                toolchain.display(&["run", "-d", device])
+            )
+        })?;
 
         let mut reader = pair
             .master
@@ -526,7 +538,7 @@ pub fn feed(app: &mut App, raw: &str) {
 fn stage_line(app: &mut App, text: &str) -> bool {
     if text.starts_with("Launching ") && text.contains(".dart") {
         // Closes `Starting Flutter`, which was opened when the pty spawned and so
-        // measures fvm, the Dart VM boot and flutter_tools startup — the one span
+        // measures the toolchain, the Dart VM boot and flutter_tools startup — one span
         // no Flutter output brackets.
         // Not labelled `Launching lib/main.dart`, which is what Flutter prints
         // here. That is the announcement, and this row is the span that follows

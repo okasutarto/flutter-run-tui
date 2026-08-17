@@ -1,4 +1,5 @@
-//! frun — a TUI front end for `fvm flutter run`.
+//! frun — a TUI front end for `flutter run`, through FVM or not (see
+//! `probe::toolchain`).
 //!
 //!   frun-tui [flutter args...]       run, in the current Flutter project
 //!   frun-tui --dump <state> [WxH]    render one mock frame to stdout
@@ -199,12 +200,23 @@ fn probe_report() {
             Some((flutter, dart)) => {
                 project.flutter = flutter;
                 project.dart = dart;
-                "fvm flutter --version --machine (slow path)"
+                "--version --machine (slow path)"
             }
 
             None => "unresolved",
         },
     };
+
+    // First line, because everything under it depends on it and it is the field
+    // most likely to be wrong on a machine this was not developed on: the SDK
+    // versions, the device scan and the build all go through this command.
+    let toolchain = probe::toolchain();
+
+    println!(
+        "runtime   {}  {}",
+        toolchain.label(),
+        toolchain.display(&["run", "-d", "<id>"])
+    );
 
     println!("project   {}  {}", project.name, project.version);
     println!("branch    {}  ({} changed)", project.branch, project.dirty);
@@ -325,10 +337,11 @@ fn live(extra: Vec<String>) -> io::Result<i32> {
         }
 
         None => {
-            // FVM has not materialised an SDK for this project yet, so the
-            // versions have to come from the Flutter tool, which costs 3-4
-            // seconds of Dart VM startup. Off the main thread, so the card fills
-            // in when it lands rather than holding up device detection.
+            // No manifest on disk — FVM has not materialised the pinned version
+            // yet, or the toolchain is a wrapper whose own path does not lead to
+            // the SDK. So the versions have to come from the Flutter tool, which
+            // costs 3-4 seconds of Dart VM startup. Off the main thread, so the
+            // card fills in when it lands rather than holding up detection.
             let versions = tx.clone();
 
             std::thread::spawn(move || {
@@ -361,7 +374,7 @@ fn detect(tx: &Sender<Msg>) {
         let _ = tx.send(Msg::Busy(probe::busy()));
 
         // **The picker opens on this, not on the scan below.** `adb`, `simctl` and
-        // `emulator -list-avds` answer the same question in ~150ms that `fvm flutter
+        // `emulator -list-avds` answer the same question in ~150ms that `flutter
         // devices --machine` answers in 6113ms, and every AVD and simulator row in the
         // list comes from them either way — the six seconds were being spent to learn
         // about macOS, Chrome and a physical iPhone, none of which is the device you
@@ -393,7 +406,7 @@ const RECHECK: Duration = Duration::from_secs(4);
 
 /// Recheck the cached list, without paying for discovery again.
 ///
-/// `detect()` cannot be reused here. It runs `fvm flutter devices --machine`, which
+/// `detect()` cannot be reused here. It runs `flutter devices --machine`, which
 /// is six seconds of Dart VM startup on this machine against 145ms for `adb devices`
 /// plus `simctl list -j`, and six seconds is long enough that the list would settle
 /// after the user had already chosen a row from it.
@@ -927,7 +940,7 @@ fn quick_answered(app: &mut App, ctx: &mut Ctx, targets: Vec<probe::Device>) {
 ///
 /// **Read before the first frame, and acted on there.** The earlier version resolved
 /// the handoff inside `devices_answered`, which meant the new tab sat on `DETECTING`
-/// through its own `fvm flutter devices --machine` — six seconds — before starting a
+/// through its own `flutter devices --machine` — six seconds — before starting a
 /// build that never needed the answer. `flutter run -d <id>` resolves its own device,
 /// and everything the frame shows in the meantime came over with the id.
 ///
@@ -1602,18 +1615,24 @@ fn new_tab(device: &probe::Device, extra: &[String]) -> Result<(), String> {
 /// shell, so no `.zshrc` runs and the environment is the one the app itself was
 /// launched with: measured on this machine, `PATH` is
 /// `/usr/bin:/bin:/usr/sbin:/sbin:/Applications/Ghostty.app/Contents/MacOS` — where
-/// `fvm`, `flutter`, `adb` and `emulator` are all invisible. So the new tab would
-/// have failed on its first command with `fvm` not found, and it would have looked
-/// like frun's bug rather than a missing variable. This process's `PATH` is the one
-/// that works, because it came from the shell that started it.
+/// `flutter`, `fvm`, `adb` and `emulator` are all invisible. So the new tab would
+/// have failed on its first command with `flutter` not found, and it would have
+/// looked like frun's bug rather than a missing variable. This process's `PATH` is
+/// the one that works, because it came from the shell that started it.
 ///
-/// `FVM_CACHE_PATH` for the same reason and only when set: `probe::fvm_cache` honours
-/// it, so a non-default cache would otherwise resolve differently in the two tabs.
+/// It is also what the toolchain is resolved against, so a `PATH` that reaches
+/// neither binary is not merely a failed spawn: the new tab would decide it has no
+/// FVM and fall back to a `flutter` that is equally absent.
+///
+/// `FVM_CACHE_PATH` and `FRUN_FLUTTER` for the same reason and only when set:
+/// `probe::fvm_cache` honours the first and `probe::toolchain` the second, so
+/// without them a non-default cache or an explicit toolchain would resolve
+/// differently in the two tabs — the new one silently building with another SDK.
 /// Nothing else is copied. This is a handoff, not a session transfer.
 fn handoff_env(device: &probe::Device) -> Vec<String> {
     let mut env = vec![format!("{HANDOFF}={}", device.to_handoff())];
 
-    for name in ["PATH", "FVM_CACHE_PATH"] {
+    for name in ["PATH", "FVM_CACHE_PATH", "FRUN_FLUTTER"] {
         if let Some(value) = std::env::var_os(name) {
             env.push(format!("{name}={}", value.to_string_lossy()));
         }
