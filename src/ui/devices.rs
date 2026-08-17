@@ -397,7 +397,7 @@ fn draw_row(
             Span::raw("  ")
         },
         // Nerd Font, single-width. Emoji would be two cells and break the grid.
-        strong(device.platform.glyph(), theme::CYAN),
+        strong(device.platform.glyph(), theme::PURPLE),
         Span::raw("  "),
         if selected {
             strong(device.name.as_str(), theme::TEXT)
@@ -430,7 +430,7 @@ fn draw_row(
 
     if show_id {
         right.push(Span::raw("  "));
-        right.push(text(id, theme::BORDER));
+        right.push(text(id, theme::AMBER));
     }
 
     if show_label {

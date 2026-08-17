@@ -844,10 +844,18 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
                 return;
             }
 
-            app.log(
-                Level::Err,
-                &format!("{} did not start — {reason}", app.boot_name),
-            );
+            let summary = format!("{} did not start — {reason}", app.boot_name);
+
+            app.log(Level::Err, &summary);
+            app.exit_code = 1;
+            app.failure = Some(data::Failure {
+                summary,
+                location: None,
+                context: Vec::new(),
+                caret_col: 0,
+                note: "failed while booting device".into(),
+                output: Vec::new(),
+            });
 
             app.goto(State::BuildFailed);
         }
@@ -1491,12 +1499,21 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
     stop_session(ctx);
 
     if switching {
-        release_target(app);
+        commit_switch(app, device.clone());
     }
 
     start(app, ctx, device);
 
     false
+}
+
+/// A confirmed switch owns the target immediately, even when that target still
+/// has to boot. Otherwise a failed boot leaves both Device Info and `last used`
+/// describing the outgoing device.
+fn commit_switch(app: &mut App, device: probe::Device) {
+    // Read the outgoing target before `choose` replaces it.
+    release_target(app);
+    app.choose(device);
 }
 
 /// Refuse a device another run already holds, and say so (8.4).
@@ -2215,6 +2232,79 @@ mod tests {
         adopt(&mut rows, fresh);
 
         assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn switching_commits_a_bootable_target_before_boot_finishes() {
+        let remembered = probe::last_device();
+        let pixel_id = if remembered.is_empty() {
+            "Pixel_10_Pro_XL".to_string()
+        } else {
+            remembered.clone()
+        };
+
+        let iphone = probe::Device {
+            id: "iphone-17-pro-max".into(),
+            name: "iPhone 17 Pro Max".into(),
+            platform: probe::Platform::Ios,
+            target_platform: "ios".into(),
+            sdk: "iOS-26-5".into(),
+            virtual_device: false,
+            last_used: true,
+            boot: None,
+        };
+        let pixel = probe::Device {
+            id: pixel_id,
+            name: "Pixel 10 Pro XL".into(),
+            platform: probe::Platform::Android,
+            target_platform: String::new(),
+            sdk: String::new(),
+            virtual_device: true,
+            last_used: false,
+            boot: Some(probe::Boot::Avd("Pixel_10_Pro_XL".into())),
+        };
+
+        let mut app = App::new(State::BuildFailed);
+        app.target = Some(iphone.clone());
+        app.devices = vec![iphone, pixel.clone()];
+
+        commit_switch(&mut app, pixel);
+        app.boot_name = "Pixel 10 Pro XL".into();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut ctx = Ctx {
+            rx,
+            tx,
+            session: None,
+            extra: Vec::new(),
+            rechecked: Instant::now(),
+            git_rechecked: Instant::now(),
+            done: false,
+        };
+
+        handle(
+            &mut app,
+            &mut ctx,
+            Msg::Booted(Err("emulator stopped while booting".into())),
+        );
+
+        let target = app.target.as_ref().map(|device| device.name.clone());
+        let failure = app.failure.as_ref().map(|failure| failure.summary.clone());
+        let remembered_row = app
+            .devices
+            .iter()
+            .find(|device| device.name == "Pixel 10 Pro XL")
+            .is_some_and(|device| device.last_used);
+
+        // Do not let a unit test change the user's remembered device.
+        probe::remember_device(&remembered);
+
+        assert_eq!(target.as_deref(), Some("Pixel 10 Pro XL"));
+        assert!(remembered_row, "the new target owns the last-used badge");
+        assert!(
+            failure.is_some_and(|summary| summary.contains("Pixel 10 Pro XL")),
+            "the failure card must describe the new target"
+        );
     }
 
     /// A single quote in a path or a flag must not end the quoting.

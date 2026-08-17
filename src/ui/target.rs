@@ -129,7 +129,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     lines.push(field(
         w,
         "Platform ID",
-        vec![strong(platform_id(app), theme::CYAN)],
+        vec![strong(platform_id(app), theme::AMBER)],
     ));
 
     if plan.separators {
