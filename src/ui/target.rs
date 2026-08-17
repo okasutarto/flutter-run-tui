@@ -13,7 +13,7 @@ use ratatui::Frame;
 use crate::budget::Budget;
 use crate::data::App;
 use crate::theme;
-use crate::widgets::{card, field, pill, separator, spread, strong, text};
+use crate::widgets::{card, elide, field, pill, separator, spread, strong, text};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     if app.target.is_none() {
@@ -116,10 +116,36 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     // two adjacent rows would then look like one value split across them. Brightest
     // text with no colour is also how the device list draws the name of the selected
     // row, so the same fact is styled the same way in both places.
+    // The kind rides on the name rather than owning a row.
+    //
+    // It was `Type   Simulator / Emulator`, and a row plus its rule for one word
+    // that the device list says with a chip — ` virtual ` — and that `emulator-5554`
+    // on the row below implies. Merged, not deleted: on hardware the distinction is
+    // real and no other field carries it, since `Platform ID` reads `ios (<udid>)`
+    // for a physical iPhone and a booted simulator alike.
+    //
+    // Name then kind, which is the grammar of a device row in the picker: the
+    // brightest text is what the thing is called, and the qualifier trails it.
+    let kind = app.target_kind();
+
+    // Elided to whatever the kind leaves it, because `spread` does not wrap and does
+    // not shorten: a row wider than the card is clipped by ratatui with no error at
+    // all (7.5), and that is how this card lost fields before. `Simulator / Emulator`
+    // is twenty columns, so at `MIN_W` an AVD name of twenty-one — `Pixel_9_Pro_XL_
+    // API_35` is exactly that — used to be the difference between a name and silence.
+    //
+    // A floor of eight, since a name elided below that says nothing worth the row.
+    let room = (w as usize)
+        .saturating_sub(crate::widgets::width("Device Target") + 5 + crate::widgets::width(kind) + 1);
+
     let mut lines = vec![field(
         w,
         "Device Target",
-        vec![strong(device.name.as_str(), theme::TEXT)],
+        vec![
+            strong(elide(&device.name, room.max(8)), theme::TEXT),
+            text("  ·  ", theme::MUTED),
+            strong(kind, theme::PURPLE),
+        ],
     )];
 
     if plan.separators {
@@ -155,16 +181,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         vec![text(os_version(app), theme::TEXT)],
     ));
 
-    if plan.separators {
-        lines.push(separator(w));
-    }
-
-    lines.push(field(
-        w,
-        "Type",
-        vec![strong(app.target_kind(), theme::PURPLE)],
-    ));
-
+    // No `Type` row. It is the tail of `Device Target` now — see there.
+    //
     // No control row. `[^D] Switch` closed this card for a while — a blank and a
     // right-aligned keycap — and it is on the footer now, in the five states where
     // the key does something (3.7).

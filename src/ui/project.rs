@@ -117,14 +117,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
         n => pill(format!(" ● {n} changed "), theme::AMBER),
     };
 
+    // Name and version on one row, where they used to be two.
+    //
+    // They are one fact — which build of which app this is — and the pair is how
+    // every other tool prints it: `cwclub 2.1.0+32` is the `name` and `version` keys
+    // of the same pubspec, read from the same two lines of the same file. A row and
+    // its rule for the second half of that was the most expensive punctuation on the
+    // card, and rows here are what the log window is paid out of.
+    let mut project = pill(format!(" {} ", app.project), theme::CYAN);
+
+    project.push(text(format!("  {}", app.version), theme::TEXT));
+
     let mut lines = vec![
-        field(
-            w,
-            "Project",
-            pill(format!(" {} ", app.project), theme::CYAN),
-        ),
-        maybe_sep(w, plan),
-        field(w, "Version", vec![text(app.version.as_str(), theme::TEXT)]),
+        field(w, "Project", project),
         maybe_sep(w, plan),
         field(w, "Branch", pill(branch, theme::AMBER)),
         maybe_sep(w, plan),
@@ -138,7 +143,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
     // It has to be its own Rect rather than another entry in `lines`, because a
     // three-column row cannot be expressed as one Line: three groups spaced
     // across a width need three areas.
-    let meta_h = if plan.separators { 7 } else { 4 };
+    let meta_h = if plan.separators { 5 } else { 3 };
 
     let rows = Layout::vertical([
         Constraint::Length(meta_h),

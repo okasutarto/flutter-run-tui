@@ -436,6 +436,36 @@ mod tests {
         }
     }
 
+    /// A device name too long for the row is elided, not clipped by the frame.
+    ///
+    /// The name shares its row with the kind now, which used to have one of its own,
+    /// and `spread` neither wraps nor shortens: past the card width ratatui drops the
+    /// overflow with no error at all (7.5). At `MIN_W` the twenty columns of
+    /// `Simulator / Emulator` leave a real AVD name no room to spare.
+    #[test]
+    fn a_long_device_name_is_elided_rather_than_clipped() {
+        let mut app = App::new(State::Running);
+
+        if let Some(device) = app.target.as_mut() {
+            device.name = "Pixel_9_Pro_XL_API_35_extension".into();
+        }
+
+        let frame = dump(&mut app, crate::budget::MIN_W, 40);
+
+        let row = frame
+            .lines()
+            .map(strip_sgr)
+            .find(|line| line.contains("Device Target"))
+            .expect("the target card draws a name row");
+
+        assert!(row.contains('…'), "the name has to be shortened: {row}");
+        assert!(
+            row.contains("Simulator / Emulator"),
+            "and the kind has to survive it: {row}"
+        );
+        assert_eq!(width(&row), crate::budget::MIN_W as usize);
+    }
+
     fn strip_sgr(s: &str) -> String {
         let mut out = String::new();
         let mut chars = s.chars();

@@ -546,6 +546,14 @@ fn stage_line(app: &mut App, text: &str) -> bool {
         // Naming a row after the line that opens it made an 18.7s figure look like
         // a fault rather than like the toolchain working.
         app.start_stage(StageKey::Launch, "Preparing build".into());
+
+        // **The build clock starts here, not at the spawn.** After `start_stage` has
+        // closed `Starting Flutter` and charged it, so the two figures partition the
+        // wait rather than one containing the other: startup runs first, the build
+        // runs after it, and `Build time` is then the number Flutter's own phase
+        // figures can be checked against.
+        app.build_started = Instant::now();
+
         return true;
     }
 
@@ -1199,6 +1207,44 @@ mod tests {
 
             previous = fraction;
         }
+    }
+
+    /// The two clocks run in sequence, never together.
+    ///
+    /// The scar this guards: `Build time` used to start at the spawn, so it contained
+    /// the startup span rather than following it, and the header's total could not be
+    /// checked against any figure Flutter prints.
+    #[test]
+    fn startup_and_build_never_count_the_same_seconds() {
+        let mut app = App::new(State::Building);
+        app.begin_build();
+
+        std::thread::sleep(Duration::from_millis(30));
+
+        // Startup owns the wait until Flutter speaks, so there is no build to time.
+        assert_eq!(app.build_clock(), "-");
+        assert_ne!(app.startup_clock(), "-", "the startup clock has to be live");
+
+        feed(&mut app, "Launching lib/main.dart on iPhone 17 Pro in debug mode...");
+
+        let startup = app.startup_clock();
+
+        assert_ne!(startup, "-", "the startup figure is charged when it closes");
+        assert_ne!(app.build_clock(), "-", "the build clock takes over");
+
+        std::thread::sleep(Duration::from_millis(30));
+
+        assert_eq!(app.startup_clock(), startup, "a closed figure cannot move");
+
+        // A build that dies before Flutter says anything spent all of it in startup,
+        // so there is no build time to report rather than a second copy of the same
+        // span.
+        let mut died = App::new(State::Building);
+        died.begin_build();
+        died.end_build();
+
+        assert_eq!(died.build_time, "-");
+        assert_ne!(died.startup_clock(), "-");
     }
 
     /// A build that skips a stage still ends complete.

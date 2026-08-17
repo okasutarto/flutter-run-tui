@@ -98,23 +98,45 @@ pub(super) fn status(app: &App) -> (&'static str, &'static str, ratatui::style::
     }
 }
 
-/// Build time and sync, as the card's title bar carries them.
+/// The build's figures, as the log card's first row carries them.
 ///
 /// Shared with the collapsed row for the same reason `status` is: the row inherits
-/// the card's right-hand group, so the two numbers keep both their wording and
-/// their horizontal position when the card goes.
+/// the card's right-hand group, so the numbers keep both their wording and their
+/// horizontal position when the card goes.
 ///
-/// And shared with the log card, which is where the pair lives for the whole of a
-/// run now that the tracker block is not on screen for one (3.4). Three call sites,
-/// one wording: the two figures are the same two figures wherever they surface, and
-/// a rename cannot reach one of them and miss the others.
+/// And shared with the log card, which is where the group lives for the whole of a
+/// run now that the tracker block is not on screen for one (3.4). Two call sites,
+/// one wording: the figures are the same figures wherever they surface, and a
+/// rename cannot reach one of them and miss the others.
+///
+/// **Not the full card's own title bar**, which is the one frame where the tracker
+/// is on screen holding `Starting Flutter` and `Syncing files` as rows. It carries
+/// `running_clock` instead — see there.
+///
+/// In clock order, because the figures are consecutive rather than nested:
+/// `Startup` runs from the spawn to Flutter's first line, `Build time` from there
+/// to the interactive session, and `Sync` is the last phase inside it. Exactly one
+/// of the first two is counting at any moment, so reading them left to right is
+/// reading the wait in the order it happened.
+/// Labels in `EMERALD`, values in `TEXT`. The row sits above a stream where every
+/// line opens with a timestamp and a level badge, so the words need a colour of their
+/// own to be found at a glance, while white keeps the figures readable as values.
+/// Emerald is the palette's settled-and-fine hue, which is what this summary names.
+///
+/// Three blanks between the groups, where a `│` rule in `BORDER` used to be. On a
+/// border row that rule read as part of the frame; on a content row it read as a
+/// table nobody asked for. Same three columns either way, so nothing reflows.
 pub(super) fn timings(app: &App) -> Vec<Span<'static>> {
     vec![
-        text("Build time ", theme::MUTED),
+        // Live while the toolchain boots, frozen once Flutter speaks. A dash first,
+        // because until the pty says something even the startup span is unmeasured.
+        text("Startup ", theme::EMERALD),
+        strong(app.startup_clock(), theme::TEXT),
         // Live while building, final once it is not. A build time that only
         // appears at the end tells you nothing during the wait that matters.
+        text("   Build time ", theme::EMERALD),
         strong(app.build_clock(), theme::TEXT),
-        text("   Sync ", theme::MUTED),
+        text("   Sync ", theme::EMERALD),
         strong(app.sync_time.clone(), theme::TEXT),
     ]
 }
@@ -127,11 +149,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
 
     let (_, title, color) = status(app);
 
-    let mut bar = vec![Span::raw(" ")];
-    bar.extend(timings(app));
-    bar.push(Span::raw(" "));
-
-    let block = card(title, color).title_top(Line::from(bar).right_aligned());
+    // **No figure on this border, deliberately.** Every number a build produces is a
+    // row of the tracker immediately below it — `Starting Flutter`, the platform
+    // phase, `Syncing files` — and the rows are measured open-to-open so they
+    // partition the build and sum to it. A total on the border was a second copy of
+    // that sum, and a `Startup` or `Sync` there was a second copy of one row.
+    //
+    // The group still exists for the two frames that have no rows to read: the
+    // collapsed row this card becomes, and the log card once the build is over. See
+    // `timings`.
+    let block = card(title, color);
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -297,7 +324,7 @@ fn stages(frame: &mut Frame, area: Rect, app: &App) {
 /// while one is still running.
 ///
 /// ```text
-/// ✔ BUILD FINISHED                                 Build time 20.2s   Sync 68ms
+/// ✔ BUILD FINISHED           Startup 3.6s   Build time 20.2s   Sync 68ms
 /// ```
 ///
 /// Reached by state rather than by size in the case that matters. Every row the

@@ -18,7 +18,7 @@
 <div align="center">
   <img src="assets/screens/03-running.png" alt="frun during a live run: project card, device card and the app log stream" width="760">
   <br>
-  <sub>A live run on an iPhone 17 Pro Max simulator. The tab titles itself, the build totals sit in the log card's title bar, and the footer is the cheatsheet.</sub>
+  <sub>A live run on an iPhone 17 Pro Max simulator. The tab titles itself, the build's timings sit on the log card's first row, and the footer is the cheatsheet.</sub>
 </div>
 
 ## Features
@@ -27,6 +27,8 @@
 - **One merged device list.** Running devices and bootable targets in a single list, ordered by what is running, what another `flutter run` is already using, and what you used last. `active`, `in use`, `last used` and `running` are per-row chips, re-earned every 4 seconds while the list is on screen.
 - **Boot from the picker.** A shut-down simulator or AVD is a row you can press `Enter` on: `simctl bootstatus -b` for iOS, `sys.boot_completed` polling for Android with a 180s cap, an elapsed clock while it happens, then straight into the build.
 - **Build stages with honest timings.** Rows are opened by what Flutter actually prints, per platform, and one row is always spinning: a row is closed by its successor arriving, at the same instant it is charged. Settled numbers never move afterwards.
+- **Two clocks, in sequence rather than nested.** `Startup` runs from the spawn to Flutter's first line — the toolchain hop, the Dart VM, flutter_tools and device resolution, measured at 3.2s of a 9.0s run and announced nowhere by Flutter. `Build time` starts from zero at that line, so it is the number Flutter's own Gradle and Xcode figures can be checked against. Exactly one of the two is counting at any moment.
+- **Every figure in one place per frame.** While the tracker is on screen its rows hold the timings and its border holds nothing; once the build is over the rows are gone and the log card's first row carries all three, with emerald labels and white values above a blank so they are found at a glance rather than read for. That row and its blank are charged in the layout budget rather than taken quietly out of the stream.
 - **A build failure you can read.** Exit code, which stage broke, and the code frame pulled from disk around the `file.dart:line:col` Dart reported — one line either side. `r` kills, reaps and respawns, keeping the previous log so the two runs can be compared.
 - **Hot reload that tells the truth.** Flutter drops keypresses while it is busy and says so only through a trace that never reaches stdout, so an unacknowledged `r` resolves as *dropped — press r again* instead of spinning forever.
 - **Switch device without leaving.** `^D` reopens the list over the live run, `Esc` costs nothing, and picking another row kills, reaps, shuts the outgoing virtual device down and rebuilds in the same terminal.
@@ -190,7 +192,9 @@ Sixteen devices in one list, opened on the fast path rather than waiting on Flut
 
 <img src="assets/screens/02-building.png" alt="the build phase tracker, stage two of four" width="660">
 
-`Starting Flutter` closed at 4.6s and `Building with Xcode` is spinning at 17.6s, with `Stage 2/4` and the bar keyed to the platform's own count. `Starting Flutter` is frun's own row: it covers the toolchain resolving the SDK, the Dart VM booting and flutter_tools starting, which is 3-8s that Flutter announces nowhere. `Sync -` because nothing has been reloaded yet.
+`Starting Flutter` closed at 4.6s and `Building with Xcode` is spinning at 17.6s, with `Stage 2/4` and the bar keyed to the platform's own count. `Starting Flutter` is frun's own row: it covers the toolchain resolving the SDK, the Dart VM booting and flutter_tools starting, which is 3-8s that Flutter announces nowhere.
+
+The card's border carries no figure at all. Every number a build produces is a row here, and the rows are measured open-to-open so they partition the build and sum to it — a total on the border was a second copy of that sum. The capture predates that, and shows the pair the border used to hold.
 
 ### Switch device
 
@@ -226,7 +230,7 @@ Twelve of them, each with a slug the harness can render on demand without a devi
 ```text
 cwclub 2.1.0+32  refactor/cwclub-new  ✔ clean                    Flutter 3.29.3  Dart 3.7.2  FVM
 ✔ iPhone 16 Pro  8A3F91C2-4D2E                                                          iOS-26-5
-✖ BUILD FAILED                                                      Build time 3.4s   Sync 240ms
+✖ BUILD FAILED                                       Startup 3.6s   Build time 3.4s   Sync 240ms
 ╭─ ✖ COMPILER ERROR ────────────────────────────────────────────────────────────── Exit code 1 ╮
 │                                                                                              │
 │ lib/main.dart:42:18: Error: The argument type 'int' can't be assigned to the parameter type  │
@@ -296,7 +300,7 @@ Two properties the diagram is drawn around. **A failure is only fatal before the
 
 ```bash
 cargo build --release
-cargo test --release            # 73 unit tests
+cargo test --release            # 77 unit tests, 6 integration
 cargo clippy --all-targets
 ```
 
@@ -323,33 +327,32 @@ state running   width 106
     20    15   separators, dense devices, cards collapsed
     24    19   separators, dense devices, cards collapsed
     29    24   separators, dense devices, cards collapsed
-    33    14   separators
-    37    12   full
-    40    15   full
-    45    20   full
-    50    25   full
-    56    31   full
-    62    37   full
-  full chrome = 25 rows   ·   floor = 12 rows
+    33    16   separators
+    37    16   full
+    40    19   full
+    45    24   full
+    50    29   full
+    56    35   full
+    62    41   full
+  full chrome = 21 rows   ·   floor = 14 rows
 ```
+
+The floor is 14 rather than 12 because the log card opens with the build's timings and a blank under them: twelve rows for one wrapped Dart exception, plus those two. They were paid for in the same change that added them — `Type` merged into `Device Target` and `Version` into `Project`, four rows between them with their separators — so the stream is two rows better off than before the row existed.
 
 Concessions are made cheapest-first and in a fixed order: row separators, then dense device rows, then the build tracker, then the cards themselves. `106x45` is the design target, cards stop widening at 142 columns, the log window takes every column it can get, and nothing below `60x14` is drawn at all.
 
-> [!NOTE]
-> Three `budget.rs` tests currently fail: they still assert the old `DEVICE INFO` height from before `[^D] Switch` moved to the footer, so the expectations are stale rather than the layout.
-
 ### Project layout
 
-11,317 lines of Rust in 16 files. Nothing owns a height except `budget.rs`, and nothing runs a command except `probe.rs` and `flutter.rs`.
+12,073 lines of Rust in 16 files. Nothing owns a height except `budget.rs`, and nothing runs a command except `probe.rs` and `flutter.rs`.
 
 | `src/` | Lines | Owns |
 | :--- | ---: | :--- |
-| `main.rs` | 2,218 | argument parsing, the event loop, key routing, worker threads, the new-tab spawn |
-| `data.rs` | 1,806 | `App` state, the twelve states, and the mock data every frame is judged against |
-| `probe.rs` | 1,650 | every fact read off the machine: project, git, SDK, devices, and booting one |
-| `flutter.rs` | 1,635 | the pty session and the output parser |
-| `budget.rs` | 684 | responsive degradation — the single owner of every component height |
-| `dump.rs` | 458 | `TestBackend` → `Buffer` → ANSI, hit probing, row reports |
+| `main.rs` | 2,379 | argument parsing, the event loop, key routing, worker threads, the new-tab spawn |
+| `probe.rs` | 1,984 | every fact read off the machine: project, git, SDK, devices, and booting one |
+| `data.rs` | 1,871 | `App` state, the twelve states, and the mock data every frame is judged against |
+| `flutter.rs` | 1,693 | the pty session and the output parser |
+| `budget.rs` | 708 | responsive degradation — the single owner of every component height |
+| `dump.rs` | 488 | `TestBackend` → `Buffer` → ANSI, hit probing, row reports |
 | `widgets.rs` | 238 | pill, badge, keycap, card, spread, field, separator, elide, wrap |
 | `theme.rs` | 117 | the palette and the Nerd Font glyph vocabulary |
 
@@ -357,14 +360,14 @@ One module per component, and `ui/mod.rs` is the only thing that decides what ap
 
 | `src/ui/` | Lines | Component |
 | :--- | ---: | :--- |
-| `devices.rs` | 471 | both device lists, the chips, the per-row budget — DESIGN.md 3.3 |
-| `build.rs` | 438 | the stage tracker and the failure card — 3.4 |
+| `devices.rs` | 481 | both device lists, the chips, the per-row budget — DESIGN.md 3.3 |
+| `build.rs` | 468 | the stage tracker and the failure card — 3.4 |
 | `chrome.rs` | 360 | the footer cheatsheet and the collapsed header rows — 3.7 |
-| `project.rs` | 310 | the project card — 3.1 |
-| `logs.rs` | 268 | the log window — 3.5, 6.1 |
+| `project.rs` | 318 | the project card — 3.1 |
+| `logs.rs` | 271 | the log window — 3.5, 6.1 |
 | `logo.rs` | 254 | the Flutter mark, graphics protocol or halfblocks |
-| `target.rs` | 238 | the device card — 3.2 |
-| `mod.rs` | 172 | frame assembly: which components are on screen in which state |
+| `target.rs` | 256 | the device card — 3.2 |
+| `mod.rs` | 178 | frame assembly: which components are on screen in which state |
 
 Outside `src/`: [`DESIGN.md`](DESIGN.md) is the specification, and `assets/` holds the Flutter mark — pulled in with `include_bytes!`, so a clone without it does not compile — alongside the captures above.
 

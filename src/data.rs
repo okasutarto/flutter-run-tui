@@ -1273,6 +1273,14 @@ impl App {
     /// Frozen matters on failure as much as on success. A build that died at 11
     /// seconds whose clock keeps running says the build is still going.
     pub fn build_clock(&self) -> String {
+        // A dash while `Starting Flutter` is still open, because nothing is building
+        // yet: the toolchain is booting and `startup_clock` is the figure counting
+        // those seconds. Two live clocks over one span would charge the same wait
+        // twice and make the pair stop adding up to what was waited.
+        if self.stage_open(StageKey::Start) {
+            return "-".into();
+        }
+
         if self.state == State::Building {
             return crate::flutter::elapsed(self.build_started.elapsed());
         }
@@ -1280,8 +1288,50 @@ impl App {
         self.build_time.clone()
     }
 
+    /// What the toolchain costs before Flutter prints anything: the `Starting
+    /// Flutter` row, promoted to the title bar.
+    ///
+    /// The span no Flutter output brackets — the fvm hop, the Dart VM, flutter_tools
+    /// and device resolution — measured at 3.2s of a 9.0s run here. The tracker that
+    /// holds the row is not laid out once the build is done, so without this the
+    /// header carried a total whose largest unexplained part had nowhere to surface.
+    ///
+    /// Live while the row is open and frozen once it closes, which is the opposite
+    /// phase to `build_clock`: the two run in sequence, never together, so exactly
+    /// one of them is counting at any moment of a build.
+    pub fn startup_clock(&self) -> String {
+        let Some(stage) = self.stages.iter().find(|stage| stage.key == StageKey::Start) else {
+            return "-".into();
+        };
+
+        if !stage.done {
+            return crate::flutter::elapsed(stage.started.elapsed());
+        }
+
+        match stage.duration.is_empty() {
+            true => "-".into(),
+            false => stage.duration.clone(),
+        }
+    }
+
     /// Stop the clock, whatever the outcome.
     pub fn end_build(&mut self) {
+        // A build that died before Flutter announced anything never left startup, and
+        // `build_started` still points at the spawn. Charging that span as a build
+        // time as well as a startup would show one wait as two.
+        if let Some(stage) = self
+            .stages
+            .iter_mut()
+            .find(|stage| stage.key == StageKey::Start && !stage.done)
+        {
+            stage.duration = crate::flutter::elapsed(stage.started.elapsed());
+            stage.done = true;
+
+            self.build_time = "-".into();
+
+            return;
+        }
+
         self.build_time = crate::flutter::elapsed(self.build_started.elapsed());
     }
 

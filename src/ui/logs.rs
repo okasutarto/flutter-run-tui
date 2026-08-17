@@ -51,48 +51,56 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         format!("[{} entries] ", app.logs.len())
     };
 
-    let mut right = vec![Span::raw(" ")];
-
-    // The build's two totals, immediately left of the entry count, and only in the
-    // states where the tracker block is not on screen to hold them (3.4). That is
-    // every state this card appears in except `Building`, where the tracker has them
-    // and has them live; printing them here as well would put the same two numbers
-    // twice on one screen.
+    // The entry count and nothing else.
     //
-    // `Stopped` reads them from here too, now that the collapsed summary row is gone.
-    // Which is the point of keying this on `has_tracker` rather than on a list of
-    // states: the two facts move together, so the pair is shown in exactly the frames
-    // where nothing else is showing it.
-    //
-    // The title bar rather than a log entry, which is where they went first. A build
-    // total is a fact about the session, not an event within it, so it should not
-    // scroll away from the window it describes — and the border row costs nothing,
-    // where an entry costs a row of the stream.
-    //
-    // Dropped, not truncated, when the row cannot hold both groups. Same rule as the
-    // footer in 3.7 and for the same reason: a clipped group cannot be told from an
-    // absent one, and `[152 entries · scrolled]` at 60 columns leaves no room. The
-    // count outranks the pair, being the one that changes.
-    if !app.state.has_tracker() {
-        let timings = super::build::timings(app);
-
-        // `card()` draws `─ ◆ <title> `, and the two title groups meet in the middle
-        // of one border row.
-        let left = crate::widgets::width(TITLE) + 5;
-        let wanted: usize = timings.iter().map(Span::width).sum::<usize>() + 3;
-
-        if left + wanted + crate::widgets::width(&count) + 1 <= area.width as usize {
-            right.extend(timings);
-            right.push(Span::raw("   "));
-        }
-    }
-
-    right.push(text(count, theme::MUTED));
+    // The build's three figures used to sit here, immediately left of it, with a
+    // width guard dropping the group whole when the border row could not hold both.
+    // Three frozen numbers beside one that changes on every line read as a single
+    // run-on string, and the guard meant the frozen three vanished at exactly the
+    // widths where a reader has least context — so they moved inside the card, to
+    // `summary` below, and this slot went back to holding the one live figure.
+    let right = vec![Span::raw(" "), text(count, theme::MUTED)];
 
     let block = card(TITLE, theme::PURPLE).title_top(Line::from(right).right_aligned());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    // First row inside the card for the build's figures, in the states where the
+    // tracker is not on screen holding them as stage rows (3.4).
+    //
+    // Two rows, not one: the figures and a blank under them. Without the blank the
+    // first log line butts straight against a row that is not a log line, which is
+    // the same defect `card()` bakes a title gap in to avoid — and here it is worse,
+    // because both rows start in column one and the stream's own timestamps make the
+    // collision look like a malformed entry.
+    //
+    // Rows of the stream, and the only thing in this card that is charged any: the log
+    // window is the flexible middle, so `Budget::floor` adds both rather than letting
+    // the stream's floor of twelve quietly become ten.
+    //
+    // Bought back from the two static cards in the same change: `Type` merged into
+    // `Device Target` and `Version` into `Project`, four rows between them with their
+    // rules. The stream is two rows better off than before this row existed.
+    let (inner, summary) = match app.state.has_tracker() {
+        true => (inner, None),
+
+        false => (
+            Rect {
+                y: inner.y + 2,
+                height: inner.height.saturating_sub(2),
+                ..inner
+            },
+            Some(Rect { height: 1, ..inner }),
+        ),
+    };
+
+    if let Some(row) = summary {
+        frame.render_widget(
+            Paragraph::new(Line::from(super::build::timings(app))),
+            row,
+        );
+    }
 
     // Reserve the last row for the reload status, but only when there is one to
     // show. Keyed on `reloading()` rather than on "not Running", because Building

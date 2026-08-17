@@ -137,11 +137,15 @@ impl Budget {
     /// that draws them rather than estimated:
     ///
     /// ```text
-    ///   Project / Version / Branch / Git Status   4
+    ///   Project / Branch / Git Status             3
     ///   blank                                     1
     ///   Flutter · Dart · Runtime                  1
-    ///   separators between the four fields        3   (optional)
+    ///   separators between the three fields       2   (optional)
     /// ```
+    ///
+    /// Three fields, down from four. `Version` is the tail of the `Project` row now —
+    /// one pubspec fact on one row — and the row it vacated, plus its rule, went to
+    /// the log window.
     ///
     /// The logo is not charged here and is not in the ladder. It sits in a
     /// parallel column five rows tall, and the metadata beside it is never
@@ -158,10 +162,10 @@ impl Budget {
             return 1;
         }
 
-        let mut meta = 6;
+        let mut meta = 5;
 
         if self.separators {
-            meta += 3;
+            meta += 2;
         }
 
         meta + 2 + Self::TITLE_GAP
@@ -170,11 +174,15 @@ impl Budget {
     /// SelectedTargetCard.
     ///
     /// ```text
-    ///   Device Target / Platform ID / OS / Type   4
-    ///   separators between the four fields        3   (optional)
+    ///   Device Target / Platform ID / OS Version  3
+    ///   separators between the three fields       2   (optional)
     /// ```
     ///
-    /// Four rows of content, down from eight. The active-status banner and the
+    /// Three rows of content. `Type` was the fourth and is the tail of the name row
+    /// now, for the reason given there: a row and a rule for one word the picker says
+    /// with a chip.
+    ///
+    /// Before that, four rows of content, down from eight. The active-status banner and the
     /// `❯ fvm flutter run -d ...` row went, with the blank each of them needed:
     /// every fact on the banner is in the table under it and the count it added is
     /// one by construction, and the command string was a description of an argv
@@ -195,10 +203,10 @@ impl Budget {
             return 1;
         }
 
-        let mut body = 4;
+        let mut body = 3;
 
         if self.separators {
-            body += 3;
+            body += 2;
         }
 
         body + 2 + Self::TITLE_GAP
@@ -300,8 +308,19 @@ impl Budget {
     /// is a diagnostic that lies.
     pub fn floor(state: State) -> u16 {
         if state.has_logs() {
-            LOG_MIN
-        } else if state == State::BuildFailed {
+            // Plus two for the log card's first row, which carries the build's
+            // figures, and the blank under it. Both are drawn inside the flexible
+            // middle rather than as chrome, so without the term the stream's floor of
+            // twelve quietly becomes ten.
+            //
+            // Unconditional, because `has_logs` and `has_tracker` are disjoint: every
+            // state with a log window is one the tracker has already left, so the row
+            // is drawn in all of them. `logs.rs` still gates on `has_tracker` — that
+            // is the invariant, and `Building` has been in `has_logs` before.
+            return LOG_MIN + 2;
+        }
+
+        if state == State::BuildFailed {
             FAIL_MIN
         } else {
             // The lists, and the two frames that are a spinner and a sentence. A
@@ -401,33 +420,38 @@ mod tests {
     #[test]
     fn full_chrome_matches_the_spec_arithmetic() {
         // Enumerated from the rows the cards actually draw, not estimated:
-        // project 12, target 12, footer 1, two gaps.
+        // project 10, target 8, footer 1, two gaps.
+        //
+        // Four rows shorter than it was: `Version` merged into the `Project` row and
+        // `Type` into `Device Target`, each taking its separator with it. They were
+        // spent on the log card's summary row, which is charged in `floor` because it
+        // is drawn inside the flexible middle.
         //
         // No tracker term at all. `Running` has no tracker block — see
-        // `State::has_tracker` — so its eleven rows and the gap above them are not
-        // something this state can spend, at any size.
+        // `State::has_tracker` — so its rows and the gap above them are not something
+        // this state can spend, at any size.
         let chrome = Budget::full().chrome(State::Running, DONE);
 
         assert_eq!(
-            chrome, 27,
+            chrome, 21,
             "enumerated from the rows each card actually draws"
         );
 
         // Where the tracker does exist, it is charged:
-        // project 12 + target 12 + tracker 10 + footer 1 + three gaps.
-        assert_eq!(Budget::full().chrome(State::Building, DONE), 38);
+        // project 10 + target 8 + tracker 10 + footer 1 + three gaps.
+        assert_eq!(Budget::full().chrome(State::Building, DONE), 32);
     }
 
     /// Everything cut from the static cards lands in the log window, and this is
     /// the arithmetic that says so.
     ///
-    /// Four removals now. The prompt bar and its gap (four rows), the target card's
-    /// status banner and command string with the blank each needed (four), and the
-    /// settled tracker with the gap above it (two).
+    /// Five removals now. The prompt bar and its gap (four rows), the target card's
+    /// status banner and command string with the blank each needed (four), the
+    /// settled tracker with the gap above it (two), and the two merged fields with
+    /// their separators (four).
     ///
-    /// Two rows went the other way: the switch control moved out of the target
-    /// card's border and onto a content row, and it took a blank with it to keep from
-    /// reading as a fifth field's value, so the card is twelve rows rather than ten.
+    /// One row goes the other way: the log card's first row carries the build's
+    /// figures, which is why the two merges above were made to pay for it.
     #[test]
     fn the_log_window_keeps_what_the_static_cards_gave_up() {
         let log_rows = |h: u16| {
@@ -435,10 +459,10 @@ mod tests {
             h - plan.chrome(State::Running, DONE)
         };
 
-        // At the design target, full chrome leaves 18 rows where it once left none
-        // at all.
-        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 18);
-        assert!(log_rows(45) >= LOG_MIN, "{} rows", log_rows(45));
+        // At the design target, full chrome leaves 24 rows where it once left none
+        // at all. One of them is the summary row, so 23 reach the stream.
+        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 24);
+        assert!(log_rows(45) >= Budget::floor(State::Running), "{} rows", log_rows(45));
 
         // Nothing is conceded at the design target any more. The floor used to be
         // defended by giving up the separators here; the tracker's two rows are what
@@ -458,7 +482,7 @@ mod tests {
                 ..Budget::full()
             }
         );
-        assert_eq!(60 - plan.chrome(State::Running, DONE), 33);
+        assert_eq!(60 - plan.chrome(State::Running, DONE), 39);
     }
 
     /// `Stopped` is laid out exactly like a live run: two cards, a footer, two gaps.
@@ -489,17 +513,16 @@ mod tests {
         let mut flat = full;
         flat.separators = false;
 
-        // 6 content + 2 border + 1 title gap.
-        assert_eq!(flat.project_h(), 9);
+        // 5 content + 2 border + 1 title gap. Three fields, a blank, and the stats
+        // row.
+        assert_eq!(flat.project_h(), 8);
 
-        // 6 content + 2 border + 1 title gap. The last two are the switch control,
-        // which was in the border and is now a row, and the blank above it.
-        assert_eq!(flat.target_h(), 9);
+        // 3 content + 2 border + 1 title gap. Three fields, no blank of its own.
+        assert_eq!(flat.target_h(), 6);
 
-        // Separators add three rows to each. Three, not four: the control row is
-        // divided off by a blank rather than a rule.
-        assert_eq!(full.project_h(), 12);
-        assert_eq!(full.target_h(), 12);
+        // Separators add two rows to each, one per gap between three fields.
+        assert_eq!(full.project_h(), 10);
+        assert_eq!(full.target_h(), 8);
     }
 
     #[test]
@@ -624,11 +647,12 @@ mod tests {
 
     /// The build is the exception: while it runs, its stage list outranks them.
     ///
-    /// 38 rows rather than something shorter because `BUILDING` has no log window
-    /// yet, so it defends a floor of 3 and full chrome (36) fits until 39.
+    /// 34 rows, because `BUILDING` has no log window — `has_logs` excludes it — so it
+    /// defends a floor of 3 against full chrome of 32, and 34 is the tallest window
+    /// where that floor still costs the separators.
     #[test]
     fn a_running_build_keeps_its_stage_list_instead() {
-        let plan = Budget::solve(area(106, 38), State::Building, 5);
+        let plan = Budget::solve(area(106, 34), State::Building, 5);
 
         assert!(plan.full_build, "the stage list is what is moving");
         assert!(!plan.separators, "so the separators pay for the floor");
