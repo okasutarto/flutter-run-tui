@@ -1,5 +1,6 @@
 /target
 .DS_Store
+/docs
 
 # Design reference screenshots stay local: ten frames at ~90KB each is a lot of
 # history for files whose usefulness ends when the decision is made. They are also

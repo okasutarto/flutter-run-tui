@@ -10,6 +10,7 @@ use crate::budget::Budget;
 use crate::data::{Action, App, Device, Hit, State};
 use crate::theme;
 use crate::widgets::{card, elide, pill, spread, strong, text};
+use crate::probe::Platform;
 
 // State 2, `NO DEVICE RUNNING`, was rendered here and is gone.
 //
@@ -388,7 +389,16 @@ fn draw_row(
     // outranks both descriptive tags.
     let show_id = fits(!id.is_empty(), GAP + w(&id));
     let show_label = fits(true, GAP + w(device.platform.label()));
-    let show_virtual = fits(device.virtual_device, GAP + w("virtual"));
+    
+    let device_kind = match (&device.platform, device.virtual_device) {
+        (Platform::Ios, true) => "Simulator",
+        (Platform::Android, true) => "Emulator",
+        (Platform::Ios, false) | (Platform::Android, false) => "Hardware",
+        (Platform::Desktop, _) => "Desktop",
+        (Platform::Web, _) => "Web",
+    };
+
+    let show_device_kind = fits(true, GAP + w(device_kind));
 
     let mut left = vec![
         if selected {
@@ -438,9 +448,9 @@ fn draw_row(
         right.push(text(device.platform.label(), theme::MUTED));
     }
 
-    if show_virtual {
+    if show_device_kind {
         right.push(Span::raw("  "));
-        right.push(text("virtual", theme::PURPLE));
+        right.push(text(device_kind, theme::PURPLE));
     }
 
     // One row can say what `Enter` does, and it is the row where `Enter` does

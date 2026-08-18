@@ -1094,8 +1094,16 @@ impl App {
     /// How the target card describes the target's kind.
     pub fn target_kind(&self) -> &'static str {
         match &self.target {
-            Some(d) if d.virtual_device => "Simulator / Emulator",
-            Some(_) => "Hardware",
+            Some(d) => match (&d.platform, d.virtual_device) {
+                (Platform::Ios, true) => "Simulator",
+                (Platform::Android, true) => "Emulator",
+
+                (Platform::Ios, false) |
+                (Platform::Android, false) => "Hardware",
+
+                (Platform::Desktop, _) => "Desktop",
+                (Platform::Web, _) => "Web",
+            },
             None => "-",
         }
     }
