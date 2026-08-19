@@ -2216,8 +2216,8 @@ off `app.target`. Two things follow from putting controls in it.
 **Clicking cannot be the only way to reach them.** Mouse capture is off by
 default and deliberately so (5.2); a control that only answers the mouse is dead
 in every session where `m` was never pressed. So each verb needs a key, and the
-key budget is the hard part: `q m r R e z j k ^D` and the digits are frun's, and
-every other letter is Flutter's and has to arrive unchanged. `j`, `k` and `z` were
+key budget is the hard part: `q m r R e j k ^D` and the digits are frun's, and
+every other letter is Flutter's and has to arrive unchanged. `j`, `k` and `e` were
 already justified one at a time and that argument does not extend a fourth and
 fifth time.
 
@@ -2919,7 +2919,7 @@ Zero rows. The control is an inset title in a border that already had one
 count), so `Budget::target_h()` is untouched and the log window gives up nothing.
 At `MIN_W` the two titles need 41 of the 58 columns inside the border. Below the
 `full_cards` rung the card has no border to carry it and the hint disappears; the
-key still works, which is the same bargain `z` and `j`/`k` already have.
+key still works, which is the same bargain `e` and `j`/`k` already have.
 
 It is also not clickable. `ui/target.rs` stays `&App`, so no hit region is pushed
 (7.5) and the mouse cannot reach the control at all — acceptable because capture is
