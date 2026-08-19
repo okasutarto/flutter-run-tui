@@ -45,14 +45,26 @@
 
 ## Install
 
-### Quick Install (One-liner via Cargo)
+### Option 1: Via Homebrew (Recommended for macOS)
+```bash
+brew install okasutarto/frun
+```
+
+---
+
+### Option 2: Via Cargo (Rust)
+> [!NOTE]
+> Requires the Rust toolchain (`cargo`). If not installed yet: `brew install rust` or `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
+
 ```bash
 cargo install --git https://github.com/okasutarto/flutter-run-tui.git
 ```
 *Installs the `frun` binary directly to `~/.cargo/bin/frun`.*
 
+---
+
 <details>
-<summary><b>Build from source (Manual)</b></summary>
+<summary><b>Option 3: Build from source (Manual)</b></summary>
 
 ```bash
 git clone https://github.com/okasutarto/flutter-run-tui.git ~/.config/zsh/flutter-run-tui
