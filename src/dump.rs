@@ -349,11 +349,10 @@ mod tests {
             "Esc returns to the run here, it does not exit with 130:\n{frame}"
         );
 
-        // The target card and the tracker are off screen here, so the list has the
-        // frame to itself as the first picker does.
+        // The target card is visible above the switch list, but the tracker is off screen.
         assert!(
-            !frame.contains("DEVICE INFO") && !frame.contains("Stage "),
-            "the cards describing the outgoing run should be gone:\n{frame}"
+            frame.contains("DEVICE INFO") && !frame.contains("Stage "),
+            "the target card is retained above switch device, tracker is gone:\n{frame}"
         );
     }
 
@@ -455,7 +454,7 @@ mod tests {
         let row = frame
             .lines()
             .map(strip_sgr)
-            .find(|line| line.contains("Device Target"))
+            .find(|line| line.contains("Device"))
             .expect("the target card draws a name row");
 
         assert!(row.contains('…'), "the name has to be shortened: {row}");
@@ -464,6 +463,22 @@ mod tests {
             "and the kind has to survive it: {row}"
         );
         assert_eq!(width(&row), crate::budget::MIN_W as usize);
+    }
+
+    #[test]
+    fn os_version_renders_platform_glyph() {
+        let mut app = App::new(State::Running);
+        let frame_ios = dump(&mut app, 80, 30);
+        assert!(frame_ios.contains(crate::theme::GLYPH_APPLE));
+
+        if let Some(device) = app.target.as_mut() {
+            device.platform = crate::probe::Platform::Android;
+            device.sdk = "Android 15".into();
+        }
+
+        let frame_android = dump(&mut app, 80, 30);
+        assert!(frame_android.contains(crate::theme::GLYPH_ANDROID));
+        assert!(frame_android.contains("Android 15"));
     }
 
     fn strip_sgr(s: &str) -> String {

@@ -7,7 +7,7 @@ use ratatui::Frame;
 
 use crate::data::{App, State};
 use crate::theme;
-use crate::widgets::{badge, card, spread, strong, text, wrap};
+use crate::widgets::{badge, card, separator, spread, strong, text, wrap};
 
 /// Columns the level badge occupies, on every row.
 ///
@@ -96,9 +96,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     };
 
     if let Some(row) = summary {
+        let sep_row = Rect {
+            y: row.y + 1,
+            height: 1,
+            ..row
+        };
         frame.render_widget(
             Paragraph::new(Line::from(super::build::timings(app))),
             row,
+        );
+        frame.render_widget(
+            Paragraph::new(separator(inner.width)),
+            sep_row,
         );
     }
 

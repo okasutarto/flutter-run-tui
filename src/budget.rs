@@ -171,42 +171,18 @@ impl Budget {
         meta + 2 + Self::TITLE_GAP
     }
 
-    /// SelectedTargetCard.
+    /// SelectedTargetCard (2 columns x 2 rows: Device/Type & Platform/OS).
     ///
-    /// ```text
-    ///   Device Target / Platform ID / OS Version  3
-    ///   separators between the three fields       2   (optional)
-    /// ```
-    ///
-    /// Three rows of content. `Type` was the fourth and is the tail of the name row
-    /// now, for the reason given there: a row and a rule for one word the picker says
-    /// with a chip.
-    ///
-    /// Before that, four rows of content, down from eight. The active-status banner and the
-    /// `❯ fvm flutter run -d ...` row went, with the blank each of them needed:
-    /// every fact on the banner is in the table under it and the count it added is
-    /// one by construction, and the command string was a description of an argv
-    /// that `Session::spawn` builds for itself. Four rows, handed to the log
-    /// window.
-    ///
-    /// Back to four after a detour through six. `[^D] Switch` was briefly a row here,
-    /// with a blank above it to stop it reading as a fifth field's value — two rows
-    /// for one key, in the only row of the card with nothing facing it on the left.
-    /// The footer carries it now (3.7), which is where the failure card's action row
-    /// and the picker's hint row both ended up for the same reason.
-    ///
-    /// Nothing else in this card is a control, so this is a pure fact table again and
-    /// the height is the table's. The one state the card reports is a pill in its
-    /// title bar, which is a border row and costs nothing.
+    /// 2 rows of content (+ 1 separator if enabled) + 2 border + 1 title gap = 5 or 6 rows.
     pub fn target_h(&self) -> u16 {
         if !self.full_cards {
             return 1;
         }
 
-        let mut body = 3;
+        let mut body = 2;
 
         if self.separators {
-            body += 2;
+            body += 1;
         }
 
         body + 2 + Self::TITLE_GAP
@@ -403,10 +379,11 @@ pub fn clamp_width(area: Rect) -> Rect {
 mod tests {
     use super::*;
 
-    /// Stage rows a finished Android build leaves on the tracker: starting, Gradle,
-    /// install, syncing, running.
+    /// A five-stage build (Starting Flutter, CocoaPods, Xcode, VM, Connecting),
+    /// which is the iOS worst case and the tallest the tracker gets.
     ///
-    /// Five, not six — the Gradle phase adopts the generic `Preparing build` row
+    /// Tests that check `Running` or `Stopped` need a non-zero count to prove the
+    /// budget is *not* reading the argument — that a settled build is collapsed
     /// rather than following it.
     ///
     /// The tracker's height follows this now, so it has to be stated rather than
@@ -419,39 +396,22 @@ mod tests {
 
     #[test]
     fn full_chrome_matches_the_spec_arithmetic() {
-        // Enumerated from the rows the cards actually draw, not estimated:
-        // project 10, target 8, footer 1, two gaps.
-        //
-        // Four rows shorter than it was: `Version` merged into the `Project` row and
-        // `Type` into `Device Target`, each taking its separator with it. They were
-        // spent on the log card's summary row, which is charged in `floor` because it
-        // is drawn inside the flexible middle.
-        //
-        // No tracker term at all. `Running` has no tracker block — see
-        // `State::has_tracker` — so its rows and the gap above them are not something
-        // this state can spend, at any size.
+        // Enumerated from the rows the cards actually draw:
+        // project 10 (with separators) + target 6 (with separator) + footer 1 + two gaps = 19 rows.
         let chrome = Budget::full().chrome(State::Running, DONE);
 
         assert_eq!(
-            chrome, 21,
+            chrome, 19,
             "enumerated from the rows each card actually draws"
         );
 
         // Where the tracker does exist, it is charged:
-        // project 10 + target 8 + tracker 10 + footer 1 + three gaps.
-        assert_eq!(Budget::full().chrome(State::Building, DONE), 32);
+        // project 10 + target 6 + tracker 10 + footer 1 + three gaps = 30.
+        assert_eq!(Budget::full().chrome(State::Building, DONE), 30);
     }
 
     /// Everything cut from the static cards lands in the log window, and this is
     /// the arithmetic that says so.
-    ///
-    /// Five removals now. The prompt bar and its gap (four rows), the target card's
-    /// status banner and command string with the blank each needed (four), the
-    /// settled tracker with the gap above it (two), and the two merged fields with
-    /// their separators (four).
-    ///
-    /// One row goes the other way: the log card's first row carries the build's
-    /// figures, which is why the two merges above were made to pay for it.
     #[test]
     fn the_log_window_keeps_what_the_static_cards_gave_up() {
         let log_rows = |h: u16| {
@@ -459,14 +419,11 @@ mod tests {
             h - plan.chrome(State::Running, DONE)
         };
 
-        // At the design target, full chrome leaves 24 rows where it once left none
-        // at all. One of them is the summary row, so 23 reach the stream.
-        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 24);
+        // At the design target, full chrome leaves 26 rows for the log window.
+        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 26);
         assert!(log_rows(45) >= Budget::floor(State::Running), "{} rows", log_rows(45));
 
-        // Nothing is conceded at the design target any more. The floor used to be
-        // defended by giving up the separators here; the tracker's two rows are what
-        // pays for them now.
+        // Nothing is conceded at the design target.
         assert_eq!(
             Budget::solve(area(106, 45), State::Running, DONE).describe(State::Running),
             "full"
@@ -482,15 +439,10 @@ mod tests {
                 ..Budget::full()
             }
         );
-        assert_eq!(60 - plan.chrome(State::Running, DONE), 39);
+        assert_eq!(60 - plan.chrome(State::Running, DONE), 41);
     }
 
     /// `Stopped` is laid out exactly like a live run: two cards, a footer, two gaps.
-    ///
-    /// This replaces a test asserting the opposite — that `Stopped` kept a tracker
-    /// row, being the only thing on screen that said how the run ended. It is not:
-    /// the ending is a pill on the target card's control row now, so the row went,
-    /// and the point of it going is the assertion below.
     #[test]
     fn a_stopped_run_is_laid_out_like_a_live_one() {
         let plan = Budget::solve(area(106, 45), State::Stopped, DONE);
@@ -513,21 +465,19 @@ mod tests {
         let mut flat = full;
         flat.separators = false;
 
-        // 5 content + 2 border + 1 title gap. Three fields, a blank, and the stats
-        // row.
+        // 5 content + 2 border + 1 title gap = 8.
         assert_eq!(flat.project_h(), 8);
 
-        // 3 content + 2 border + 1 title gap. Three fields, no blank of its own.
-        assert_eq!(flat.target_h(), 6);
+        // 2 content + 2 border + 1 title gap = 5.
+        assert_eq!(flat.target_h(), 5);
 
-        // Separators add two rows to each, one per gap between three fields.
+        // Separators add two rows to project card: 10. Separator adds one row to target card: 6.
         assert_eq!(full.project_h(), 10);
-        assert_eq!(full.target_h(), 8);
+        assert_eq!(full.target_h(), 6);
     }
 
     #[test]
     fn log_floor_is_defended_at_the_design_target() {
-        // At 106x45 the full layout would leave 5 rows, so it must concede.
         let budget = Budget::solve(area(106, 45), State::Running, DONE);
         let remaining = 45 - budget.chrome(State::Running, DONE);
 
@@ -573,10 +523,6 @@ mod tests {
     }
 
     /// The tracker is collapsed by state, so it costs the ladder nothing.
-    ///
-    /// This replaces a test that asserted the opposite mechanism — that a finished
-    /// build was *conceded* first, ahead of the separators. Same outcome for the
-    /// separators, reached without the size having to decide it.
     #[test]
     fn a_settled_tracker_collapses_before_the_ladder_runs() {
         // Tall enough that nothing is under pressure at all.
@@ -589,24 +535,17 @@ mod tests {
             "and not reported as a concession, because none was made"
         );
 
-        // `Stopped` is the case `build_done` missed: its tracker is just as frozen,
-        // and it used to be ranked as though the build were still in progress.
         let stopped = Budget::solve(area(106, 45), State::Stopped, DONE);
 
         assert!(!stopped.full_build);
         assert!(
             stopped.separators && stopped.roomy_devices,
-            "which is what those nine rows were being paid for: {}",
+            "which is what those rows were being paid for: {}",
             stopped.describe(State::Stopped)
         );
     }
 
     /// A build in progress still has the rung, and a 14-row terminal needs it.
-    ///
-    /// Removing `full_build` from `concede` entirely was the tempting version of
-    /// this change and it does not fit: at `MIN_H` a build with every card already
-    /// collapsed is still 19 rows if the tracker is expanded, and a layout charged
-    /// more rows than it has is clipped in silence (7.5).
     #[test]
     fn a_short_terminal_can_still_collapse_a_running_tracker() {
         let plan = Budget::solve(area(60, MIN_H), State::Building, 8);
@@ -646,13 +585,9 @@ mod tests {
     }
 
     /// The build is the exception: while it runs, its stage list outranks them.
-    ///
-    /// 34 rows, because `BUILDING` has no log window — `has_logs` excludes it — so it
-    /// defends a floor of 3 against full chrome of 32, and 34 is the tallest window
-    /// where that floor still costs the separators.
     #[test]
     fn a_running_build_keeps_its_stage_list_instead() {
-        let plan = Budget::solve(area(106, 34), State::Building, 5);
+        let plan = Budget::solve(area(106, 32), State::Building, 5);
 
         assert!(plan.full_build, "the stage list is what is moving");
         assert!(!plan.separators, "so the separators pay for the floor");

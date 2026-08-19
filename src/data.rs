@@ -113,14 +113,10 @@ impl State {
 
     /// Whether a device has been chosen, which decides if the
     /// SelectedTargetCard has anything to show.
-    ///
-    /// `Switching` excluded with the pickers: while the list is up the card would
-    /// be describing the device you are leaving, directly above the row that says
-    /// the same thing with ` running `. The list gets those rows instead.
     pub fn has_target(self) -> bool {
         !matches!(
             self,
-            State::Detecting | State::Booting | State::MultipleDevices | State::Switching
+            State::Detecting | State::Booting | State::MultipleDevices
         )
     }
 
@@ -709,6 +705,7 @@ pub struct App {
     pub build_started: Instant,
     pub build_time: String,
     pub sync_time: String,
+    pub total_time: String,
 
     pub failure: Option<Failure>,
     pub exit_code: i32,
@@ -822,6 +819,7 @@ impl App {
             build_started: Instant::now(),
             build_time: "-".into(),
             sync_time: "-".into(),
+            total_time: "-".into(),
 
             failure: None,
             exit_code: 0,
@@ -1269,6 +1267,7 @@ impl App {
         self.build_started = Instant::now();
         self.build_time = "-".into();
         self.sync_time = "-".into();
+        self.total_time = "-".into();
         self.pending = None;
         self.reload_note.clear();
         self.goto(State::Building);
@@ -1322,6 +1321,33 @@ impl App {
         }
     }
 
+    /// Combined total time across startup and build phases.
+    pub fn total_clock(&self) -> String {
+        if let Some(stage) = self.stages.iter().find(|stage| stage.key == StageKey::Start) {
+            if self.state == State::Building {
+                return crate::flutter::elapsed(stage.started.elapsed());
+            }
+        }
+
+        if !self.total_time.is_empty() && self.total_time != "-" {
+            return self.total_time.clone();
+        }
+
+        let startup_d = parse_time_str(&self.startup_clock());
+        let build_d = parse_time_str(&self.build_clock());
+
+        let total = startup_d + build_d;
+        if total == 0.0 {
+            "-".into()
+        } else if total < 1.0 {
+            format!("{}ms", (total * 1000.0).round() as u64)
+        } else if total < 60.0 {
+            format!("{total:.1}s")
+        } else {
+            format!("{}m {:.1}s", (total as u64) / 60, total % 60.0)
+        }
+    }
+
     /// Stop the clock, whatever the outcome.
     pub fn end_build(&mut self) {
         // A build that died before Flutter announced anything never left startup, and
@@ -1336,11 +1362,15 @@ impl App {
             stage.done = true;
 
             self.build_time = "-".into();
+            self.total_time = stage.duration.clone();
 
             return;
         }
 
         self.build_time = crate::flutter::elapsed(self.build_started.elapsed());
+        if let Some(stage) = self.stages.iter().find(|stage| stage.key == StageKey::Start) {
+            self.total_time = crate::flutter::elapsed(stage.started.elapsed());
+        }
     }
 
     /// Stages this build is expected to announce, for the progress denominator.
@@ -1352,9 +1382,9 @@ impl App {
             .target
             .as_ref()
             .map(|d| d.platform.stage_count())
-            .unwrap_or(5);
+            .unwrap_or(4);
 
-        expected.max(self.stages.len())
+        expected.max(self.stages.len()).max(1)
     }
 
     pub fn hit_test(&self, col: u16, row: u16) -> Option<Action> {
@@ -1367,6 +1397,26 @@ impl App {
                     && row < h.area.y + h.area.height
             })
             .map(|h| h.action)
+    }
+}
+
+fn parse_time_str(s: &str) -> f64 {
+    let s = s.trim();
+    if s.is_empty() || s == "-" {
+        return 0.0;
+    }
+    if let Some(ms) = s.strip_suffix("ms") {
+        ms.parse::<f64>().unwrap_or(0.0) / 1000.0
+    } else if let Some(secs) = s.strip_suffix('s') {
+        if let Some((m, rest)) = secs.split_once('m') {
+            let mins = m.trim().parse::<f64>().unwrap_or(0.0);
+            let s = rest.trim().parse::<f64>().unwrap_or(0.0);
+            mins * 60.0 + s
+        } else {
+            secs.trim().parse::<f64>().unwrap_or(0.0)
+        }
+    } else {
+        0.0
     }
 }
 
@@ -1387,6 +1437,7 @@ impl App {
         app.cwd = "~/cwclub".into();
         app.build_time = "3.4s".into();
         app.sync_time = "240ms".into();
+        app.total_time = "7.0s".into();
         app.exit_code = 1;
 
         // `iOS-26-5`, not `iOS 18.2 (arm64)`. The mock is what the layout is

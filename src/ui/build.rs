@@ -94,6 +94,10 @@ pub(super) fn status(app: &App) -> (&'static str, &'static str, ratatui::style::
         // square on the way out. A tick means *done*, which is the build; this is the
         // one state where something is still happening.
         s if s.build_done() => (theme::GLYPH_PLAY, "RUNNING", theme::EMERALD),
+        State::Switching if app.run_state().holds_session() => {
+            (theme::GLYPH_PLAY, "RUNNING", theme::EMERALD)
+        }
+        State::Switching => (theme::GLYPH_STOP, "STOPPED", theme::MUTED),
         _ => (app.spinner(), "BUILDING", theme::AMBER),
     }
 }
@@ -134,10 +138,12 @@ pub(super) fn timings(app: &App) -> Vec<Span<'static>> {
         strong(app.startup_clock(), theme::TEXT),
         // Live while building, final once it is not. A build time that only
         // appears at the end tells you nothing during the wait that matters.
-        text("   Build time ", theme::EMERALD),
+        text("   Build ", theme::EMERALD),
         strong(app.build_clock(), theme::TEXT),
         text("   Sync ", theme::EMERALD),
         strong(app.sync_time.clone(), theme::TEXT),
+        text("   Total ", theme::EMERALD),
+        strong(app.total_clock(), theme::TEXT),
     ]
 }
 
