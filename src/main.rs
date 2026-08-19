@@ -688,6 +688,7 @@ fn event_loop(app: &mut App, ctx: &mut Ctx, art: &mut Logo) -> io::Result<()> {
             // ponytail: synchronous Git polling can stutter on unusually slow
             // worktrees; move it to a worker only if that becomes observable.
             app.dirty = probe::git_dirty();
+            app.branch = probe::git_branch();
         }
 
         // Whichever list is up, keep it true. Nothing else on screen makes a claim

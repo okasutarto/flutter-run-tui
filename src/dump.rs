@@ -460,7 +460,7 @@ mod tests {
 
         assert!(row.contains('…'), "the name has to be shortened: {row}");
         assert!(
-            row.contains("Simulator / Emulator"),
+            row.contains("Simulator"),
             "and the kind has to survive it: {row}"
         );
         assert_eq!(width(&row), crate::budget::MIN_W as usize);

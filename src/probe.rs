@@ -152,12 +152,17 @@ pub fn project() -> Project {
     Project {
         name,
         version,
-        branch: git(&["branch", "--show-current"]).unwrap_or_else(|| "-".into()),
+        branch: git_branch(),
         dirty: git_dirty(),
         flutter: "-".into(),
         dart: "-".into(),
         cwd: pretty_cwd(),
     }
+}
+
+/// Current Git branch name, or "-" if absent or detached.
+pub fn git_branch() -> String {
+    git(&["branch", "--show-current"]).unwrap_or_else(|| "-".into())
 }
 
 /// Count of changed files in the current Git worktree. Zero includes an absent
