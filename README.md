@@ -47,7 +47,12 @@
 
 ### Option 1: Via Homebrew (Recommended for macOS)
 ```bash
-brew install okasutarto/frun
+brew install okasutarto/frun/frun
+```
+*Or tap first, then install:*
+```bash
+brew tap okasutarto/frun
+brew install frun
 ```
 
 ---
