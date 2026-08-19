@@ -157,60 +157,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
     stats(frame, rows[2], app);
 }
 
-/// The three-column technical stats row from DESIGN.md 3.1.
+/// The technical stats row from DESIGN.md 3.1.
 ///
-/// Spaced across the width rather than grouped: three equal columns, the first
-/// flush left, the last flush right. Grouping them left left two thirds of the
-/// row empty and made the block look unfinished; spreading them as one Line
-/// pushed `Runtime (FVM)` to the far border and separated it from the two values
-/// it belongs with. Three columns is the shape the design asked for and it
-/// solves both.
+/// Grouped left with middle dots: `Flutter 3.29.3  ·  Dart 3.7.2  ·  Runtime (FVM)`.
 fn stats(frame: &mut Frame, area: Rect, app: &App) {
-    let cols = Layout::horizontal([
-        Constraint::Ratio(1, 3),
-        Constraint::Ratio(1, 3),
-        Constraint::Ratio(1, 3),
-    ])
-    .split(area);
+    let line = Line::from(vec![
+        text("Flutter ", theme::MUTED),
+        strong(app.flutter.as_str(), theme::CYAN),
+        text("  ·  ", theme::MUTED),
+        text("Dart ", theme::MUTED),
+        strong(app.dart.as_str(), theme::PURPLE),
+        text("  ·  ", theme::MUTED),
+        text("Runtime ", theme::MUTED),
+        // `(FVM)`, `(SDK)`, or the wrapper's own name. The column says
+        // what decides which SDK this is, which is not the same question
+        // as the two versions beside it.
+        strong(format!("({})", app.toolchain.label()), theme::PURPLE),
+    ]);
 
-    let groups = [
-        (
-            vec![
-                text("Flutter ", theme::MUTED),
-                strong(app.flutter.as_str(), theme::CYAN),
-            ],
-            0,
-        ),
-        (
-            vec![
-                text("Dart ", theme::MUTED),
-                strong(app.dart.as_str(), theme::PURPLE),
-            ],
-            1,
-        ),
-        (
-            vec![
-                text("Runtime ", theme::MUTED),
-                // `(FVM)`, `(SDK)`, or the wrapper's own name. The column says
-                // what decides which SDK this is, which is not the same question
-                // as the two versions beside it.
-                strong(format!("({})", app.toolchain.label()), theme::PURPLE),
-            ],
-            2,
-        ),
-    ];
-
-    for (spans, i) in groups {
-        let line = Line::from(spans);
-
-        let line = match i {
-            0 => line,
-            1 => line.centered(),
-            _ => line.right_aligned(),
-        };
-
-        frame.render_widget(Paragraph::new(line), cols[i]);
-    }
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// Empty line when separators have been conceded, so the row indices stay put.
