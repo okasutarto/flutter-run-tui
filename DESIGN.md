@@ -1,7 +1,7 @@
 # 🖥️ Flutter CLI Terminal UI (TUI) - Architecture & Design Specification (`design.md`)
 
-Document Version: `1.8.0`  
-Last Updated: `2026-08-15`  
+Document Version: `1.8.1`  
+Last Updated: `2026-08-19`  
 Design System: **Monospace Character Grid TUI (Terminal User Interface)**  
 Target Font: `JetBrains Mono`, `Fira Code`, or `ui-monospace` (12px base)  
 Canvas Dimensions: `106x45` character matrix target, widening to `142` columns
@@ -26,19 +26,20 @@ Application design follows strict Text User Interface (TUI) paradigms popularize
 
 ## 🎨 2. Color Palette & Visual Tokens
 
-The color architecture uses a dark noir base with high-contrast functional color coding to instantly signal state transitions:
+The color architecture uses a dark noir base with high-contrast functional color coding from the **Cyberpunk Neon Powerline** palette to instantly signal state transitions:
 
-| Visual Token | Hex / Tailwind Class | Primary Usage |
+| Visual Token | Hex / Constant | Primary Usage |
 | :--- | :--- | :--- |
 | **Canvas Background** | `#0c0e14` (`bg-[#0c0e14]`) | Outer application container & dark grid frame |
 | **Box Background** | `#000000` (`bg-black/80`) | Inset cards, logs container, tables background |
-| **Default Text** | `#e4e4e7` (`text-zinc-200`) | Standard body copy, output logs, table keys |
-| **Subdued Text** | `#71717a` (`text-zinc-500`) | Table labels, key hints, timestamps, borders |
-| **Cyan Accent** | `#38bdf8` (`text-cyan-400`) | Main section headers (`◆`), selected items, active focus |
-| **Emerald Success** | `#34d399` (`text-emerald-400`) | Active device status (`✔`), build success, completed steps |
-| **Amber Warning** | `#fbbf24` (`text-amber-300`) | Git branch tags, no-device alert banner, pending steps |
-| **Rose Error** | `#f87171` (`text-rose-400`) | Build/Hot Reload failures (`✖`), stack traces, pointers |
-| **Purple Virtual** | `#c084fc` (`text-purple-300`) | Simulator/emulator badges, secondary runtime tags |
+| **Default Text** | `#e4e4e7` (`TEXT`) | Standard body copy, output logs, table keys |
+| **Subdued Text** | `#71717a` (`MUTED`) | Table labels, key hints, timestamps |
+| **Cyan Accent** | `#34edf3` (`BORDER`, `CYAN`) | Card borders, section headers (`◆`), selected items, active focus |
+| **Lime / Emerald Success** | `#b8ff6a` (`EMERALD`) | Active device status (`✔`), build success, completed steps |
+| **Yellow / Amber Warning** | `#ffe66d` (`AMBER`) | Git branch tags, no-device alert banner, pending steps |
+| **Magenta / Rose Error** | `#f715ab` (`ROSE`) | Build/Hot Reload failures (`✖`), stack traces, pointers |
+| **Purple Virtual** | `#cc4dff` (`PURPLE`) | Simulator/emulator badges, secondary runtime tags |
+| **Badge Ink** | `#070e34` (`INK`) | Dark text ink drawn on top of filled accent badges |
 
 ---
 
@@ -773,7 +774,7 @@ devices answered.
 * **Scrollable.** `log_scroll` counts rows back from the live tail, driven by the
   arrow keys, `j`/`k` and the wheel; zero is the bottom, so new output keeps
   arriving without being followed. The title says `· scrolled` when the window is
-  away from the tail. `z` gives the log window the whole frame (7.7).
+  away from the tail. `e` gives the log window the whole frame (7.7).
 
 * **Application output only.** Build progress does not belong here. The design
   frames showed `[BLD] Running Xcode build...` and `[OK] Xcode build complete
@@ -1118,7 +1119,7 @@ Flutter untouched.
 | `r` | Retry build — kill, reap, respawn | State 7 |
 | `R` | Hot restart | States 8, 10, 11 |
 | `↑` / `↓`, `j` / `k` | Scroll the log window | States 6, 8-11 |
-| `z` | Give the log window the whole frame | States 6, 8-11 |
+| `e` | Give the log window the whole frame (expand/collapse) | States 6, 8-11 |
 | `q` | Quit gracefully — Flutter shuts itself down (`⏏`) | States 6, 8-11 |
 | `^C` | Force stop — SIGINT forwarded to Flutter (`⏹`), ends the process | Any |
 | `^D` | Switch device — reopen the target list over the live run (8.5) | States 6-11, 13 |
@@ -1135,7 +1136,7 @@ scoped by what is on screen: a log window if there is one, the device list
 otherwise. There is never both. Everywhere else a digit is Flutter's and has to
 arrive unchanged.
 
-`j`, `k` and `z` are the three letters frun takes from Flutter beyond the table
+`j`, `k` and `e` are the three letters frun takes from Flutter beyond the table
 above, all three for the log window. Flutter binds none of them, and reaching a
 stack trace eight rows tall inside a twelve-row window is worth them.
 
@@ -1451,7 +1452,7 @@ executed.
 | 8.4 New tab, `⇧⏎` and `FRUN_DEVICE` | **unrun** | the key needs a press under the pushed flags; `handed_over()` needs a real project and a device. Three tests cover what the argv and environment must contain |
 | 8.5 Switch device, the frame | tested | `--dump switch`; a test asserts the title, the `running` badge, `Esc → Back`, and that the target card and tracker are gone |
 | 8.5 Switch device, the respawn | **unrun** | kill, reap, respawn onto another device, and shutting the outgoing emulator down. No harness reaches the pty; needs a project and two devices |
-| 7.7 Zoom (`z`) | tested | fills the frame at the right width |
+| 7.7 Expand log (`e`) | tested | fills the frame at the right width |
 | 7.7 Marker gap durations | tested | the gap fills on the next stage, and the final row stays blank |
 | Mouse capture | unrun | `m` toggles it; only the geometry is covered, by `--hits` |
 
@@ -2077,21 +2078,21 @@ font at one size covers the whole grid, and only Ghostty can change it. The
 app-side equivalent is a key that hides the three static cards and gives the log
 window the screen: at 62 rows that is 17 rows becoming 58.
 
-**Done: `z`.** It bypasses the `Budget` rather than being taught to it, because
+**Done: `e` (Expand).** It bypasses the `Budget` rather than being taught to it, because
 there is no ladder to solve when one block occupies the frame — the whole point of
-the ladder is choosing what to give up, and zoom has already answered that. Two
+the ladder is choosing what to give up, and zoom/expand has already answered that. Two
 details:
 
 * Width is taken unclamped, ignoring the 142-column cap. That cap exists so a card
   cannot stretch a label to one edge and its value to the other, and there are no
   cards here; more columns means fewer wrapped rows per entry, which is the entire
   objective.
-* The footer swaps its own label to `z Cards` when zoomed, so the key that got you
+* The footer swaps its own label to `e Collapse` when expanded, so the key that got you
   here is visibly the key that gets you back. It is the only thing on screen at
   that point, and a mode with no advertised exit is a trap.
 
-`z` is taken from Flutter's forwarding, which 5.1 otherwise forbids. Flutter binds
-neither `z` nor `j`/`k`, and this is the second of the two places where frun claims
+`e` is taken from Flutter's forwarding, which 5.1 otherwise forbids. Flutter binds
+neither `e` nor `j`/`k`, and this is the second of the two places where frun claims
 a letter for the log window.
 
 **Marker stages show `0ms`, and blanking them is the wrong fix.** `Flutter

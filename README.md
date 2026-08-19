@@ -10,7 +10,7 @@
   ![Platform](https://img.shields.io/badge/platform-macOS-71717a?style=flat-square)
   ![Flutter](https://img.shields.io/badge/Flutter-FVM%20or%20plain%20SDK-02569B?logo=flutter&style=flat-square)
 
-  [Features](#features) • [Requirements](#requirements) • [Install](#install) • [Usage](#usage) • [Keyboard](#keyboard) • [Screens](#screens) • [Development](#development)
+  [Features](#features) • [Requirements](#requirements) • [Install](#install) • [Usage](#usage) • [Keyboard](#keyboard) • [Development](#development)
 </div>
 
 `flutter run` outputs a noisy, scrolling wall of text where device selection, build stages, timing metrics, and application logs fight for the same lines. **frun** organizes everything into clean, dedicated cards: a project status card, target device details, a real-time build stage tracker, and an interactive log viewer — while proxying Flutter through a pty so all interactive shortcuts remain fully functional.
@@ -20,7 +20,6 @@
   <br>
   <sub>Live run on iOS Simulator: project card, device card, build timings, and streaming app logs.</sub>
 </div>
-
 
 ## Features
 
@@ -105,8 +104,6 @@ The footer cheatsheet automatically adapts to the current state.
 | `^C` | Force quit (SIGINT) | Anywhere |
 | `m` | Toggle mouse capture | Anywhere |
 
-
-
 ## Toolchain & Configuration
 
 ### SDK Detection
@@ -137,18 +134,6 @@ Themes are defined semantically in [`src/theme.rs`](src/theme.rs) (default: **Cy
 - **Yellow (`#FFE66D`):** Warning and pending operations.
 - **Magenta (`#F715AB`):** Errors and build failures.
 - **Purple (`#CC4DFF`):** Virtual devices and runtime badges.
-
-## Screens
-
-<div align="center">
-  <img src="assets/screens/01-picker.png" alt="Device Picker" width="48%">
-  <img src="assets/screens/02-building.png" alt="Build Tracker" width="48%">
-</div>
-<br>
-<div align="center">
-  <img src="assets/screens/05-switch.png" alt="Device Switcher" width="48%">
-  <img src="assets/screens/03-running.png" alt="Log Stream" width="48%">
-</div>
 
 ## Development & Testing
 
