@@ -82,6 +82,21 @@ frun --flavor staging                   # Forward flavor flag
 frun --dart-define=API=http://localhost # Forward dart-defines
 ```
 
+### Device Status Badges
+
+In the device picker (`SELECT DEVICE`) and switcher (`SWITCH DEVICE` via `^D`), `frun` displays the real-time state and relationship of each target:
+
+| Badge | Color / Hex | Meaning |
+| :--- | :--- | :--- |
+| ![active](https://img.shields.io/badge/active-B8FF6A?style=flat-square) | 🟢 Emerald (`#B8FF6A`) | Device is booted or physically connected and ready to run. |
+| ![running](https://img.shields.io/badge/running-34EDF3?style=flat-square) | 🔷 Cyan (`#34EDF3`) | The current active session is running on this device (press `⏎ Keep` to stay). |
+| ![in use](https://img.shields.io/badge/in_use-FFE66D?style=flat-square) | 🟡 Amber (`#FFE66D`) | Device is currently held by another `frun` instance or terminal tab. |
+| ![last used](https://img.shields.io/badge/last_used-CC4DFF?style=flat-square) | 🟣 Purple (`#CC4DFF`) | The target used in your previous session (promoted to top for fast re-runs). |
+| *(no badge)* | ⚪ Muted (`#71717A`) | Shut-down simulator or AVD. Pressing `Enter` boots it and starts the build. |
+
+> [!TIP]
+> Devices are automatically ranked at the top of the list by status: **`running` → `in use` → `last used` → `active`**.
+
 ### Exit Codes
 
 | Code | Meaning |
