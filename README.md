@@ -45,25 +45,32 @@
 
 ## Install
 
+### Quick Install (One-liner via Cargo)
 ```bash
-# Clone and build
+cargo install --git https://github.com/okasutarto/flutter-run-tui.git
+```
+*Installs the `frun` binary directly to `~/.cargo/bin/frun`.*
+
+<details>
+<summary><b>Build from source (Manual)</b></summary>
+
+```bash
 git clone https://github.com/okasutarto/flutter-run-tui.git ~/.config/zsh/flutter-run-tui
 cd ~/.config/zsh/flutter-run-tui
 cargo build --release
-
-# Symlink to your PATH
-ln -s "$PWD/target/release/frun-tui" ~/.local/bin/frun
+ln -s "$PWD/target/release/frun" ~/.local/bin/frun
 ```
 
 **Optional zsh function:**
 ```zsh
 # ~/.zshrc
 frun() {
-  local bin="$HOME/.config/zsh/flutter-run-tui/target/release/frun-tui"
+  local bin="$HOME/.config/zsh/flutter-run-tui/target/release/frun"
   [[ -x $bin ]] || { print -u2 "frun: not built yet (run cargo build --release)"; return 127 }
   "$bin" "$@"
 }
 ```
+</details>
 
 ## Usage
 

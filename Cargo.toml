@@ -3,6 +3,14 @@ name = "frun-tui"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "frun"
+path = "src/main.rs"
+
+[[bin]]
+name = "frun-tui"
+path = "src/main.rs"
+
 # frun: a TUI front end for `flutter run`, through FVM or a plain SDK,
 # implementing DESIGN.md.
 #
