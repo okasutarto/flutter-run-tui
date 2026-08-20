@@ -27,6 +27,7 @@
 - **🚀 Boot on Enter:** Select any shut-down simulator or AVD and press `Enter` to boot it and start the build automatically.
 - **⏱️ Honest Build Timings:** Separate tracking for toolchain startup time (Dart VM & `flutter_tools`) and actual compilation time (Gradle/Xcode).
 - **🔄 Smart Device Switching (`^D`):** Switch targets mid-session without exiting. Press `⇧Enter` to launch another device in a separate Ghostty or tmux tab.
+- **🎨 10 Curated Themes (`t`):** Instant floating modal with real-time live preview, 10 curated dark palettes (Color Hunt & developer favorites), smart text contrast, and persistent settings across sessions.
 - **🔥 Built-in Auto-Reload:** Automatically watches `lib/` for `.dart` file changes with a 100ms debounce — UI updates instantly on save without editor plugins.
 - **📜 Ergonomic Log Window:** Word-wrapped logs, keyboard/mouse scrolling (`j`/`k`, arrows, wheel), fullscreen log toggle (`e`), and transcript replay into your terminal history on exit.
 - **🎯 Full Interactive Forwarding:** Hot reload (`r`), hot restart (`R`), and all native Flutter shortcuts (`h`, `c`, `p`, `o`, `w`, `d`) pass through directly.
@@ -130,6 +131,7 @@ The footer cheatsheet automatically adapts to the current state.
 | `Enter` | Launch build or select target | Device picker |
 | `⇧Enter` | Launch device in a new tab (Ghostty / tmux) | Device picker |
 | `Esc` | Cancel (exit 130) or return to live session | Picker / Switch |
+| `t` | Open interactive theme switcher modal | Anywhere |
 | `r` | Hot reload / retry failed build | Running / Stopped / Build Failed |
 | `R` | Hot restart | Running |
 | `j` `k` / `↑` `↓` | Scroll log viewer | Log view |
@@ -139,6 +141,28 @@ The footer cheatsheet automatically adapts to the current state.
 | `q` | Quit gracefully (shuts down Flutter process) | Active run |
 | `^C` | Force quit (SIGINT) | Anywhere |
 | `m` | Toggle mouse capture | Anywhere |
+
+## 🎨 Themes & Customization
+
+Press **`t`** from any screen to open the **Theme Switcher** modal with instant real-time preview:
+
+| Shortcut | Preset Theme | Style & Palette Source |
+| :---: | :--- | :--- |
+| **`1`** | **Cyberpunk Neon** *(Default)* | High-Voltage Neon Noir (`#34EDF3` Cyan, `#B8FF6A` Lime, `#FFE66D` Yellow, `#F715AB` Magenta, `#CC4DFF` Purple) |
+| **`2`** | **Midnight Teal** | Color Hunt All-Time Top #1 Dark (`#222831`, `#393E46`, `#00ADB5`, `#EEEEEE`) |
+| **`3`** | **Sunset Horizon** | Color Hunt Top Warm Dark (`#2D4059`, `#EA5455`, `#F07B3F`, `#FFD460`) |
+| **`4`** | **Vintage Forest** | Color Hunt Earthy Nature Dark (`#2C3930`, `#3F4F44`, `#A27B5C`, `#DCD7C9`) |
+| **`5`** | **Cyber Crimson** | Color Hunt Top Neon Noir (`#1A1A2E`, `#16213E`, `#E94560`, `#4ECCA3`) |
+| **`6`** | **Obsidian Gold** | Color Hunt High-Contrast Minimalist (`#101820`, `#2B2D42`, `#FEE715`, `#F2F2F2`) |
+| **`7`** | **Catppuccin Mocha** | Harmonious Pastel Dark (Mauve `#CBA6F7`, Peach `#FAB387`, Green `#A6E3A1`, Sapphire `#89B4FA`) |
+| **`8`** | **Tokyo Night** | Glowing Indigo & Night Lights (`#7AA2F7`, `#73DACA`, `#FF9E64`, `#BB9AF7`) |
+| **`9`** | **Dracula** | Vibrant Gothic Dark (`#BD93F9`, `#50FA7B`, `#FFB86C`, `#FF79C6`) |
+| **`0`** | **Nord Dark** | Cool Arctic Frost & Aurora (`#88C0D0`, `#81A1C1`, `#EBCB8B`, `#B48EAD`) |
+
+- **Real-Time Live Preview**: Navigate with `↑`/`↓` or `j`/`k` to instantly test colors across the active TUI.
+- **Rollback on Cancel**: Press `Esc` or `q` to immediately restore your previous theme.
+- **Persistent Storage**: Chosen theme is automatically remembered across sessions in `~/.config/zsh/.frun-theme`.
+- **Smart Text Contrast**: Badges dynamically compute luminance to maintain sharp text legibility on all backgrounds.
 
 ## Toolchain & Configuration
 
@@ -163,19 +187,11 @@ FRUN_FLUTTER=puro frun
 | `TMUX` | When present, `⇧Enter` opens a new tmux window instead of a Ghostty tab. |
 | `FVM_CACHE_PATH` | Custom path to FVM cache directory. |
 
-### Custom Palette
-Themes are defined semantically in [`src/theme.rs`](src/theme.rs) (default: **Cyberpunk Neon**):
-- **Cyan (`#34EDF3`):** Focus and informative highlights.
-- **Lime (`#B8FF6A`):** Success and active status.
-- **Yellow (`#FFE66D`):** Warning and pending operations.
-- **Magenta (`#F715AB`):** Errors and build failures.
-- **Purple (`#CC4DFF`):** Virtual devices and runtime badges.
-
 ## Development & Testing
 
 ```bash
 cargo build --release
-cargo test --release            # 77 unit tests, 6 integration tests
+cargo test --release            # 82 unit tests, 6 integration tests
 cargo clippy --all-targets
 ```
 

@@ -1317,6 +1317,38 @@ fn key_press(
     ctx: &mut Ctx,
     key: ratatui::crossterm::event::KeyEvent,
 ) -> io::Result<bool> {
+    if app.theme_picker_open {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.close_theme_picker(false);
+            }
+            KeyCode::Enter => {
+                app.close_theme_picker(true);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.theme_picker_prev();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.theme_picker_next();
+            }
+            KeyCode::Char('0') => {
+                if theme::ThemeKind::ALL.len() >= 10 {
+                    app.theme_picker_select(9);
+                    app.close_theme_picker(true);
+                }
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = c as usize - '1' as usize;
+                if idx < theme::ThemeKind::ALL.len() {
+                    app.theme_picker_select(idx);
+                    app.close_theme_picker(true);
+                }
+            }
+            _ => {}
+        }
+        return Ok(false);
+    }
+
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             return Ok(apply(app, ctx, Action::Stop));
@@ -1412,6 +1444,7 @@ fn key_press(
         // describing things that are not changing while the only region that is
         // gets twelve.
         KeyCode::Char('e') => app.expanded = !app.expanded,
+        KeyCode::Char('t') | KeyCode::Char('T') => app.open_theme_picker(),
 
         // 8.4: the same verb as `⏎`, aimed at a new terminal tab instead of this
         // one. Scoped to the three states that show a list, so everywhere else a
@@ -1976,6 +2009,16 @@ fn apply(app: &mut App, ctx: &mut Ctx, action: Action) -> bool {
         }
 
         Action::StartDevice => enter(app, ctx),
+
+        Action::Theme => {
+            app.open_theme_picker();
+            false
+        }
+
+        Action::SelectTheme(index) => {
+            app.theme_picker_select(index);
+            false
+        }
 
         // Graceful: Flutter receives the key and shuts itself down (⏏). The loop
         // keeps running until the child closes the pty, so the exit stays

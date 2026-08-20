@@ -383,12 +383,12 @@ impl Level {
         }
     }
 
-    pub fn color(self) -> ratatui::style::Color {
+    pub fn color(self, theme: &theme::Theme) -> ratatui::style::Color {
         match self {
-            Level::Inf => theme::CYAN,
-            Level::Wrn => theme::AMBER,
-            Level::Err => theme::ROSE,
-            Level::Reload => theme::PURPLE,
+            Level::Inf => theme.cyan,
+            Level::Wrn => theme.amber,
+            Level::Err => theme.rose,
+            Level::Reload => theme.purple,
         }
     }
 }
@@ -501,6 +501,8 @@ pub enum Action {
     /// End the run and stay in frun, DESIGN.md 8.8.
     StopRun,
     StartDevice,
+    Theme,
+    SelectTheme(usize),
     Quit,
     Stop,
 }
@@ -525,6 +527,8 @@ impl Action {
             // the same way `^D` did. Raw mode clears IXON, so `^S` is not XOFF here.
             Action::StopRun => "^S",
             Action::StartDevice => "⏎",
+            Action::Theme => "t",
+            Action::SelectTheme(_) => "",
             Action::Quit => "q",
             Action::Stop => "^C",
         }
@@ -556,6 +560,8 @@ impl Action {
             Action::NewTab => "Launch in new tab",
             Action::StopRun => "Stop",
             Action::StartDevice => "Start",
+            Action::Theme => "Theme",
+            Action::SelectTheme(_) => "Select Theme",
             // `q` and `^C` are not the same exit, so they are not merged.
             //
             // `q` is forwarded to Flutter, which shuts itself down and closes the
@@ -765,6 +771,11 @@ pub struct App {
     /// and that row is `running`, not taken.
     pub busy: std::collections::HashSet<String>,
 
+    pub theme: theme::Theme,
+    pub theme_picker_open: bool,
+    pub theme_picker_index: usize,
+    pub saved_theme: Option<theme::Theme>,
+
     clock: probe::Clock,
 }
 
@@ -783,6 +794,7 @@ impl App {
         app.toolchain = probe::toolchain().clone();
         app.live = true;
         app.state = State::Detecting;
+        app.theme = theme::load_saved_theme().palette();
 
         app
     }
@@ -847,7 +859,54 @@ impl App {
             shift_enter: true,
             busy: std::collections::HashSet::new(),
 
+            theme: theme::ThemeKind::CyberpunkNeon.palette(),
+            theme_picker_open: false,
+            theme_picker_index: 0,
+            saved_theme: None,
+
             clock: probe::Clock::new(),
+        }
+    }
+
+    pub fn open_theme_picker(&mut self) {
+        if !self.theme_picker_open {
+            self.saved_theme = Some(self.theme);
+            self.theme_picker_open = true;
+            self.theme_picker_index = theme::ThemeKind::ALL
+                .iter()
+                .position(|&k| k == self.theme.kind)
+                .unwrap_or(0);
+        }
+    }
+
+    pub fn close_theme_picker(&mut self, apply: bool) {
+        if !apply {
+            if let Some(saved) = self.saved_theme.take() {
+                self.theme = saved;
+            }
+        } else {
+            self.saved_theme = None;
+            theme::save_theme(self.theme.kind);
+        }
+        self.theme_picker_open = false;
+    }
+
+    pub fn theme_picker_next(&mut self) {
+        let len = theme::ThemeKind::ALL.len();
+        self.theme_picker_index = (self.theme_picker_index + 1) % len;
+        self.theme = theme::ThemeKind::ALL[self.theme_picker_index].palette();
+    }
+
+    pub fn theme_picker_prev(&mut self) {
+        let len = theme::ThemeKind::ALL.len();
+        self.theme_picker_index = (self.theme_picker_index + len - 1) % len;
+        self.theme = theme::ThemeKind::ALL[self.theme_picker_index].palette();
+    }
+
+    pub fn theme_picker_select(&mut self, index: usize) {
+        if index < theme::ThemeKind::ALL.len() {
+            self.theme_picker_index = index;
+            self.theme = theme::ThemeKind::ALL[index].palette();
         }
     }
 
@@ -1928,5 +1987,41 @@ mod tests {
         // A row `Enter` refuses must not be the row the cursor opens on, and here the
         // remembered device is free while the top two rows are not.
         assert_eq!(app.devices[app.first_pickable()].id, "remembered");
+    }
+
+    #[test]
+    fn theme_picker_live_preview_and_rollback() {
+        let mut app = App::empty();
+        assert_eq!(app.theme.kind, theme::ThemeKind::CyberpunkNeon);
+        assert!(!app.theme_picker_open);
+
+        // Open theme picker
+        app.open_theme_picker();
+        assert!(app.theme_picker_open);
+        assert_eq!(app.theme_picker_index, 0);
+        assert_eq!(app.saved_theme.unwrap().kind, theme::ThemeKind::CyberpunkNeon);
+
+        // Next item -> Live Preview Midnight Teal
+        app.theme_picker_next();
+        assert_eq!(app.theme_picker_index, 1);
+        assert_eq!(app.theme.kind, theme::ThemeKind::MidnightTeal);
+
+        // Next item -> Live Preview Sunset Horizon
+        app.theme_picker_next();
+        assert_eq!(app.theme_picker_index, 2);
+        assert_eq!(app.theme.kind, theme::ThemeKind::SunsetHorizon);
+
+        // Cancel / Esc -> Rollback to saved theme
+        app.close_theme_picker(false);
+        assert!(!app.theme_picker_open);
+        assert_eq!(app.theme.kind, theme::ThemeKind::CyberpunkNeon);
+
+        // Open again, select Nord (index 9), and apply / Enter
+        app.open_theme_picker();
+        app.theme_picker_select(9); // Nord
+        assert_eq!(app.theme.kind, theme::ThemeKind::Nord);
+        app.close_theme_picker(true); // Apply
+        assert!(!app.theme_picker_open);
+        assert_eq!(app.theme.kind, theme::ThemeKind::Nord);
     }
 }

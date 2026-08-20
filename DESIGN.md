@@ -26,20 +26,54 @@ Application design follows strict Text User Interface (TUI) paradigms popularize
 
 ## 🎨 2. Color Palette & Visual Tokens
 
-The color architecture uses a dark noir base with high-contrast functional color coding from the **Cyberpunk Neon Powerline** palette to instantly signal state transitions:
+The styling architecture uses dynamic semantic theme tokens with high contrast over dark terminal backgrounds. While **Cyberpunk Neon** remains the signature default, `frun` supports 10 curated dark presets adapted from Color Hunt's top trending palettes and developer dark themes.
 
-| Visual Token | Hex / Constant | Primary Usage |
+### 2.1. Curated Theme Presets (`ThemeKind`)
+
+| # | Preset | Visual Identity | Primary Palette Hex Codes |
+| :---: | :--- | :--- | :--- |
+| **`1`** | **Cyberpunk Neon** *(Default)* | High-Voltage Neon Noir | Cyan `#34EDF3`, Lime `#B8FF6A`, Yellow `#FFE66D`, Magenta `#F715AB`, Purple `#CC4DFF` |
+| **`2`** | **Midnight Teal** | Color Hunt All-Time Top #1 Dark | Base `#222831`, Slate `#393E46`, Teal `#00ADB5`, Aqua `#00FFF5`, White `#EEEEEE` |
+| **`3`** | **Sunset Horizon** | Color Hunt Top Warm Dark | Navy `#2D4059`, Coral `#EA5455`, Tangerine `#F07B3F`, Gold `#FFD460`, White `#F9F9F9` |
+| **`4`** | **Vintage Forest** | Color Hunt Earthy Nature Dark | Olive `#2C3930`, Forest `#3F4F44`, Leather `#A27B5C`, Sage `#8FA28A`, Cream `#DCD7C9` |
+| **`5`** | **Cyber Crimson** | Color Hunt Top Neon Noir | Deep Night `#1A1A2E`, Navy `#16213E`, Crimson `#E94560`, Mint `#4ECCA3`, Violet `#9B59B6` |
+| **`6`** | **Obsidian Gold** | Color Hunt High-Contrast Minimalist | Obsidian `#101820`, Charcoal `#2B2D42`, Gold `#FEE715`, Red `#FF0054`, White `#F2F2F2` |
+| **`7`** | **Catppuccin Mocha** | Harmonious Pastel Dark | Crust `#11111B`, Mauve `#CBA6F7`, Peach `#FAB387`, Green `#A6E3A1`, Sapphire `#89B4FA` |
+| **`8`** | **Tokyo Night** | Glowing Indigo & Night Lights | Darker `#16161E`, Blue `#7AA2F7`, Teal `#73DACA`, Orange `#FF9E64`, Purple `#BB9AF7` |
+| **`9`** | **Dracula** | Vibrant Gothic Dark | Darker `#21222C`, Purple `#BD93F9`, Green `#50FA7B`, Orange `#FFB86C`, Pink `#FF79C6` |
+| **`0`** | **Nord Dark** | Cool Arctic Frost & Aurora | Deep `#242933`, Frost Cyan `#88C0D0`, Aurora Green `#A3BE8C`, Yellow `#EBCB8B`, Snow `#ECEFF4` |
+
+### 2.2. Semantic Token System (`struct Theme`)
+
+All UI rendering consumes the active `&app.theme` instead of hardcoded color constants:
+
+| Semantic Channel | Cyberpunk Default | Semantic Purpose |
 | :--- | :--- | :--- |
-| **Canvas Background** | `#0c0e14` (`bg-[#0c0e14]`) | Outer application container & dark grid frame |
-| **Box Background** | `#000000` (`bg-black/80`) | Inset cards, logs container, tables background |
-| **Default Text** | `#e4e4e7` (`TEXT`) | Standard body copy, output logs, table keys |
-| **Subdued Text** | `#71717a` (`MUTED`) | Table labels, key hints, timestamps |
-| **Cyan Accent** | `#34edf3` (`BORDER`, `CYAN`) | Card borders, section headers (`◆`), selected items, active focus |
-| **Lime / Emerald Success** | `#b8ff6a` (`EMERALD`) | Active device status (`✔`), build success, completed steps |
-| **Yellow / Amber Warning** | `#ffe66d` (`AMBER`) | Git branch tags, no-device alert banner, pending steps |
-| **Magenta / Rose Error** | `#f715ab` (`ROSE`) | Build/Hot Reload failures (`✖`), stack traces, pointers |
-| **Purple Virtual** | `#cc4dff` (`PURPLE`) | Simulator/emulator badges, secondary runtime tags |
-| **Badge Ink** | `#070e34` (`INK`) | Dark text ink drawn on top of filled accent badges |
+| **`border`** | `#34EDF3` (Cyan) | Rounded card outer borders, popup frames, keycap brackets |
+| **`surface`** | `#18181B` (Dark) | Selected row background highlight (`app.theme.surface`) |
+| **`ink`** | `#070E34` (Deep Ink) | High-contrast dark text inside bright badges (Gold/Lime/Cyan) |
+| **`text`** | `#E4E4E7` (White) | Primary body copy, project names, active device labels |
+| **`muted`** | `#71717A` (Slate) | Dimmed metadata, device platform labels, footer shortcuts |
+| **`cyan`** *(Primary)* | `#34EDF3` (Cyan) | Action buttons (`[⏎] Keep`), active target selection, cursor `❯` |
+| **`emerald`** *(Success)* | `#B8FF6A` (Lime) | Active running status (`[ running ]`), clean Git (`✔ Clean`), completed build stages |
+| **`amber`** *(Warning)* | `#FFE66D` (Yellow) | Git branch tags, devices in use (`[ in use ]`), in-flight build spinner |
+| **`rose`** *(Error)* | `#F715AB` (Magenta) | Build/reload errors, dirty Git (`● n changed`), stop action (`^S`) |
+| **`purple`** *(Accent Tag)* | `#CC4DFF` (Purple) | Card title glow (`◆ PROJECT INFO`), history tags (`[ last used ]`), runtime badges |
+
+### 2.3. Smart Badge Text Contrast (`Theme::badge_fg`)
+
+Badges and filled pills dynamically calculate the relative perceived luminance of their background:
+$$\text{Luminance} = 0.299 \times R + 0.587 \times G + 0.114 \times B$$
+- If $\text{Luminance} > 140$ (bright backgrounds like Gold, Yellow, Lime, Cyan): badge text automatically uses dark `ink` (`#070E34`).
+- If $\text{Luminance} \le 140$ (deep/saturated backgrounds like Violet, Navy, Crimson): badge text automatically uses light `text` (`#E4E4E7`).
+- **Guarantee**: Badge text is never washed out, illegible, or low-contrast across any of the 10 themes.
+
+### 2.4. Theme Switcher Modal & Persistence
+
+- **Modal UI (`src/ui/theme_picker.rs`)**: Centered overlay popup with rounded borders, palette color swatches, current theme indicator (`[ CURRENT ]`), and preview badge (`[ PREVIEW ]`).
+- **Live Preview**: Navigating with `↑`/`↓` or `j`/`k` immediately updates the active `app.theme` across the frame in real time.
+- **Rollback on Cancel**: `Esc` or `q` restores the previously saved theme without side effects.
+- **Persistent State**: Confirming a selection writes the theme slug to `~/.config/zsh/.frun-theme` (matching `.frun-last-device`), which is loaded on subsequent launches via `App::live`.
 
 ---
 

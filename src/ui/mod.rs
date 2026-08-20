@@ -7,15 +7,16 @@ pub mod logo;
 mod logs;
 mod project;
 mod target;
+pub mod theme_picker;
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::budget::{self, Budget};
 use crate::data::{App, State};
-use crate::theme;
+use crate::theme::Theme;
 use crate::widgets::{strong, text};
 
 pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
@@ -26,7 +27,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     app.hits.clear();
 
     if full.width < budget::MIN_W || full.height < budget::MIN_H {
-        too_small(frame, full);
+        too_small(frame, full, &app.theme);
         return;
     }
 
@@ -51,6 +52,12 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         // layout would have made, naming cards that are not on screen, and spent
         // 56 columns of the footer doing it.
         chrome::footer(frame, rows[1], app, None);
+
+        if app.theme_picker_open {
+            let popup = theme_picker::centered_rect(58, 15, full);
+            frame.render_widget(Clear, popup);
+            theme_picker::render(frame, popup, app);
+        }
 
         return;
     }
@@ -107,12 +114,6 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     // Last chunk: the footer has its own area, split off above.
     let middle = chunks[i];
 
-    // No prompt bar between the middle and the footer. It was three rows plus a
-    // separating gap, spent on a command line with nothing to command: Flutter
-    // reads single keys, so a typed string could not be forwarded (`quit` would
-    // have sent `q` and quit), and every key it could have offered is already in
-    // the footer. Those four rows are the log window's.
-
     match app.state {
         State::Detecting => detecting(frame, middle, app),
         State::Booting => devices::render_booting(frame, middle, app),
@@ -120,35 +121,32 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         State::SingleDevice => devices::render_single(frame, middle, app),
         State::BuildFailed => build::render_failure(frame, middle, app),
 
-        // Building excluded: the card arrived empty and stayed nearly empty while
-        // the rows would be better spent on the stage list. The gap before the
-        // first stage after `Launching` is now marked by the elapsed clock on the
-        // pending stage row instead.
         State::Building => {}
 
-        // The same list `MultipleDevices` draws, over a run that is still going.
-        // 8.5: the picker frun already has is the switch UI, so there is no second
-        // list to keep in step with this one.
         State::Switching => devices::render_picker(frame, middle, app, &plan),
 
         State::Running
         | State::ReloadInFlight
         | State::ReloadFailed
         | State::ReloadDropped
-        // Nothing is streaming any more, and that is exactly why the window stays:
-        // reading what the run said is the reason to stop without leaving (8.8).
         | State::Stopped => logs::render(frame, middle, app),
     }
 
     chrome::footer(frame, footer_area, app, Some(&plan));
+
+    if app.theme_picker_open {
+        let popup = theme_picker::centered_rect(58, 15, full);
+        frame.render_widget(Clear, popup);
+        theme_picker::render(frame, popup, app);
+    }
 }
 
-fn too_small(frame: &mut Frame, area: Rect) {
+fn too_small(frame: &mut Frame, area: Rect, theme: &Theme) {
     let msg = Paragraph::new(vec![
-        Line::from(strong("terminal too small", theme::ROSE)),
+        Line::from(strong("terminal too small", theme.rose)),
         Line::from(text(
             format!("needs at least {}x{}", budget::MIN_W, budget::MIN_H),
-            theme::MUTED,
+            theme.muted,
         )),
     ])
     .centered();
@@ -161,16 +159,13 @@ fn too_small(frame: &mut Frame, area: Rect) {
 fn detecting(frame: &mut Frame, area: Rect, app: &App) {
     let lines = vec![
         Line::from(vec![
-            strong(app.spinner(), theme::CYAN),
-            text("  Detecting Flutter devices...", theme::TEXT),
+            strong(app.spinner(), app.theme.cyan),
+            text("  Detecting Flutter devices...", app.theme.text),
         ]),
         Line::default(),
-        // The command that is actually running, not a fixed string that used to
-        // be one: without FVM this is `flutter devices --machine`, and a screen
-        // naming a command the machine cannot run is worse than naming none.
         Line::from(text(
             format!("  {}", app.toolchain.display(&["devices", "--machine"])),
-            theme::MUTED,
+            app.theme.muted,
         )),
     ];
 

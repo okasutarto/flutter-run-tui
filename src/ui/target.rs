@@ -25,13 +25,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         return;
     }
 
-    let mut block = card("DEVICE INFO", theme::PURPLE);
+    let mut block = card("DEVICE INFO", app.theme.purple, &app.theme);
 
     if !app.state.has_tracker() {
         let (glyph, label, color) = super::build::status(app);
 
-        let mut spans = vec![text("─ ", theme::BORDER)];
-        spans.extend(pill(format!(" {glyph} {label} "), color));
+        let mut spans = vec![text("─ ", app.theme.border)];
+        spans.extend(pill(format!(" {glyph} {label} "), color, &app.theme));
         spans.push(Span::raw(" "));
 
         block = block.title_top(Line::from(spans).right_aligned());
@@ -50,10 +50,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     let w = inner.width;
 
     let (os_glyph, os_color) = match device.platform {
-        crate::probe::Platform::Android => (theme::GLYPH_ANDROID, theme::EMERALD),
-        crate::probe::Platform::Ios => (theme::GLYPH_APPLE, theme::CYAN),
-        crate::probe::Platform::Desktop => (theme::GLYPH_DESKTOP, theme::CYAN),
-        crate::probe::Platform::Web => (theme::GLYPH_WEB, theme::CYAN),
+        crate::probe::Platform::Android => (theme::GLYPH_ANDROID, app.theme.emerald),
+        crate::probe::Platform::Ios => (theme::GLYPH_APPLE, app.theme.cyan),
+        crate::probe::Platform::Desktop => (theme::GLYPH_DESKTOP, app.theme.cyan),
+        crate::probe::Platform::Web => (theme::GLYPH_WEB, app.theme.cyan),
     };
 
     let room = (w as usize).saturating_sub(
@@ -65,19 +65,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     let name_str = elide(&device.name, room.max(8));
 
     let target_value = if kind.is_empty() {
-        vec![strong(name_str, theme::TEXT)]
+        vec![strong(name_str, app.theme.text)]
     } else {
         vec![
-            strong(name_str, theme::TEXT),
+            strong(name_str, app.theme.text),
             Span::raw(" "),
-            strong(format!("({kind})"), theme::PURPLE),
+            strong(format!("({kind})"), app.theme.purple),
         ]
     };
 
-    let mut lines = vec![field(w, "Device Target", target_value)];
+    let mut lines = vec![field(w, "Device Target", target_value, &app.theme)];
 
     if plan.separators {
-        lines.push(separator(w));
+        lines.push(separator(w, &app.theme));
     }
 
     lines.push(field(
@@ -88,6 +88,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
             Span::raw("  "),
             strong(os_str, os_color),
         ],
+        &app.theme,
     ));
 
     lines.retain(|l| !l.spans.is_empty() || plan.separators);
@@ -111,12 +112,12 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
     let line = spread(
         area.width,
         vec![
-            strong("✔ ", theme::EMERALD),
-            strong(device.name.as_str(), theme::TEXT),
+            strong("✔ ", app.theme.emerald),
+            strong(device.name.as_str(), app.theme.text),
             Span::raw("  "),
-            text(device.id.as_str(), theme::CYAN),
+            text(device.id.as_str(), app.theme.cyan),
         ],
-        vec![text(os_version(app), theme::MUTED)],
+        vec![text(os_version(app), app.theme.muted)],
     );
 
     frame.render_widget(Paragraph::new(line), area);
