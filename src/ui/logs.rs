@@ -188,17 +188,7 @@ fn draw_stream(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let visible: Vec<Line> = rows.into_iter().skip(start).take(height.max(1)).collect();
 
-    let target = if visible.len() < height {
-        Rect {
-            y: area.y + area.height - visible.len() as u16,
-            height: visible.len() as u16,
-            ..area
-        }
-    } else {
-        area
-    };
-
-    frame.render_widget(Paragraph::new(visible), target);
+    frame.render_widget(Paragraph::new(visible), area);
 }
 
 fn message_color(level: crate::data::Level) -> ratatui::style::Color {

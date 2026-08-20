@@ -3352,3 +3352,16 @@ device or the two tabs build with different SDKs.
 | :--- | :--- |
 | The pty spawn without FVM | Needs a build on a machine whose only Flutter is a plain one. `Session::spawn` and `probe::devices` take their argv from the same `Toolchain::argv` that `--probe` prints and that `probe::devices` was driven through live, so what is untested is the pty, not the argv |
 | asdf and puro specifically | Neither is installed here. asdf's shim directory is `<sdk>/bin/flutter` after `canonicalize` and so is covered by rule 3; puro needs `FRUN_FLUTTER` and was exercised only through the `mise` shape |
+
+---
+
+### 8.12 Built-in file watcher for auto-reload (built)
+
+`flutter run` defaults to interactive stdin, requiring a manual `r` keypress for every hot reload. IDE extensions bridge this by attaching a debugger, which binds reload to file saves inside that specific editor and adds startup friction.
+
+**frun includes an always-on, zero-dependency file watcher.** When a session enters `Running` (`build_done()`), a background thread polls `lib/` for `.dart` file modification times via `std::fs`.
+
+1. **100ms Debounce.** Rapid multi-file saves or code formatters batch into a single reload trigger.
+2. **Standard Library Only.** Sub-millisecond recursive directory scan using `std::fs::read_dir` and metadata `mtime`. No extra crate dependencies or OS backend mismatch.
+3. **Session-Scoped Lifecycle.** The watcher thread starts alongside `Session::spawn` and drops immediately on `child_exited` or `stop_session`.
+4. **Key Forwarding Preserved.** `r` and `R` remain fully functional manual triggers per 5.1.

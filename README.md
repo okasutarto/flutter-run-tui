@@ -27,6 +27,7 @@
 - **🚀 Boot on Enter:** Select any shut-down simulator or AVD and press `Enter` to boot it and start the build automatically.
 - **⏱️ Honest Build Timings:** Separate tracking for toolchain startup time (Dart VM & `flutter_tools`) and actual compilation time (Gradle/Xcode).
 - **🔄 Smart Device Switching (`^D`):** Switch targets mid-session without exiting. Press `⇧Enter` to launch another device in a separate Ghostty or tmux tab.
+- **🔥 Built-in Auto-Reload:** Automatically watches `lib/` for `.dart` file changes with a 100ms debounce — UI updates instantly on save without editor plugins.
 - **📜 Ergonomic Log Window:** Word-wrapped logs, keyboard/mouse scrolling (`j`/`k`, arrows, wheel), fullscreen log toggle (`e`), and transcript replay into your terminal history on exit.
 - **🎯 Full Interactive Forwarding:** Hot reload (`r`), hot restart (`R`), and all native Flutter shortcuts (`h`, `c`, `p`, `o`, `w`, `d`) pass through directly.
 

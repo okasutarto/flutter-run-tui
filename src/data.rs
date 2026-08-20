@@ -479,6 +479,8 @@ pub enum Msg {
     Busy(std::collections::HashSet<String>),
     /// The slow SDK version lookup landed.
     Versions(String, String),
+    /// File watcher detected a change in lib/.
+    WatchReload,
 }
 
 // ============================================================

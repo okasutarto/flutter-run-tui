@@ -19,6 +19,7 @@ mod flutter;
 mod probe;
 mod theme;
 mod ui;
+mod watcher;
 mod widgets;
 
 use std::io::{self, Write};
@@ -541,6 +542,7 @@ struct Ctx {
     rx: Receiver<Msg>,
     tx: Sender<Msg>,
     session: Option<Session>,
+    watcher: Option<watcher::Watcher>,
     /// Extra arguments to pass through to Flutter, kept for a retried build.
     extra: Vec<String>,
     /// When the device list was last checked against the machine.
@@ -578,6 +580,7 @@ fn run(mut app: App, tx: Sender<Msg>, rx: Receiver<Msg>, extra: Vec<String>) -> 
         rx,
         tx,
         session: None,
+        watcher: None,
         extra,
         // Detection has just been fired and its answer is the first list, so the
         // clock starts here rather than at the epoch.
@@ -798,6 +801,12 @@ fn handle(app: &mut App, ctx: &mut Ctx, msg: Msg) {
         }
 
         Msg::Busy(ids) => app.busy = ids,
+
+        Msg::WatchReload => {
+            if app.state.build_done() {
+                apply(app, ctx, Action::Reload);
+            }
+        }
 
         Msg::Quick(targets) => quick_answered(app, ctx, targets),
 
@@ -1201,7 +1210,13 @@ fn spawn_session(app: &mut App, ctx: &mut Ctx) {
     app.begin_build();
 
     match Session::spawn(&device, &ctx.extra, ctx.tx.clone()) {
-        Ok(session) => ctx.session = Some(session),
+        Ok(session) => {
+            ctx.session = Some(session);
+            let lib_dir = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("lib");
+            ctx.watcher = Some(watcher::Watcher::start(lib_dir, ctx.tx.clone()));
+        }
 
         Err(reason) => {
             app.fatal = Some(reason);
@@ -1235,6 +1250,7 @@ fn child_exited(app: &mut App, ctx: &mut Ctx) {
     // builds again.
     if app.ending.is_some() {
         ctx.session = None;
+        ctx.watcher = None;
 
         app.end_build();
         app.goto(State::Stopped);
@@ -1255,6 +1271,7 @@ fn child_exited(app: &mut App, ctx: &mut Ctx) {
         // the app is gone and `r` is the way back, which for a virtual target
         // boots it again first. Only the title differs.
         ctx.session = None;
+        ctx.watcher = None;
 
         app.ending = Some(Ending::Lost);
         app.end_build();
@@ -1277,6 +1294,7 @@ fn child_exited(app: &mut App, ctx: &mut Ctx) {
         // free return, so after a failed build that row silently restored the failure
         // frame instead of rebuilding. `Session::exit_code` has already been read.
         ctx.session = None;
+        ctx.watcher = None;
 
         app.end_build();
         app.exit_code = code;
@@ -1790,6 +1808,7 @@ fn stop_session(ctx: &mut Ctx) {
     }
 
     ctx.session = None;
+    ctx.watcher = None;
 }
 
 /// One path for keys and clicks alike, so the two cannot drift apart.
@@ -2277,6 +2296,7 @@ mod tests {
             rx,
             tx,
             session: None,
+            watcher: None,
             extra: Vec::new(),
             rechecked: Instant::now(),
             git_rechecked: Instant::now(),
@@ -2338,6 +2358,7 @@ mod tests {
                 rx,
                 tx,
                 session: None,
+                watcher: None,
                 extra: Vec::new(),
                 rechecked: Instant::now(),
                 git_rechecked: Instant::now(),
