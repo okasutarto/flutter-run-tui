@@ -337,13 +337,13 @@ impl Theme {
         ]
     }
 
-    /// Compact rounded badge for log levels (non-bold for readability).
+    /// Compact rounded badge for log levels. Text is bold.
     pub fn badge<'a>(&self, text: impl Into<Cow<'a, str>>, color: Color) -> Vec<Span<'a>> {
         let fg = self.badge_fg(color);
         let s = text.into();
         vec![
             Span::styled(PILL_L, Style::new().fg(color)),
-            Span::styled(s, Style::new().bg(color).fg(fg)),
+            Span::styled(s, Style::new().bg(color).fg(fg).bold()),
             Span::styled(PILL_R, Style::new().fg(color)),
         ]
     }

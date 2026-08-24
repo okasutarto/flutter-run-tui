@@ -522,11 +522,11 @@ impl Action {
             // frun's, so the modifier costs nothing from 5.1 either — what it costs
             // instead is the Kitty keyboard protocol, without which every modified
             // `Enter` is plain CR on the wire. See 8.4 and `App::shift_enter`.
-            Action::NewTab => "⇧⏎",
+            Action::NewTab => "⇧↵",
             // `s` is Flutter's screenshot key, so the mnemonic has to be a modifier
             // the same way `^D` did. Raw mode clears IXON, so `^S` is not XOFF here.
             Action::StopRun => "^S",
-            Action::StartDevice => "⏎",
+            Action::StartDevice => "↵",
             Action::Theme => "t",
             Action::SelectTheme(_) => "",
             Action::Quit => "q",
@@ -555,9 +555,9 @@ impl Action {
             // run states had left to give.
             Action::Switch => "Switch",
             // The same words in the picker and in the switch list, deliberately.
-            // `⏎` changes meaning between those two frames and has to say which it
-            // means; `⇧⏎` does not — it launches, in a new tab, either way.
-            Action::NewTab => "Launch in new tab",
+            // `↵` changes meaning between those two frames and has to say which it
+            // means; `⇧↵` does not — it launches, in a new tab, either way.
+            Action::NewTab => "New tab",
             Action::StopRun => "Stop",
             Action::StartDevice => "Start",
             Action::Theme => "Theme",

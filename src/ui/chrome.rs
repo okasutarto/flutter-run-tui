@@ -104,7 +104,7 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
         State::MultipleDevices => {
             let mut hints = vec![
                 ("↑↓", "Move", app.theme.cyan, None),
-                ("⏎", "Launch", app.theme.emerald, None),
+                ("↵", "Launch", app.theme.emerald, None),
             ];
 
             new_tab(&mut hints, app);
@@ -117,7 +117,7 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App, plan: Option<&Budget
         State::Switching => {
             let mut hints = vec![
                 ("↑↓", "Move", app.theme.cyan, None),
-                ("⏎", "Switch", app.theme.emerald, None),
+                ("↵", "Switch", app.theme.emerald, None),
             ];
 
             new_tab(&mut hints, app);

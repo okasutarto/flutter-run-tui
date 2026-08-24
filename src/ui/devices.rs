@@ -185,7 +185,7 @@ const ACTIVE: &str = "active";
 const LAST_USED: &str = "last used";
 const RUNNING: &str = "running";
 const IN_USE: &str = "in use";
-const KEEP: &str = "⏎ Keep";
+const KEEP: &str = "↵ keep";
 
 fn pill_width(label: &str) -> usize {
     crate::widgets::width(label) + 2

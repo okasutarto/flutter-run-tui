@@ -882,17 +882,30 @@ fn classify(text: &str) -> Level {
         })
         .trim_start();
 
-    const ERRORS: [&str; 22] = [
+    const ERRORS: [&str; 41] = [
         "Exception",
         "Error:",
         "error:",
+        "Error ",
+        "error ",
         "Failed assertion",
         "was thrown",
         "FAILURE:",
         "Unhandled exception",
+        "failed:",
+        "Failed:",
+        "failed",
+        "Failed",
+        "FAILED",
+        "Request failed",
+        "request failed",
+        "[FAIL]",
+        "[FAILED]",
         "══╡",
         ".error",
         "AppLogger.error",
+        "Logger.e",
+        "AppLogger.e",
         ".fatal",
         "AppLogger.fatal",
         ".wtf",
@@ -905,6 +918,12 @@ fn classify(text: &str) -> Level {
         "[error]",
         "[FATAL]",
         "[CRITICAL]",
+        "[SEVERE]",
+        "[SHOUT]",
+        "DioException",
+        "HttpException",
+        "SocketException",
+        "TimeoutException",
     ];
 
     const NON_ERROR_CALLERS: [&str; 17] = [
@@ -1354,6 +1373,14 @@ mod tests {
         );
         assert_eq!(
             classify("flutter: some.service.error occurred"),
+            Level::Err
+        );
+        assert_eq!(
+            classify("flutter: Request to /login failed: PIN tidak sesuai"),
+            Level::Err
+        );
+        assert_eq!(
+            classify("flutter: Request to /validate-otp failed: Kode OTP tidak sesuai."),
             Level::Err
         );
 
