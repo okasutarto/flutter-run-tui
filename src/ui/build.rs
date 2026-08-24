@@ -15,32 +15,32 @@ const BAR_MAX: u16 = 44;
 
 pub(super) fn status(app: &App) -> (&'static str, &'static str, ratatui::style::Color) {
     match app.state {
-        State::BuildFailed => ("✖", "BUILD FAILED", app.theme.rose),
+        State::BuildFailed => ("✖", "Build Failed", app.theme.rose),
         State::Stopped if app.ending == Some(Ending::Detached) => {
-            (theme::GLYPH_STOP, "DETACHED", app.theme.muted)
+            (theme::GLYPH_STOP, "Detached", app.theme.muted)
         }
         State::Stopped if app.ending == Some(Ending::Lost) => {
-            (theme::GLYPH_WARN, "DISCONNECTED", app.theme.rose)
+            (theme::GLYPH_WARN, "Disconnected", app.theme.rose)
         }
-        State::Stopped => (theme::GLYPH_STOP, "STOPPED", app.theme.muted),
-        s if s.build_done() => (theme::GLYPH_PLAY, "RUNNING", app.theme.emerald),
+        State::Stopped => (theme::GLYPH_STOP, "Stopped", app.theme.muted),
+        s if s.build_done() => (theme::GLYPH_PLAY, "Running", app.theme.emerald),
         State::Switching if app.run_state().holds_session() => {
-            (theme::GLYPH_PLAY, "RUNNING", app.theme.emerald)
+            (theme::GLYPH_PLAY, "Running", app.theme.emerald)
         }
-        State::Switching => (theme::GLYPH_STOP, "STOPPED", app.theme.muted),
-        _ => (app.spinner(), "BUILDING", app.theme.amber),
+        State::Switching => (theme::GLYPH_STOP, "Stopped", app.theme.muted),
+        _ => (app.spinner(), "Building", app.theme.amber),
     }
 }
 
 pub(super) fn timings(app: &App) -> Vec<Span<'static>> {
     vec![
-        text("Startup ", app.theme.emerald),
-        strong(app.startup_clock(), app.theme.text),
-        text("   Build ", app.theme.emerald),
-        strong(app.build_clock(), app.theme.text),
-        text("   Sync ", app.theme.emerald),
-        strong(app.sync_time.clone(), app.theme.text),
-        text("   Total ", app.theme.emerald),
+        strong("Startup ", app.theme.muted),
+        strong(app.startup_clock(), app.theme.cyan),
+        strong("   Build ", app.theme.muted),
+        strong(app.build_clock(), app.theme.emerald),
+        strong("   Sync ", app.theme.muted),
+        strong(app.sync_time.clone(), app.theme.purple),
+        strong("   Total ", app.theme.muted),
         strong(app.total_clock(), app.theme.text),
     ]
 }
@@ -59,13 +59,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget) {
 
     let rows = Layout::vertical([
         Constraint::Length(1), // progress bar
-        Constraint::Length(1), // blank
         Constraint::Min(1),    // stage list
     ])
     .split(inner);
 
     progress(frame, rows[0], app);
-    stages(frame, rows[2], app);
+    stages(frame, rows[1], app);
 }
 
 fn progress(frame: &mut Frame, area: Rect, app: &App) {
@@ -91,9 +90,9 @@ fn progress(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let right = vec![
-        text("Stage ", app.theme.muted),
+        strong("Stage ", app.theme.muted),
         strong(format!("{reached}"), colour),
-        text(format!("/{denominator}"), app.theme.muted),
+        strong(format!("/{denominator}"), app.theme.muted),
     ];
 
     let line = spread(

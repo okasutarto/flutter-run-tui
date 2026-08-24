@@ -335,7 +335,9 @@ mod tests {
         let frame = dump(&mut app, 106, 45);
 
         assert!(
-            frame.contains("SWITCH DEVICE") && !frame.contains("SELECT DEVICE"),
+            (frame.contains("SWITCH DEVICE") || frame.contains("Switch Device"))
+                && !frame.contains("SELECT DEVICE")
+                && !frame.contains("Select Device"),
             "the title has to distinguish a switch from a first pick:\n{frame}"
         );
 
@@ -351,7 +353,8 @@ mod tests {
 
         // The target card is visible above the switch list, but the tracker is off screen.
         assert!(
-            frame.contains("DEVICE INFO") && !frame.contains("Stage "),
+            (frame.contains("DEVICE INFO") || frame.contains("Target Device"))
+                && !frame.contains("Stage "),
             "the target card is retained above switch device, tracker is gone:\n{frame}"
         );
     }
@@ -406,10 +409,10 @@ mod tests {
     fn scrolling_back_shows_older_rows() {
         let mut app = App::new(State::Running);
 
-        let at_bottom = dump(&mut app, 80, 24);
+        let at_bottom = dump(&mut app, 80, 18);
 
         app.log_scroll = 3;
-        let scrolled = dump(&mut app, 80, 24);
+        let scrolled = dump(&mut app, 80, 18);
 
         assert!(
             app.log_scroll > 0,
@@ -454,7 +457,7 @@ mod tests {
         let row = frame
             .lines()
             .map(strip_sgr)
-            .find(|line| line.contains("Device"))
+            .find(|line| line.contains("Device Target"))
             .expect("the target card draws a name row");
 
         assert!(row.contains('…'), "the name has to be shortened: {row}");

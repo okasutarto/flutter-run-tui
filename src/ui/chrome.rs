@@ -1,13 +1,79 @@
 //! TerminalFooter (3.7).
 
 use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::budget::Budget;
 use crate::data::{Action, App, Hit, State};
-use crate::widgets::{keycap, strong, text};
+use crate::theme;
+use crate::widgets::{keycap, spread, strong, text};
+
+/// Top App Bar inspired by Noodle TUI breadcrumb header.
+#[allow(dead_code)]
+pub fn header(frame: &mut Frame, area: Rect, app: &App) {
+    if area.height == 0 || area.width < 30 {
+        return;
+    }
+
+    // Left side: frun / project_name ▾   ⎇ branch [✔ clean]
+    let mut left = vec![
+        strong("frun", app.theme.cyan),
+        text(" / ", app.theme.muted),
+        strong(app.project.as_str(), app.theme.text),
+        text(format!(" {}", theme::GLYPH_DOWN_TRIANGLE), app.theme.muted),
+    ];
+
+    if !app.branch.is_empty() && area.width > 70 {
+        left.push(text("   ", app.theme.muted));
+        left.push(strong(theme::GLYPH_GIT_BRANCH, app.theme.amber));
+        left.push(Span::raw(" "));
+        left.push(text(crate::widgets::elide(&app.branch, 24), app.theme.amber));
+
+        let (git_str, git_color) = if app.dirty == 0 {
+            ("✔ clean", app.theme.emerald)
+        } else {
+            ("● changed", app.theme.rose)
+        };
+        left.push(Span::raw(" "));
+        left.push(text("[", app.theme.muted));
+        left.push(text(git_str, git_color));
+        left.push(text("]", app.theme.muted));
+    }
+
+    // Right side: ● Target Device · [ RUNNING ]
+    let mut right = Vec::new();
+    if let Some(target) = &app.target {
+        right.push(strong(format!("{} ", theme::GLYPH_DOT), app.theme.emerald));
+        right.push(strong(target.name.as_str(), app.theme.text));
+        right.push(text(" · ", app.theme.muted));
+    }
+
+    let (state_label, state_color) = match app.state {
+        State::Detecting => ("DETECTING", app.theme.cyan),
+        State::Booting => ("BOOTING", app.theme.amber),
+        State::MultipleDevices => ("SELECT DEVICE", app.theme.cyan),
+        State::SingleDevice => ("LAUNCHING", app.theme.cyan),
+        State::Building => ("BUILDING", app.theme.amber),
+        State::BuildFailed => ("FAILED", app.theme.rose),
+        State::Running => ("RUNNING", app.theme.emerald),
+        State::ReloadInFlight => ("RELOADING", app.theme.purple),
+        State::ReloadFailed => ("RELOAD FAILED", app.theme.rose),
+        State::ReloadDropped => ("RELOAD DROPPED", app.theme.amber),
+        State::Stopped => ("STOPPED", app.theme.muted),
+        State::Switching => ("SWITCHING", app.theme.purple),
+    };
+
+    right.push(Span::styled(
+        format!(" {state_label} "),
+        Style::new().bg(app.theme.surface).fg(state_color).bold(),
+    ));
+
+    let line = spread(area.width, left, right);
+    frame.render_widget(Paragraph::new(line), area);
+}
 
 fn new_tab<'a>(
     hints: &mut Vec<(&'a str, &'a str, ratatui::style::Color, Option<Action>)>,

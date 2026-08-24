@@ -9,26 +9,31 @@ use crate::data::{App, State};
 use crate::theme::{self, Theme};
 use crate::widgets::{badge, card, separator, spread, strong, text, wrap};
 
-/// Columns the level badge occupies, on every row.
+/// Columns the level badge text occupies.
 const BADGE_W: usize = 3;
 
 /// `HH:MM:SS`, which `probe::Clock` guarantees.
 const TIME_W: usize = 8;
 
 const fn gutter() -> u16 {
-    (TIME_W + 1 + BADGE_W + 1) as u16
+    // TIME_W (8) + space (1) + PILL_L (1) + BADGE_W (3) + PILL_R (1) + space (1) = 15
+    (TIME_W + 1 + 1 + BADGE_W + 1 + 1) as u16
 }
 
-const TITLE: &str = "APP LOGS STREAM";
+const TITLE: &str = "App Logs";
 
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     let count = if app.log_scroll > 0 {
-        format!("[{} entries · scrolled] ", app.logs.len())
+        format!("{} logs · scrolled", app.logs.len())
     } else {
-        format!("[{} entries] ", app.logs.len())
+        format!("{} logs", app.logs.len())
     };
 
-    let right = vec![Span::raw(" "), text(count, app.theme.muted)];
+    let right = vec![
+        Span::raw(" "),
+        text(count, app.theme.muted),
+        Span::raw(" "),
+    ];
 
     let block = card(TITLE, app.theme.purple, &app.theme).title_top(Line::from(right).right_aligned());
 
@@ -180,7 +185,13 @@ mod tests {
         use crate::data::Level;
 
         for level in [Level::Inf, Level::Wrn, Level::Err, Level::Reload] {
-            let drawn = format!("{} {:^BADGE_W$} ", "14:32:01", level.badge());
+            let drawn = format!(
+                "{} {}{:^BADGE_W$}{} ",
+                "14:32:01",
+                theme::PILL_L,
+                level.badge(),
+                theme::PILL_R
+            );
 
             assert_eq!(
                 width(&drawn),

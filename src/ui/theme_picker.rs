@@ -53,11 +53,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
             action: Action::SelectTheme(i),
         });
 
-        let cursor = if selected { " ❯ " } else { "   " };
+        let cursor = if selected {
+            format!(" {} ", crate::theme::GLYPH_ACTIVE_BAR)
+        } else {
+            "   ".to_string()
+        };
         let num = if i < 9 {
             format!("[{}] ", i + 1)
-        } else {
+        } else if i == 9 {
             "[0] ".to_string()
+        } else {
+            "[-] ".to_string()
         };
         let name = format!("{:<16}", kind.name());
 

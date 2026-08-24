@@ -719,8 +719,9 @@ pub struct App {
     pub exit_code: i32,
 
     pub logs: Vec<LogLine>,
-    /// True while passing through a `logger.printBox()` block.
-    pub in_box: bool,
+    /// Tracking active log box for uniform level styling (e.g. PrettyPrinter/logger boxes).
+    pub box_start: Option<usize>,
+    pub box_level: Level,
 
     pub pending: Option<Pending>,
     pub reload_note: String,
@@ -839,7 +840,8 @@ impl App {
             exit_code: 0,
 
             logs: Vec::new(),
-            in_box: false,
+            box_start: None,
+            box_level: Level::Inf,
 
             pending: None,
             reload_note: String::new(),
@@ -859,7 +861,7 @@ impl App {
             shift_enter: true,
             busy: std::collections::HashSet::new(),
 
-            theme: theme::ThemeKind::CyberpunkNeon.palette(),
+            theme: theme::Theme::default(),
             theme_picker_open: false,
             theme_picker_index: 0,
             saved_theme: None,
@@ -969,6 +971,7 @@ impl App {
         // something measurable.
         if self.logs.len() > 4000 {
             self.logs.drain(..1000);
+            self.box_start = self.box_start.and_then(|s| s.checked_sub(1000));
         }
     }
 
@@ -1992,33 +1995,33 @@ mod tests {
     #[test]
     fn theme_picker_live_preview_and_rollback() {
         let mut app = App::empty();
-        assert_eq!(app.theme.kind, theme::ThemeKind::CyberpunkNeon);
+        assert_eq!(app.theme.kind, theme::ThemeKind::NoodleDark);
         assert!(!app.theme_picker_open);
 
         // Open theme picker
         app.open_theme_picker();
         assert!(app.theme_picker_open);
         assert_eq!(app.theme_picker_index, 0);
-        assert_eq!(app.saved_theme.unwrap().kind, theme::ThemeKind::CyberpunkNeon);
+        assert_eq!(app.saved_theme.unwrap().kind, theme::ThemeKind::NoodleDark);
+
+        // Next item -> Live Preview Cyberpunk Neon
+        app.theme_picker_next();
+        assert_eq!(app.theme_picker_index, 1);
+        assert_eq!(app.theme.kind, theme::ThemeKind::CyberpunkNeon);
 
         // Next item -> Live Preview Midnight Teal
         app.theme_picker_next();
-        assert_eq!(app.theme_picker_index, 1);
-        assert_eq!(app.theme.kind, theme::ThemeKind::MidnightTeal);
-
-        // Next item -> Live Preview Sunset Horizon
-        app.theme_picker_next();
         assert_eq!(app.theme_picker_index, 2);
-        assert_eq!(app.theme.kind, theme::ThemeKind::SunsetHorizon);
+        assert_eq!(app.theme.kind, theme::ThemeKind::MidnightTeal);
 
         // Cancel / Esc -> Rollback to saved theme
         app.close_theme_picker(false);
         assert!(!app.theme_picker_open);
-        assert_eq!(app.theme.kind, theme::ThemeKind::CyberpunkNeon);
+        assert_eq!(app.theme.kind, theme::ThemeKind::NoodleDark);
 
-        // Open again, select Nord (index 9), and apply / Enter
+        // Open again, select Nord (index 10), and apply / Enter
         app.open_theme_picker();
-        app.theme_picker_select(9); // Nord
+        app.theme_picker_select(10); // Nord
         assert_eq!(app.theme.kind, theme::ThemeKind::Nord);
         app.close_theme_picker(true); // Apply
         assert!(!app.theme_picker_open);

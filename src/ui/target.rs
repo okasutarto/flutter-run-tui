@@ -13,7 +13,7 @@ use ratatui::Frame;
 use crate::budget::Budget;
 use crate::data::App;
 use crate::theme;
-use crate::widgets::{card, elide, field, pill, separator, spread, strong, text};
+use crate::widgets::{card, elide, field, pill, spread, strong, text};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     if app.target.is_none() {
@@ -25,13 +25,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         return;
     }
 
-    let mut block = card("DEVICE INFO", app.theme.purple, &app.theme);
+    let mut block = card("Target Device", app.theme.purple, &app.theme);
 
     if !app.state.has_tracker() {
         let (glyph, label, color) = super::build::status(app);
 
-        let mut spans = vec![text("─ ", app.theme.border)];
-        spans.extend(pill(format!(" {glyph} {label} "), color, &app.theme));
+        let mut spans = vec![Span::raw(" ")];
+        spans.extend(pill(format!("{glyph} {label}"), color, &app.theme));
         spans.push(Span::raw(" "));
 
         block = block.title_top(Line::from(spans).right_aligned());
@@ -74,24 +74,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
         ]
     };
 
-    let mut lines = vec![field(w, "Device Target", target_value, &app.theme)];
-
-    if plan.separators {
-        lines.push(separator(w, &app.theme));
-    }
-
-    lines.push(field(
-        w,
-        "OS Version",
-        vec![
-            strong(os_glyph, os_color),
-            Span::raw("  "),
-            strong(os_str, os_color),
-        ],
-        &app.theme,
-    ));
-
-    lines.retain(|l| !l.spans.is_empty() || plan.separators);
+    let lines = vec![
+        field(w, "Device Target", target_value, &app.theme),
+        field(
+            w,
+            "OS Version",
+            vec![
+                strong(os_glyph, os_color),
+                Span::raw("  "),
+                strong(os_str, os_color),
+            ],
+            &app.theme,
+        ),
+    ];
 
     frame.render_widget(Paragraph::new(lines), inner);
 }

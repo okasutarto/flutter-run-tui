@@ -38,9 +38,9 @@ pub fn card<'a>(title: &'a str, title_color: Color, theme: &Theme) -> Block<'a> 
 pub fn alert_card<'a>(title: &'a str, color: Color) -> Block<'a> {
     Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(color))
+        .border_style(Style::new().fg(color).bold())
         .title(Line::from(vec![
-            Span::styled("─ ", Style::new().fg(color)),
+            Span::styled("─ ", Style::new().fg(color).bold()),
             Span::styled("✖ ", Style::new().fg(color).bold()),
             Span::styled(title, Style::new().fg(color).bold()),
             Span::raw(" "),
@@ -61,11 +61,11 @@ pub fn spread<'a>(w: u16, left: Vec<Span<'a>>, right: Vec<Span<'a>>) -> Line<'a>
     Line::from(spans)
 }
 
-/// Muted label on the left, value on the right.
+/// Gray bold label on the left, value on the right.
 pub fn field<'a>(w: u16, label: &'a str, value: Vec<Span<'a>>, theme: &Theme) -> Line<'a> {
     spread(
         w,
-        vec![Span::styled(label, Style::new().fg(theme.muted))],
+        vec![Span::styled(label, Style::new().fg(theme.muted).bold())],
         value,
     )
 }

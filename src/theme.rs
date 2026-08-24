@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, BorderType, Padding};
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeKind {
+    NoodleDark,
     CyberpunkNeon,
     MidnightTeal,
     SunsetHorizon,
@@ -25,7 +26,8 @@ pub enum ThemeKind {
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 10] = [
+    pub const ALL: [ThemeKind; 11] = [
+        ThemeKind::NoodleDark,
         ThemeKind::CyberpunkNeon,
         ThemeKind::MidnightTeal,
         ThemeKind::SunsetHorizon,
@@ -40,6 +42,7 @@ impl ThemeKind {
 
     pub fn name(self) -> &'static str {
         match self {
+            ThemeKind::NoodleDark => "Noodle Dark",
             ThemeKind::CyberpunkNeon => "Cyberpunk Neon",
             ThemeKind::MidnightTeal => "Midnight Teal",
             ThemeKind::SunsetHorizon => "Sunset Horizon",
@@ -56,6 +59,7 @@ impl ThemeKind {
     #[allow(dead_code)]
     pub fn slug(self) -> &'static str {
         match self {
+            ThemeKind::NoodleDark => "noodle",
             ThemeKind::CyberpunkNeon => "cyberpunk",
             ThemeKind::MidnightTeal => "midnight-teal",
             ThemeKind::SunsetHorizon => "sunset-horizon",
@@ -72,6 +76,7 @@ impl ThemeKind {
     pub fn from_slug(s: &str) -> Option<ThemeKind> {
         let clean = s.trim().to_lowercase();
         match clean.as_str() {
+            "noodle" | "noodle-dark" | "noodle_dark" => Some(ThemeKind::NoodleDark),
             "cyberpunk" | "cyberpunk-neon" => Some(ThemeKind::CyberpunkNeon),
             "midnight-teal" | "midnight_teal" => Some(ThemeKind::MidnightTeal),
             "sunset-horizon" | "sunset_horizon" => Some(ThemeKind::SunsetHorizon),
@@ -88,6 +93,20 @@ impl ThemeKind {
 
     pub fn palette(self) -> Theme {
         match self {
+            // 0. Noodle Dark (Sleek Modern TUI: Deep Canvas, Crisp Cyan/Teal Outline, Lavender & Mint Accents)
+            ThemeKind::NoodleDark => Theme {
+                kind: self,
+                border: Color::Rgb(42, 195, 222),   // Crisp Teal/Cyan #2ac3de (bold & clearly visible)
+                surface: Color::Rgb(27, 36, 56),    // Dark Slate Surface #1b2438
+                ink: Color::Rgb(14, 19, 27),        // Deep Midnight Canvas #0e131b
+                text: Color::Rgb(226, 232, 240),    // Light Fog White #e2e8f0
+                muted: Color::Rgb(148, 163, 184),   // Clear Slate Muted #94a3b8
+                cyan: Color::Rgb(0, 240, 255),      // Electric Cyan #00f0ff
+                emerald: Color::Rgb(115, 218, 202), // Mint Green #73daca
+                amber: Color::Rgb(255, 158, 100),   // Warm Amber #ff9e64
+                rose: Color::Rgb(247, 118, 142),    // Neon Coral Rose #f7768e
+                purple: Color::Rgb(187, 154, 247),  // Lavender Purple #bb9af7
+            },
             // 1. Cyberpunk Neon (High-Voltage Neon Noir)
             ThemeKind::CyberpunkNeon => Theme {
                 kind: self,
@@ -258,7 +277,7 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        ThemeKind::CyberpunkNeon.palette()
+        ThemeKind::NoodleDark.palette()
     }
 }
 
@@ -279,17 +298,16 @@ impl Theme {
         }
     }
 
-    /// Card with an inset title in the border.
+    /// Card with an inset title in the border and compact padding.
     pub fn card<'a>(&self, title: &'a str, title_color: Color) -> Block<'a> {
         Block::bordered()
             .border_type(BorderType::Rounded)
-            .border_style(Style::new().fg(self.border))
-            .padding(Padding::new(1, 1, 1, 0))
+            .border_style(Style::new().fg(self.border).bold())
+            .padding(Padding::horizontal(1))
             .title(Line::from(vec![
-                Span::styled("─ ", Style::new().fg(self.border)),
-                Span::styled("◆ ", Style::new().fg(title_color)),
+                Span::styled("─ ", Style::new().fg(self.border).bold()),
                 Span::styled(title, Style::new().fg(title_color).bold()),
-                Span::raw(" "),
+                Span::styled(" ─", Style::new().fg(self.border).bold()),
             ]))
     }
 
@@ -297,40 +315,43 @@ impl Theme {
     pub fn alert_card<'a>(&self, title: &'a str, color: Color) -> Block<'a> {
         Block::bordered()
             .border_type(BorderType::Rounded)
-            .border_style(Style::new().fg(color))
+            .border_style(Style::new().fg(color).bold())
+            .padding(Padding::horizontal(1))
             .title(Line::from(vec![
-                Span::styled("─ ", Style::new().fg(color)),
+                Span::styled("─ ", Style::new().fg(color).bold()),
                 Span::styled("✖ ", Style::new().fg(color).bold()),
                 Span::styled(title, Style::new().fg(color).bold()),
-                Span::raw(" "),
+                Span::styled(" ─", Style::new().fg(color).bold()),
             ]))
     }
 
-    /// Filled badge with rounded caps.
+    /// Filled badge with rounded caps matching card border radius. Text is bold in select/switch device.
     pub fn pill<'a>(&self, text: impl Into<Cow<'a, str>>, color: Color) -> Vec<Span<'a>> {
         let fg = self.badge_fg(color);
+        let s = text.into();
+        let trimmed = s.trim();
         vec![
             Span::styled(PILL_L, Style::new().fg(color)),
-            Span::styled(text, Style::new().bg(color).fg(fg).bold()),
+            Span::styled(format!(" {trimmed} "), Style::new().bg(color).fg(fg).bold()),
             Span::styled(PILL_R, Style::new().fg(color)),
         ]
     }
 
-    /// Square badge, for log levels.
+    /// Compact badge with rounded caps for log levels (non-bold for readability).
     pub fn badge<'a>(&self, text: impl Into<Cow<'a, str>>, color: Color) -> Vec<Span<'a>> {
         let fg = self.badge_fg(color);
-        vec![Span::styled(
-            text,
-            Style::new().bg(color).fg(fg).bold(),
-        )]
+        let s = text.into();
+        vec![
+            Span::styled(PILL_L, Style::new().fg(color)),
+            Span::styled(s, Style::new().bg(color).fg(fg)),
+            Span::styled(PILL_R, Style::new().fg(color)),
+        ]
     }
 
-    /// Outline badge, for keycaps.
+    /// Clean keycap without noisy bracket borders.
     pub fn keycap<'a>(&self, key: &'a str, color: Color) -> Vec<Span<'a>> {
         vec![
-            Span::styled("[", Style::new().fg(self.border)),
             Span::styled(key, Style::new().fg(color).bold()),
-            Span::styled("]", Style::new().fg(self.border)),
         ]
     }
 
@@ -344,29 +365,29 @@ impl Theme {
 }
 
 // ============================================================
-// Default Constants (Cyberpunk Neon) for Backwards Compatibility
+// Default Constants (Noodle Dark) for Backwards Compatibility
 // ============================================================
 
 #[allow(dead_code)]
-pub const BORDER: Color = Color::Rgb(52, 237, 243);
+pub const BORDER: Color = Color::Rgb(42, 195, 222);
 #[allow(dead_code)]
-pub const SURFACE: Color = Color::Rgb(24, 24, 27);
+pub const SURFACE: Color = Color::Rgb(30, 38, 56);
 #[allow(dead_code)]
-pub const INK: Color = Color::Rgb(7, 14, 52);
+pub const INK: Color = Color::Rgb(15, 20, 28);
 #[allow(dead_code)]
-pub const TEXT: Color = Color::Rgb(228, 228, 231);
+pub const TEXT: Color = Color::Rgb(226, 232, 240);
 #[allow(dead_code)]
-pub const MUTED: Color = Color::Rgb(113, 113, 122);
+pub const MUTED: Color = Color::Rgb(100, 116, 139);
 #[allow(dead_code)]
-pub const CYAN: Color = Color::Rgb(52, 237, 243);
+pub const CYAN: Color = Color::Rgb(0, 240, 255);
 #[allow(dead_code)]
-pub const EMERALD: Color = Color::Rgb(184, 255, 106);
+pub const EMERALD: Color = Color::Rgb(115, 218, 202);
 #[allow(dead_code)]
-pub const AMBER: Color = Color::Rgb(255, 230, 109);
+pub const AMBER: Color = Color::Rgb(255, 158, 100);
 #[allow(dead_code)]
-pub const ROSE: Color = Color::Rgb(247, 21, 171);
+pub const ROSE: Color = Color::Rgb(247, 118, 142);
 #[allow(dead_code)]
-pub const PURPLE: Color = Color::Rgb(204, 77, 255);
+pub const PURPLE: Color = Color::Rgb(187, 154, 247);
 
 // ============================================================
 // Nerd Font glyphs, DESIGN.md 2.2.
@@ -410,6 +431,15 @@ pub const GLYPH_INFO: &str = "";
 pub const GLYPH_SUCCESS: &str = "";
 
 #[allow(dead_code)]
+pub const GLYPH_ACTIVE_BAR: &str = "▎";
+#[allow(dead_code)]
+pub const GLYPH_DOT: &str = "●";
+#[allow(dead_code)]
+pub const GLYPH_DOWN_TRIANGLE: &str = "▾";
+#[allow(dead_code)]
+pub const GLYPH_RIGHT_TRIANGLE: &str = "▸";
+
+#[allow(dead_code)]
 pub const PILL_L: &str = "";
 #[allow(dead_code)]
 pub const PILL_R: &str = "";
@@ -432,7 +462,7 @@ pub fn load_saved_theme() -> ThemeKind {
             return kind;
         }
     }
-    ThemeKind::CyberpunkNeon
+    ThemeKind::NoodleDark
 }
 
 pub fn save_theme(kind: ThemeKind) {
@@ -458,6 +488,8 @@ mod tests {
 
     #[test]
     fn theme_slug_handles_aliases() {
+        assert_eq!(ThemeKind::from_slug("noodle"), Some(ThemeKind::NoodleDark));
+        assert_eq!(ThemeKind::from_slug("noodle_dark"), Some(ThemeKind::NoodleDark));
         assert_eq!(ThemeKind::from_slug("tokyo_night"), Some(ThemeKind::TokyoNight));
         assert_eq!(ThemeKind::from_slug("midnight_teal"), Some(ThemeKind::MidnightTeal));
         assert_eq!(ThemeKind::from_slug("obsidian-gold"), Some(ThemeKind::ObsidianGold));

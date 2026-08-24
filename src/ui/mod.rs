@@ -31,7 +31,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         return;
     }
 
-    let area = budget::clamp_width(full);
+    let area = full;
     let plan = Budget::solve(area, app.state, app.stages.len());
 
     // Expanded: the middle region and the footer, nothing else. The Budget is
@@ -54,7 +54,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
         chrome::footer(frame, rows[1], app, None);
 
         if app.theme_picker_open {
-            let popup = theme_picker::centered_rect(58, 15, full);
+            let popup = theme_picker::centered_rect(60, 16, full);
             frame.render_widget(Clear, popup);
             theme_picker::render(frame, popup, app);
         }
@@ -94,8 +94,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     let split = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(area);
     let body = split[0];
     let footer_area = split[1];
-
-    let chunks = Layout::vertical(rows).spacing(1).split(body);
+    let chunks = Layout::vertical(rows).split(body);
     let mut i = 0;
 
     project::render(frame, chunks[i], app, &plan, art);
@@ -135,7 +134,7 @@ pub fn render(frame: &mut Frame, app: &mut App, art: &mut logo::Logo) {
     chrome::footer(frame, footer_area, app, Some(&plan));
 
     if app.theme_picker_open {
-        let popup = theme_picker::centered_rect(58, 15, full);
+        let popup = theme_picker::centered_rect(60, 16, full);
         frame.render_widget(Clear, popup);
         theme_picker::render(frame, popup, app);
     }

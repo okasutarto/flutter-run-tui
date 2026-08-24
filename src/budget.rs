@@ -31,11 +31,6 @@ pub const LOG_MIN: u16 = 12;
 /// oldest build output, which on a Gradle failure is usually where the cause is.
 pub const FAIL_MIN: u16 = 14;
 
-/// Cards stop widening here so a very wide window cannot stretch a label to
-/// one edge and its value to the other. The log window is exempt, because more
-/// columns means fewer wrapped rows per entry.
-pub const MAX_W: u16 = 142;
-
 /// Below this nothing is drawable and the app says so rather than rendering a
 /// broken grid.
 pub const MIN_W: u16 = 60;
@@ -94,7 +89,6 @@ impl Budget {
     /// list, so `full_build` is still reachable here, and still last but one.
     fn concede(&mut self) -> bool {
         let order = [
-            &mut self.separators,
             &mut self.roomy_devices,
             &mut self.full_build,
             &mut self.full_cards,
@@ -117,14 +111,8 @@ impl Budget {
     // in `ui` splits by them. Keeping two copies is how a degradation ladder
     // ends up deciding one thing and drawing another.
 
-    /// Blank row under every card title.
-    ///
-    /// Charged separately because it is easy to add to `card()` and forget
-    /// here, and the failure mode is silent: the Layout keeps the old height,
-    /// the padding eats into the inner area, and the card's last rows are
-    /// clipped without any warning. That is exactly how the SelectedTargetCard
-    /// lost its `Type` field and its command string.
-    const TITLE_GAP: u16 = 1;
+    /// Blank row under every card title (0 for compact cards).
+    const TITLE_GAP: u16 = 0;
 
     /// Ceiling on tracker rows, so an unexpected flood of stages cannot push the
     /// log window off the screen. Android's six plus `pub get` and CocoaPods is
@@ -162,30 +150,18 @@ impl Budget {
             return 1;
         }
 
-        let mut meta = 5;
-
-        if self.separators {
-            meta += 2;
-        }
-
-        meta + 2 + Self::TITLE_GAP
+        4 + 2 + Self::TITLE_GAP
     }
 
     /// SelectedTargetCard (2 columns x 2 rows: Device/Type & Platform/OS).
     ///
-    /// 2 rows of content (+ 1 separator if enabled) + 2 border + 1 title gap = 5 or 6 rows.
+    /// 2 rows of content + 2 border + 1 title gap = 5 rows.
     pub fn target_h(&self) -> u16 {
         if !self.full_cards {
             return 1;
         }
 
-        let mut body = 2;
-
-        if self.separators {
-            body += 1;
-        }
-
-        body + 2 + Self::TITLE_GAP
+        2 + 2 + Self::TITLE_GAP
     }
 
     /// BuildPhaseTracker, for `stages` rows.
@@ -214,48 +190,15 @@ impl Budget {
             return 1;
         }
 
-        // One row minimum. `begin_build` opens `Starting Flutter` before Flutter
-        // has printed anything, so a build always has at least one row — but a
-        // zero here would collapse the card into its own borders.
         let stages = (stages.max(1) as u16).min(Self::MAX_STAGES);
 
-        1 + 1 + stages + 2 + Self::TITLE_GAP
-    }
-
-    /// How many stacked blocks the frame has, including the flexible middle.
-    ///
-    /// Needed on its own because `Layout::spacing(1)` inserts a blank row
-    /// *between* blocks, so the gap count is `blocks - 1` and not a constant.
-    /// Hardcoding it at 4 undercounted the running view by one row, which the
-    /// spec-arithmetic test caught.
-    fn blocks(&self, state: State) -> u16 {
-        // ProjectCard and the flexible middle are always present.
-        //
-        // The footer is not counted. It is split off before these are laid out so
-        // that no gap precedes it, so it contributes its row to `chrome` but no
-        // spacing.
-        let mut n = 2;
-
-        if state.has_target() {
-            n += 1;
-        }
-
-        // `has_tracker`, not `has_build`: a build that succeeded and is now running
-        // has no tracker block at all, so counting one here would reserve a gap for
-        // a block that is not laid out and leave a blank row in the middle of the
-        // frame. See `State::has_tracker`.
-        if state.has_tracker() {
-            n += 1;
-        }
-
-        n
+        // 1 row progress bar + stage rows + 2 border + TITLE_GAP.
+        1 + stages + 2 + Self::TITLE_GAP
     }
 
     /// Rows of chrome this configuration costs in `state`.
     ///
     /// Excludes the flexible middle, which is what the log window or the device
-    /// list expands into. Includes the blank rows between blocks, because those
-    /// are just as unavailable to the log window as a border is.
     pub fn chrome(&self, state: State, stages: usize) -> u16 {
         let mut rows = self.project_h();
 
@@ -268,9 +211,7 @@ impl Budget {
         }
 
         // Footer, always present.
-        rows += 1;
-
-        rows + self.blocks(state).saturating_sub(1)
+        rows + 1
     }
 
     /// Rows the flexible middle must keep in `state`.
@@ -341,9 +282,6 @@ impl Budget {
     pub fn describe(&self, state: State) -> String {
         let mut given_up = Vec::new();
 
-        if !self.separators {
-            given_up.push("separators");
-        }
         if !self.roomy_devices {
             given_up.push("dense devices");
         }
@@ -364,14 +302,6 @@ impl Budget {
         } else {
             given_up.join(", ")
         }
-    }
-}
-
-/// Clamp the drawing area to the maximum card width.
-pub fn clamp_width(area: Rect) -> Rect {
-    Rect {
-        width: area.width.min(MAX_W),
-        ..area
     }
 }
 
@@ -397,17 +327,17 @@ mod tests {
     #[test]
     fn full_chrome_matches_the_spec_arithmetic() {
         // Enumerated from the rows the cards actually draw:
-        // project 10 (with separators) + target 6 (with separator) + footer 1 + two gaps = 19 rows.
+        // project 6 + target 4 + footer 1 = 11 rows.
         let chrome = Budget::full().chrome(State::Running, DONE);
 
         assert_eq!(
-            chrome, 19,
+            chrome, 11,
             "enumerated from the rows each card actually draws"
         );
 
         // Where the tracker does exist, it is charged:
-        // project 10 + target 6 + tracker 10 + footer 1 + three gaps = 30.
-        assert_eq!(Budget::full().chrome(State::Building, DONE), 30);
+        // project 6 + target 4 + tracker 8 + footer 1 = 19.
+        assert_eq!(Budget::full().chrome(State::Building, DONE), 19);
     }
 
     /// Everything cut from the static cards lands in the log window, and this is
@@ -419,8 +349,8 @@ mod tests {
             h - plan.chrome(State::Running, DONE)
         };
 
-        // At the design target, full chrome leaves 26 rows for the log window.
-        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 26);
+        // At the design target, full chrome leaves 34 rows for the log window.
+        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 34);
         assert!(log_rows(45) >= Budget::floor(State::Running), "{} rows", log_rows(45));
 
         // Nothing is conceded at the design target.
@@ -439,7 +369,7 @@ mod tests {
                 ..Budget::full()
             }
         );
-        assert_eq!(60 - plan.chrome(State::Running, DONE), 41);
+        assert_eq!(60 - plan.chrome(State::Running, DONE), 49);
     }
 
     /// `Stopped` is laid out exactly like a live run: two cards, a footer, two gaps.
@@ -462,18 +392,16 @@ mod tests {
     #[test]
     fn card_heights_account_for_the_title_gap() {
         let full = Budget::full();
-        let mut flat = full;
-        flat.separators = false;
+        let flat = full;
 
-        // 5 content + 2 border + 1 title gap = 8.
-        assert_eq!(flat.project_h(), 8);
+        // 4 content + 2 border + 0 title gap = 6.
+        assert_eq!(flat.project_h(), 6);
 
-        // 2 content + 2 border + 1 title gap = 5.
-        assert_eq!(flat.target_h(), 5);
+        // 2 content + 2 border + 0 title gap = 4.
+        assert_eq!(flat.target_h(), 4);
 
-        // Separators add two rows to project card: 10. Separator adds one row to target card: 6.
-        assert_eq!(full.project_h(), 10);
-        assert_eq!(full.target_h(), 6);
+        assert_eq!(full.project_h(), 6);
+        assert_eq!(full.target_h(), 4);
     }
 
     #[test]
@@ -494,7 +422,6 @@ mod tests {
     fn a_tall_window_keeps_every_rung_but_not_the_finished_tracker() {
         let budget = Budget::solve(area(106, 60), State::Running, DONE);
 
-        assert!(budget.separators);
         assert!(budget.roomy_devices);
         assert!(budget.full_cards);
         assert!(
@@ -508,13 +435,10 @@ mod tests {
         let mut b = Budget::full();
 
         b.concede();
-        assert!(!b.separators, "separators go first");
+        assert!(!b.roomy_devices, "device rows go first");
 
         b.concede();
-        assert!(!b.roomy_devices, "device rows go second");
-
-        b.concede();
-        assert!(!b.full_build, "the build tracker collapses third");
+        assert!(!b.full_build, "the build tracker collapses second");
 
         b.concede();
         assert!(!b.full_cards, "the cards collapse last");
@@ -539,7 +463,7 @@ mod tests {
 
         assert!(!stopped.full_build);
         assert!(
-            stopped.separators && stopped.roomy_devices,
+            stopped.roomy_devices,
             "which is what those rows were being paid for: {}",
             stopped.describe(State::Stopped)
         );
@@ -562,16 +486,10 @@ mod tests {
     /// is 46 to 51 rows, and both cards used to lose their rules there the moment
     /// the app started logging.
     #[test]
-    fn separators_survive_a_short_window_once_the_app_is_logging() {
+    fn cards_survive_a_short_window_once_the_app_is_logging() {
         // Five stages: a finished iOS build, which is what the screenshot showed.
         for h in 46..=51 {
             let plan = Budget::solve(area(106, h), State::Running, 5);
-
-            assert!(
-                plan.separators,
-                "{h} rows dropped the separators: {}",
-                plan.describe(State::Running)
-            );
 
             assert!(
                 plan.full_cards,
@@ -587,35 +505,14 @@ mod tests {
     /// The build is the exception: while it runs, its stage list outranks them.
     #[test]
     fn a_running_build_keeps_its_stage_list_instead() {
-        let plan = Budget::solve(area(106, 32), State::Building, 5);
+        let plan = Budget::solve(area(106, 22), State::Building, 5);
 
         assert!(plan.full_build, "the stage list is what is moving");
-        assert!(!plan.separators, "so the separators pay for the floor");
     }
 
     /// Every rung must actually reclaim rows in the state it applies to.
-    ///
-    /// This is the check the logo rung would have failed. It was documented as
-    /// worth four rows and worth giving up first; it was worth none, because the
-    /// artwork shares a row range with the metadata beside it.
     #[test]
     fn every_concession_reclaims_rows_where_it_applies() {
-        // Running: no device list on screen, so the device-row rung is inert here
-        // by design and is checked against the picker instead.
-        let mut b = Budget::full();
-        let before = b.chrome(State::Running, DONE);
-
-        b.separators = false;
-        assert!(
-            b.chrome(State::Running, DONE) < before,
-            "separators must reclaim rows"
-        );
-
-        // The tracker rung is checked against `Building`, for the same reason the
-        // device-row rung is checked against the picker: `Running` has no tracker
-        // block at all now, so the rung is inert there by design rather than broken.
-        // That is also the only state the rung is still reachable in — `solve`
-        // collapses a settled tracker before the ladder is consulted.
         let mut mid = Budget::full();
         let before = mid.chrome(State::Building, DONE);
 
@@ -625,6 +522,7 @@ mod tests {
             "collapsing the build tracker must reclaim rows"
         );
 
+        let mut b = Budget::full();
         let before = b.chrome(State::Running, DONE);
         b.full_cards = false;
         assert!(
@@ -638,6 +536,6 @@ mod tests {
         // The picker has no log window, so it should keep its detail at a
         // height where the running view would already be conceding.
         let budget = Budget::solve(area(106, 34), State::MultipleDevices, DONE);
-        assert!(budget.separators, "picker has no log floor to protect");
+        assert!(budget.full_cards, "picker has no log floor to protect");
     }
 }

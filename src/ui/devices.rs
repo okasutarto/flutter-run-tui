@@ -8,26 +8,32 @@ use ratatui::Frame;
 
 use crate::budget::Budget;
 use crate::data::{Action, App, Device, Hit, State};
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 use crate::widgets::{card, elide, pill, spread, strong, text};
 use crate::probe::Platform;
 
 /// State 4. Two or more answered, so pick one.
 pub fn render_picker(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
     let title = if app.state == State::Switching {
-        "SWITCH DEVICE"
+        "Switch Device"
     } else {
-        "SELECT DEVICE"
+        "Select Device"
     };
 
     let count = if app.refreshing {
-        format!("{} {} rechecking ", app.spinner(), app.devices.len())
+        format!("{} {} rechecking", app.spinner(), app.devices.len())
     } else {
-        format!("{} devices ", app.devices.len())
+        format!("{} devices", app.devices.len())
     };
 
+    let right = vec![
+        Span::raw(" "),
+        strong(count, app.theme.muted),
+        Span::raw(" "),
+    ];
+
     let block = card(title, app.theme.purple, &app.theme)
-        .title_top(Line::from(vec![Span::raw(" "), text(count, app.theme.muted)]).right_aligned());
+        .title_top(Line::from(right).right_aligned());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -104,9 +110,9 @@ pub fn render_single(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// The scrolling target list, shared by states 2 and 4.
-fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
-    let step = if plan.roomy_devices { 2 } else { 1 };
-    let visible = (area.height / step).max(1) as usize;
+fn list(frame: &mut Frame, area: Rect, app: &mut App, _plan: &Budget) {
+    let step = 1;
+    let visible = area.height.max(1) as usize;
 
     if app.selected_device < app.scroll {
         app.scroll = app.selected_device;
@@ -156,16 +162,7 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, plan: &Budget) {
 
         let is_last = index + 1 == app.devices.len() || slot + 1 == visible;
 
-        if plan.roomy_devices && !is_last && y + 1 < area.y + area.height {
-            frame.render_widget(
-                Paragraph::new(crate::widgets::separator(row.width, &app.theme)),
-                Rect {
-                    y: y + 1,
-                    height: 1,
-                    ..row
-                },
-            );
-        }
+        let _ = is_last; // roomy spacing is clean whitespace
     }
 
     app.hits.extend(pending);
@@ -253,7 +250,7 @@ fn draw_row(
 
     let mut left = vec![
         if selected {
-            strong("❯ ", theme.cyan)
+            strong(format!("{} ", theme::GLYPH_ACTIVE_BAR), theme.cyan)
         } else {
             Span::raw("  ")
         },

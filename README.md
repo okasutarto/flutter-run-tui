@@ -28,8 +28,11 @@
 - **⏱️ Honest Build Timings:** Separate tracking for toolchain startup time (Dart VM & `flutter_tools`) and actual compilation time (Gradle/Xcode).
 - **🔄 Smart Device Switching (`^D`):** Switch targets mid-session without exiting. Press `⇧Enter` to launch another device in a separate Ghostty or tmux tab.
 - **🎨 10 Curated Themes (`t`):** Instant floating modal with real-time live preview, 10 curated dark palettes (Color Hunt & developer favorites), smart text contrast, and persistent settings across sessions.
+- **🧱 Seamless 0-Gap Dashboard:** Ultra-compact, modular card layout with 0 outer spacing, 6-row ProjectCard, and balanced header margins for maximum vertical log space.
+- **💊 Rounded Border-Radius Badges:** Status pills (`  Running `, ` last used `) and log tags (`WRN`, `ERR`, `INF`) feature curved Powerline caps matching card rounded corners.
+- **🔤 Uniform Bold Typography:** Crisp, balanced font weights across all metadata fields and values with slate gray label accents for high legibility without glare.
 - **🔥 Built-in Auto-Reload:** Automatically watches `lib/` for `.dart` file changes with a 100ms debounce — UI updates instantly on save without editor plugins.
-- **📜 Ergonomic Log Window:** Word-wrapped logs, keyboard/mouse scrolling (`j`/`k`, arrows, wheel), fullscreen log toggle (`e`), and transcript replay into your terminal history on exit.
+- **📜 Ergonomic Log Window:** 15-column aligned gutter, word-wrapped logs, keyboard/mouse scrolling (`j`/`k`, arrows, wheel), fullscreen log toggle (`e`), and transcript replay into your terminal history on exit.
 - **🎯 Full Interactive Forwarding:** Hot reload (`r`), hot restart (`R`), and all native Flutter shortcuts (`h`, `c`, `p`, `o`, `w`, `d`) pass through directly.
 
 ## Requirements
@@ -40,7 +43,7 @@
 | **Flutter** | `flutter` on `PATH` or managed via [FVM](https://fvm.app) (auto-detected) |
 | **Android / iOS** | `adb` & `emulator` (Android) / Xcode CLI tools with `xcrun simctl` (iOS) |
 | **Font** | Nerd Font (JetBrains Mono, Fira Code) for status glyphs and platform icons |
-| **Terminal** | Any terminal (Ghostty recommended for image graphics & Kitty keyboard protocol) |
+| **Terminal** | Any terminal ([Ghostty](https://ghostty.org/) recommended for Kitty graphics, truecolor & `adjust-cell-height = 10%`) |
 
 > [!NOTE]
 > Tested primarily on macOS. Android emulation and tmux multi-tab workflows are cross-platform.
@@ -191,7 +194,7 @@ FRUN_FLUTTER=puro frun
 
 ```bash
 cargo build --release
-cargo test --release            # 82 unit tests, 6 integration tests
+cargo test --release            # 85 unit tests, 6 integration tests
 cargo clippy --all-targets
 ```
 

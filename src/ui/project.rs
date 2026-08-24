@@ -9,14 +9,14 @@ use crate::budget::Budget;
 use crate::data::App;
 use crate::theme::Theme;
 use crate::ui::logo::Logo;
-use crate::widgets::{card, elide, field, pill, separator, spread, strong, text};
+use crate::widgets::{card, elide, field, spread, strong, text};
 
 /// Widest the branch pill may grow before it is elided.
 const BRANCH_MAX: usize = 30;
 
 /// Size of the logo artwork box, inside the wider left column.
-const ART_W: u16 = 11;
-const ART_H: u16 = 5;
+const ART_W: u16 = 7;
+const ART_H: u16 = 3;
 
 /// The wordmark under the artwork.
 const LABEL: &str = "flutter-run-tui";
@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
         return;
     }
 
-    let block = card("PROJECT INFO", app.theme.purple, &app.theme).title_top(
+    let block = card("Project", app.theme.purple, &app.theme).title_top(
         Line::from(vec![
             Span::raw(" "),
             text(app.cwd.as_str(), app.theme.muted),
@@ -64,66 +64,54 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
 
     let w = body.width;
 
-    let branch = format!(" {} ", elide(&app.branch, BRANCH_MAX));
+    let branch = vec![strong(elide(&app.branch, BRANCH_MAX), app.theme.amber)];
 
     let git = match app.dirty {
-        0 => pill(" ✔ Clean ", app.theme.emerald, &app.theme),
-        1 => pill(" ● 1 changed ", app.theme.rose, &app.theme),
-        n => pill(format!(" ● {n} changed "), app.theme.rose, &app.theme),
+        0 => vec![strong("✔ clean", app.theme.emerald)],
+        1 => vec![strong("● 1 changed", app.theme.rose)],
+        n => vec![strong(format!("● {n} changed"), app.theme.rose)],
     };
 
-    let mut project = pill(format!(" {} ", app.project), app.theme.cyan, &app.theme);
+    let project = vec![
+        strong(app.project.as_str(), app.theme.cyan),
+        Span::raw("  "),
+        strong(app.version.as_str(), app.theme.muted),
+    ];
 
-    project.push(text(format!("  {}", app.version), app.theme.text));
-
-    let mut lines = vec![
-        field(w, "Project", project, &app.theme),
-        maybe_sep(w, plan, &app.theme),
-        field(w, "Branch", pill(branch, app.theme.amber, &app.theme), &app.theme),
-        maybe_sep(w, plan, &app.theme),
+    let lines = vec![
+        field(w, "Name", project, &app.theme),
+        field(w, "Branch", branch, &app.theme),
         field(w, "Git Status", git, &app.theme),
     ];
 
-    lines.retain(|l| !l.spans.is_empty() || plan.separators);
-
-    let meta_h = if plan.separators { 5 } else { 3 };
-
     let rows = Layout::vertical([
-        Constraint::Length(meta_h),
-        Constraint::Length(1), // blank
-        Constraint::Length(1), // stats
+        Constraint::Length(3), // metadata: consecutive compact rows
+        Constraint::Length(1), // stats: Flutter · Dart · Runtime
     ])
     .split(body);
 
     frame.render_widget(Paragraph::new(lines), rows[0]);
 
-    stats(frame, rows[2], app);
+    stats(frame, rows[1], app);
 }
 
 /// The technical stats row from DESIGN.md 3.1.
 fn stats(frame: &mut Frame, area: Rect, app: &App) {
     let line = Line::from(vec![
-        text("Flutter ", app.theme.muted),
+        strong("Flutter ", app.theme.muted),
         strong(app.flutter.as_str(), app.theme.cyan),
         text("  ·  ", app.theme.muted),
-        text("Dart ", app.theme.muted),
+        strong("Dart ", app.theme.muted),
         strong(app.dart.as_str(), app.theme.purple),
         text("  ·  ", app.theme.muted),
-        text("Runtime ", app.theme.muted),
-        strong(format!("({})", app.toolchain.label()), app.theme.purple),
+        strong("Runtime ", app.theme.muted),
+        strong(app.toolchain.label(), app.theme.text),
     ]);
 
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// Empty line when separators have been conceded, so the row indices stay put.
-fn maybe_sep(w: u16, plan: &Budget, theme: &Theme) -> Line<'static> {
-    if plan.separators {
-        separator(w, theme)
-    } else {
-        Line::default()
-    }
-}
+
 
 /// Degradation step 6: everything above in one row.
 fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
@@ -164,14 +152,9 @@ fn logo(frame: &mut Frame, area: Rect, art: &mut Logo, theme: &Theme) {
     ])
     .split(area);
 
-    let gap = u16::from(area.height >= ART_H + 2);
-
     let rows = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(ART_H),
-        Constraint::Length(gap),
-        Constraint::Length(1),
-        Constraint::Fill(1),
+        Constraint::Length(ART_H), // 3 rows: height matches Name, Branch, Git Status
+        Constraint::Length(1),     // 1 row wordmark: matches stats row
     ])
     .split(cols[1]);
 
@@ -180,12 +163,12 @@ fn logo(frame: &mut Frame, area: Rect, art: &mut Logo, theme: &Theme) {
         Constraint::Length(ART_W),
         Constraint::Fill(1),
     ])
-    .split(rows[1]);
+    .split(rows[0]);
 
     art.render(frame, art_cols[1]);
 
     frame.render_widget(
-        Paragraph::new(Line::from(text(LABEL, theme.muted)).centered()),
-        rows[3],
+        Paragraph::new(Line::from(strong(LABEL, theme.muted)).centered()),
+        rows[1],
     );
 }

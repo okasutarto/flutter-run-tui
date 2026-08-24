@@ -1,7 +1,7 @@
 # 🖥️ Flutter CLI Terminal UI (TUI) - Architecture & Design Specification (`design.md`)
 
-Document Version: `1.8.1`  
-Last Updated: `2026-08-19`  
+Document Version: `1.10.0`  
+Last Updated: `2026-08-24`  
 Design System: **Monospace Character Grid TUI (Terminal User Interface)**  
 Target Font: `JetBrains Mono`, `Fira Code`, or `ui-monospace` (12px base)  
 Canvas Dimensions: `106x45` character matrix target, widening to `142` columns
@@ -18,8 +18,9 @@ from here on; a terminal has no pixels.
 Application design follows strict Text User Interface (TUI) paradigms popularized by classic terminal environments (e.g., `htop`, `lazygit`, `k9s`, `fvm`).
 
 * **Zero Ambient FX**: No drop shadows (`shadow-*`), backdrop blurs (`backdrop-blur-*`), or decorative radial gradients.
-* **Pixel-Sharp Borders**: Structural separation relies entirely on 1px crisp borders (`border-zinc-800`, `border-zinc-700`) and solid background boxes (`bg-[#0c0e14]`, `bg-black/80`).
-* **Strict Monospace Hierarchy**: Typography utilizes fixed-width character alignment across all columns, headers, tables, and gutter blocks.
+* **Pixel-Sharp Seamless Borders**: Structural separation relies entirely on 1px crisp rounded borders with 0-gap vertical stack integration (`spacing(0)`).
+* **Curved Border-Radius Badges & Pills**: Status pills and log level badges utilize Powerline rounded caps (`` and ``) to harmonize with the rounded card corners.
+* **Strict Monospace Hierarchy & Uniform Bold Typography**: Typography utilizes fixed-width character alignment across all columns, headers, tables, and gutter blocks with consistent bold font weights for balanced legibility.
 * **Symbol & ASCII Art Accents**: Uses UTF-8 box characters and glyphs (`◆`, `✔`, `✖`, `❯`, `▶`, `⚡`, `⠋`) for structural guidance and status indication.
 
 ---
@@ -53,14 +54,20 @@ All UI rendering consumes the active `&app.theme` instead of hardcoded color con
 | **`surface`** | `#18181B` (Dark) | Selected row background highlight (`app.theme.surface`) |
 | **`ink`** | `#070E34` (Deep Ink) | High-contrast dark text inside bright badges (Gold/Lime/Cyan) |
 | **`text`** | `#E4E4E7` (White) | Primary body copy, project names, active device labels |
-| **`muted`** | `#71717A` (Slate) | Dimmed metadata, device platform labels, footer shortcuts |
+| **`muted`** | `#94A3B8` / `#71717A` (Slate Gray) | Bold metadata labels (`Name`, `Branch`, `Git Status`), stats prefixes, footer labels |
 | **`cyan`** *(Primary)* | `#34EDF3` (Cyan) | Action buttons (`[⏎] Keep`), active target selection, cursor `❯` |
 | **`emerald`** *(Success)* | `#B8FF6A` (Lime) | Active running status (`[ running ]`), clean Git (`✔ Clean`), completed build stages |
 | **`amber`** *(Warning)* | `#FFE66D` (Yellow) | Git branch tags, devices in use (`[ in use ]`), in-flight build spinner |
 | **`rose`** *(Error)* | `#F715AB` (Magenta) | Build/reload errors, dirty Git (`● n changed`), stop action (`^S`) |
 | **`purple`** *(Accent Tag)* | `#CC4DFF` (Purple) | Card title glow (`◆ PROJECT INFO`), history tags (`[ last used ]`), runtime badges |
 
-### 2.3. Smart Badge Text Contrast (`Theme::badge_fg`)
+### 2.3. Uniform Bold Typography & Visual Balance
+
+To eliminate rendering inconsistencies and text weight mismatches across different terminal fonts and platform glyph renderers:
+* **All Labels & Values are Bold**: Metadata field labels (`Name`, `Branch`, `Git Status`, `Device Target`, `OS Version`), technical stats (`Flutter`, `Dart`, `Runtime`), and timing metrics (`Startup`, `Build`, `Sync`, `Total`) are rendered with `.bold()`.
+* **Visual Hierarchy via Color, Not Weight**: Field labels use `theme.muted` (slate gray) while values use bright semantic accent colors. This maintains clear hierarchy and readability without jarring font weight discrepancies.
+
+### 2.4. Smart Badge Text Contrast (`Theme::badge_fg`)
 
 Badges and filled pills dynamically calculate the relative perceived luminance of their background:
 $$\text{Luminance} = 0.299 \times R + 0.587 \times G + 0.114 \times B$$
@@ -68,12 +75,19 @@ $$\text{Luminance} = 0.299 \times R + 0.587 \times G + 0.114 \times B$$
 - If $\text{Luminance} \le 140$ (deep/saturated backgrounds like Violet, Navy, Crimson): badge text automatically uses light `text` (`#E4E4E7`).
 - **Guarantee**: Badge text is never washed out, illegible, or low-contrast across any of the 10 themes.
 
-### 2.4. Theme Switcher Modal & Persistence
+### 2.5. Theme Switcher Modal & Persistence
 
 - **Modal UI (`src/ui/theme_picker.rs`)**: Centered overlay popup with rounded borders, palette color swatches, current theme indicator (`[ CURRENT ]`), and preview badge (`[ PREVIEW ]`).
 - **Live Preview**: Navigating with `↑`/`↓` or `j`/`k` immediately updates the active `app.theme` across the frame in real time.
 - **Rollback on Cancel**: `Esc` or `q` restores the previously saved theme without side effects.
 - **Persistent State**: Confirming a selection writes the theme slug to `~/.config/zsh/.frun-theme` (matching `.frun-last-device`), which is loaded on subsequent launches via `App::live`.
+
+### 2.6. Terminal & Font Recommendations (Ghostty Integration)
+
+For the most optimal, glitch-free aesthetic matching Noodle TUI:
+* **Terminal**: [Ghostty](https://ghostty.org/) (native GPU rendering, Kitty image protocol, truecolor support).
+* **Font**: `JetBrains Mono Nerd Font` or `FiraCode Nerd Font`.
+* **Line Height**: Setting `adjust-cell-height = 10%` or `15%` in Ghostty config provides subtle organic vertical padding inside cells without needing artificial full-row terminal gaps.
 
 ---
 
@@ -124,12 +138,13 @@ already the component describing what is being run and where.
   absolute one is fragile. `flutter-trim.png` and not `flutter.png`: the latter
   carries ~79px of transparent padding per side, which renders as dead columns.
 
-  Five rows in an 11-column box, inside a column three columns wider. `Resize::Fit`
-  scales to whichever dimension binds first, so at five rows the height binds and
+  Three rows in a 7-column box (`ART_H = 3`, `ART_W = 7`), perfectly matching the
+  height of the metadata rows (`Name`, `Branch`, `Git Status`). `Resize::Fit`
+  scales to whichever dimension binds first, so at three rows the height binds and
   extra width goes unused.
 
-  **The box is fixed in cells, and the encoding has to follow the cell.** Eleven
-  by five cells is the mark's size relative to the text beside it, which is the
+  **The box is fixed in cells, and the encoding has to follow the cell.** Seven
+  by three cells is the mark's size relative to the text beside it, which is the
   ratio worth holding; the terminal decides what a cell is worth in pixels. That
   makes the artwork's pixel size a function of the font size, and `Cmd -` in
   Ghostty changes it under a running process.
@@ -154,28 +169,19 @@ already the component describing what is being run and where.
   specify are gone. Both restated what the mark and the metadata column beside
   it already said, and `Flutter Engine` was inaccurate as well: the versions
   shown are the framework and the Dart SDK, not the engine.
-* **Right Column (8 Cols)**: Key-value table showing:
-  * `Project`: `cwclub`
-  * `Version`: `1.4.0+12`
-  * `Branch`: `main`
-  * `Git Status`: `✔ clean`
-  * **3-Column Technical Stats Row**: `Flutter` (`3.27.1`), `Dart` (`3.7.2`),
-    `Runtime` (`(FVM)`, `(SDK)`, or the version manager's own name — whatever
+* **Right Column**: Key-value table showing:
+  * `Name`: `cwclub` `1.4.0+12` (bold muted label, bold cyan project name, bold muted version)
+  * `Branch`: `main` (bold muted label, bold amber branch name)
+  * `Git Status`: `✔ clean` / `● n changed` (bold muted label, bold emerald/rose status)
+  * **3-Column Technical Stats Row**: `Flutter` (`3.29.3`), `Dart` (`3.7.2`),
+    `Runtime` (`FVM`, `SDK`, or the version manager's own name — whatever
     `probe::toolchain` resolved, see 8.11).
-* **Row Separators**: a hairline rule between metadata rows, in the border
-  colour. Costs 3 rows; see 6.2 for what that displaces.
+* **Ultra-Compact 6-Row Layout**: Total card height is strictly 6 rows (4 content + 2 border). Metadata rows and technical stats are laid out consecutively without artificial blank line clutter, maximizing vertical efficiency.
 * **Widths follow the terminal.** Values right-align to the card border and the
-  separators span the block. An absolute content cap was tried and removed: at
-  142 columns the border reached the window while the values stopped at column
-  44, and the separators stopped with them, hanging in open space.
+  layout spans the block cleanly.
 * **Technical stats row** is three columns spaced across the width: Flutter
-  flush left, Dart centred, Runtime flush right. Not a single spread line, which
-  pushed `Runtime (FVM)` to the border and cut it off from the two values it
-  belongs with, and not one left-aligned group, which left two thirds of the row
-  empty.
-* **Header Bar**: Right-aligned path tag `~/cwclub`, nothing else. A `[COPY]`
-  button was drawn there and removed: it was never wired to a clipboard, and a
-  control that does nothing on click is worse than no control.
+  flush left, Dart centred, Runtime flush right.
+* **Header Bar**: Right-aligned path tag `~/cwclub`, nothing else.
 
 ### 3.2 `SelectedTargetCard`
 * **Titled `DEVICE INFO`.** It was `SELECTED DEVICE`, which put two naming schemes
@@ -559,23 +565,9 @@ devices answered.
 
 * **Each row's timer runs while its phase runs.** It starts at zero the moment
   the row opens, ticks live, and freezes at its measured figure when the
-  successor closes it. One formatter for both halves, so `1.8s` running becomes
-  `1.9s` frozen rather than switching units mid-life.
+  successor closes it.
 
-  There was a three-second delay before a clock appeared, inherited from
-  `frun-runner`, on the grounds that a stage which finishes quickly should never
-  show a number. That made the fast rows read as though they were not being timed
-  at all. The delay is gone: a row that has just opened reads `0ms` and starts
-  moving.
-
-* **Timing Bar**: `Build Time` and `Sync Time` only. CPU and memory gauges are
-  removed. Whose CPU is ambiguous, and reporting system-wide load would be
-  decorative rather than informative; making it honest would mean resolving
-  the Dart VM, Gradle daemon, Xcode and simulator process tree for a number
-  that is rarely acted on.
-
-* **Progress Bar**: filled bar with `Stage 4/5`. A blank row separates it from
-  the stage list.
+* **Progress Bar**: filled bar with `Stage 4/5` (bold muted labels). The stage list begins directly beneath the progress bar without an artificial blank row gap (`Constraint::Length(1) // progress bar`, `Constraint::Min(1) // stage list`), keeping the build block tight and saving vertical space.
 
   The bar itself is capped at 44 columns; the row it sits on is not, so the
   stage count still right-aligns to the border. A 118-column bar conveys nothing
@@ -766,32 +758,24 @@ devices answered.
   an absent one.
 
 ### 3.5 `TerminalLogsView`
-* **Strict Gutter System**, one width per frame:
+* **Clean Continuous Header**: section title (`App Logs`) on the left and log count (`7 logs` / `7 logs · scrolled`) right-aligned to the top border:
+  ```text
+  ╭─ App Logs ──────────────────────────────────────────────────────── 7 logs ╮
   ```
-  1 14:32:01 INF Log content message line...
-  2 14:32:02  ⚡  Reloaded 125 of 1824 libraries in 148ms.
-  3 14:32:04 ERR The following assertion was thrown building
-                 CheckoutScreen(dirty, dependencies: [_Inherited…
+  Rendered seamlessly as a single unbroken top border line into the corner `╮` without broken dash fragments.
+
+* **15-Column Aligned Gutter System with Rounded Badges**:
+  ```text
+  14:32:01 INF flutter: [ShorebirdCodePush]: Engine not available...
+                 This occurs when using package:shorebird_code_push in an app
+  14:32:02  ⚡  Reloaded 125 of 1824 libraries in 148ms.
+  14:32:04 ERR flutter: Assertion failed: line 4795 pos 12: ...
+                 #0      _AssertionError._doThrowNew ...
   ```
-  `1␣14:32:01␣INF␣` is 15 columns and `4000␣14:32:01␣INF␣` is 18. Continuation
-  rows leave the gutter empty and indent to the message column (see 6.1).
+  `14:32:01` (8 cols) + ` ` (1 col) + `` (1 col) + `INF` (3 cols) + `` (1 col) + ` ` (1 col) = **15-column fixed prefix**.
+  Continuation lines from wrapped log messages are indented with 15 spaces, perfectly aligning with the start of the message text without intruding beneath the level badge.
 
-  **The width is computed from the entry count, not fixed.** It was a constant 18,
-  sized for a four-digit number, which meant the first nine entries of every
-  session were right-aligned into a column that was three quarters empty and the
-  stream began three columns adrift of the card holding it. What has to be constant
-  is that *one* number describes the gutter — the drawn width and the continuation
-  indent are the same expression — and that survives being computed. The cost is a
-  one-column shift as the log crosses 10, 100 and 1000 entries; three reflows in a
-  session against a hole on screen at the start of every one.
-
-  The level badge is padded to three cells for the same reason. `INF`, `WRN` and
-  `ERR` are three; the reload bolt is one, so reload rows drew a 16-column gutter
-  while everything around them drew 18, and a wrapped reload line indented to a
-  column its own first row never reached.
-
-* **Clean Header**: section title (`◆ APP LOGS STREAM`) and a count
-  (`[N entries]`). No search bar and no filter toggles.
+* **Header**: section title (`App Logs`) and a count (`[N logs]`). No search bar and no filter toggles.
 
   Dropping the filters also resolves a data problem: `FLUTTER` is detectable
   from the `I/flutter (12345):` prefix, but `SYSTEM` and `NET` have no source

@@ -270,47 +270,87 @@ fn is_braille(c: char) -> bool {
     ('\u{2800}'..='\u{28FF}').contains(&c)
 }
 
-/// Remove CSI, OSC and two-character escape sequences.
+/// Remove CSI, OSC and two-character escape sequences (both raw byte and caret escaped forms).
 ///
-/// Hand-rolled rather than a regex: the grammar is "ESC, then one of three
-/// shapes", which is a shorter `match` than the pattern describing it would be.
+/// Handles raw `\x1b`, literal escaped `\^[[...m`, and bare caret `^[[...m`.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
 
     while let Some(c) = chars.next() {
-        if c != '\x1b' {
-            out.push(c);
+        if c == '\x1b' {
+            match chars.next() {
+                // CSI: parameters, then a final byte in @..~
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+
+                // OSC: terminated by BEL or ST.
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' || c == '\x1b' {
+                            break;
+                        }
+                    }
+                }
+
+                // Two-character sequence; the second character is already consumed.
+                _ => {}
+            }
             continue;
         }
 
-        match chars.next() {
-            // CSI: parameters, then a final byte in @..~
-            Some('[') => {
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
+        // Escaped caret sequence: `\^[` (often followed by `[...m` or `]...`)
+        if c == '\\' && chars.peek() == Some(&'^') {
+            let mut clone = chars.clone();
+            clone.next(); // consume '^'
+            if clone.peek() == Some(&'[') {
+                chars.next(); // consume '^'
+                chars.next(); // consume '['
+                match chars.next() {
+                    Some('[') => {
+                        for c in chars.by_ref() {
+                            if ('@'..='~').contains(&c) {
+                                break;
+                            }
+                        }
                     }
+                    Some(']') => {
+                        while let Some(c) = chars.next() {
+                            if c == '\u{7}' || c == '\x1b' {
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
+                continue;
             }
-
-            // OSC: terminated by BEL or ST.
-            Some(']') => {
-                while let Some(c) = chars.next() {
-                    if c == '\u{7}' {
-                        break;
-                    }
-
-                    if c == '\x1b' {
-                        chars.next();
-                        break;
-                    }
-                }
-            }
-
-            // Two-character sequence; the second character is already consumed.
-            _ => {}
         }
+
+        // Caret sequence: `^[[`
+        if c == '^' && chars.peek() == Some(&'[') {
+            let mut clone = chars.clone();
+            clone.next(); // consume '['
+            if let Some(&next_c) = clone.peek() {
+                if next_c == '[' {
+                    chars.next(); // consume '['
+                    chars.next(); // consume '['
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+
+        out.push(c);
     }
 
     out
@@ -471,29 +511,6 @@ pub fn feed(app: &mut App, raw: &str) {
         return;
     }
 
-    // --------------------------------------------------------
-    // Flutter's boxed notices
-    // --------------------------------------------------------
-    // `logger.printBox()`: the new-version warning, Flutter Fix hints. Plain
-    // `flutter run` prints these inline before the build, so they pass straight
-    // through rather than being dropped.
-
-    if text.starts_with('┌') {
-        app.in_box = true;
-        app.log(Level::Wrn, text);
-        return;
-    }
-
-    if app.in_box {
-        app.log(Level::Wrn, text);
-
-        if text.starts_with('└') {
-            app.in_box = false;
-        }
-
-        return;
-    }
-
     if stage_line(app, text) {
         return;
     }
@@ -503,6 +520,78 @@ pub fn feed(app: &mut App, raw: &str) {
     }
 
     if reload_line(app, text) {
+        return;
+    }
+
+    // --------------------------------------------------------
+    // Boxed logs & notices (Flutter CLI & package:logger/PrettyPrinter)
+    // --------------------------------------------------------
+    let payload = text.strip_prefix("flutter:").unwrap_or(text).trim_start();
+
+    let is_box_start = payload.starts_with(|c| matches!(c, '┌' | '╔' | '┏' | '╭'));
+    let is_box_end = payload.starts_with(|c| matches!(c, '└' | '╚' | '┗' | '╰'));
+    let is_box_line = payload.starts_with(|c| {
+        matches!(
+            c,
+            '│' | '|' | '║' | '├' | '╟' | '┄' | '─' | '═' | ' ' | '\t'
+        )
+    });
+
+    if is_box_start {
+        let start_idx = app.logs.len();
+        app.box_start = Some(start_idx);
+
+        let initial_level = classify(text);
+        // Flutter CLI's logger.printBox() warning default:
+        let initial_level = if !text.starts_with("flutter:")
+            && payload.starts_with('┌')
+            && initial_level == Level::Inf
+        {
+            Level::Wrn
+        } else {
+            initial_level
+        };
+
+        app.box_level = initial_level;
+        app.log(initial_level, text);
+        return;
+    }
+
+    if let Some(start_idx) = app.box_start {
+        // If this line does not look like part of a box, close the box and log normally
+        if !is_box_line && !is_box_end {
+            app.box_start = None;
+            app.box_level = Level::Inf;
+            app.log(classify(text), text);
+            return;
+        }
+
+        let line_level = classify(text);
+        if line_level == Level::Err {
+            if app.box_level != Level::Err {
+                app.box_level = Level::Err;
+                if start_idx < app.logs.len() {
+                    for log in app.logs[start_idx..].iter_mut() {
+                        log.level = Level::Err;
+                    }
+                }
+            }
+        } else if line_level == Level::Wrn && app.box_level == Level::Inf {
+            app.box_level = Level::Wrn;
+            if start_idx < app.logs.len() {
+                for log in app.logs[start_idx..].iter_mut() {
+                    log.level = Level::Wrn;
+                }
+            }
+        }
+
+        let current_box_level = app.box_level;
+        app.log(current_box_level, text);
+
+        if is_box_end {
+            app.box_start = None;
+            app.box_level = Level::Inf;
+        }
         return;
     }
 
@@ -780,7 +869,20 @@ fn classify(text: &str) -> Level {
         }
     }
 
-    const ERRORS: [&str; 8] = [
+    // Strip "flutter: " prefix if present for deeper analysis
+    let payload = text.strip_prefix("flutter:").unwrap_or(text).trim_start();
+
+    // Strip common logger box borders like '│', '|', '├', '┌', '└', '║', '╟', '╚', '╔', '┆', '┄', '─', '═'
+    let inner = payload
+        .trim_start_matches(|c: char| {
+            matches!(
+                c,
+                '│' | '|' | '├' | '┌' | '└' | '║' | '╟' | '╚' | '╔' | '┆' | '┄' | '─' | '═' | ' ' | '\t'
+            )
+        })
+        .trim_start();
+
+    const ERRORS: [&str; 22] = [
         "Exception",
         "Error:",
         "error:",
@@ -789,17 +891,70 @@ fn classify(text: &str) -> Level {
         "FAILURE:",
         "Unhandled exception",
         "══╡",
+        ".error",
+        "AppLogger.error",
+        ".fatal",
+        "AppLogger.fatal",
+        ".wtf",
+        "AppLogger.wtf",
+        "⛔",
+        "❌",
+        "💀",
+        "💥",
+        "[ERROR]",
+        "[error]",
+        "[FATAL]",
+        "[CRITICAL]",
     ];
 
+    const NON_ERROR_CALLERS: [&str; 17] = [
+        ".info",
+        "AppLogger.info",
+        "Logger.i",
+        "AppLogger.i",
+        ".warning",
+        "AppLogger.warning",
+        ".warn",
+        "AppLogger.warn",
+        "Logger.w",
+        "AppLogger.w",
+        ".debug",
+        "AppLogger.debug",
+        "Logger.d",
+        "AppLogger.d",
+        ".trace",
+        "AppLogger.trace",
+        ".verbose",
+    ];
+
+    let is_caller_info = NON_ERROR_CALLERS.iter().any(|needle| text.contains(needle));
+
     // A Dart stack frame: `#0      _AssertionError._doThrowNew (...)`.
-    let is_frame =
-        text.starts_with('#') && text[1..].chars().next().is_some_and(|c| c.is_ascii_digit());
+    let is_frame = !is_caller_info
+        && ((text.starts_with('#') && text[1..].chars().next().is_some_and(|c| c.is_ascii_digit()))
+            || (inner.starts_with('#') && inner[1..].chars().next().is_some_and(|c| c.is_ascii_digit())));
 
     if is_frame || ERRORS.iter().any(|needle| text.contains(needle)) {
         return Level::Err;
     }
 
-    if text.starts_with("Warning:") || text.contains("warning:") {
+    const WARNINGS: [&str; 10] = [
+        "Warning:",
+        "warning:",
+        ".warning",
+        "AppLogger.warning",
+        ".warn",
+        "AppLogger.warn",
+        "⚠️",
+        "[WARNING]",
+        "[warning]",
+        "[WARN]",
+    ];
+
+    if text.starts_with("Warning:")
+        || inner.starts_with("Warning:")
+        || WARNINGS.iter().any(|needle| text.contains(needle))
+    {
         return Level::Wrn;
     }
 
@@ -1105,6 +1260,20 @@ mod tests {
         assert_eq!(clean("\x1b[32mBuilt\x1b[0m"), "Built");
         assert_eq!(clean("\x1b]0;title\x07Built"), "Built");
 
+        // Literal escaped caret sequences from Flutter/iOS logs
+        assert_eq!(
+            clean(r"flutter: \^[[38;5;196m│ ⛔ AuthPinScreen: PIN tidak sesuai\^[[0m"),
+            "flutter: │ ⛔ AuthPinScreen: PIN tidak sesuai"
+        );
+        assert_eq!(
+            clean(r"flutter: \^[[38;5;196m| #0   AppLogger.error\^[[0m"),
+            "flutter: | #0   AppLogger.error"
+        );
+        assert_eq!(
+            clean("flutter: ^[[38;5;196m│ ⛔ test^[[0m"),
+            "flutter: │ ⛔ test"
+        );
+
         // The erase pattern Flutter uses: backspaces, spaces, backspaces.
         assert_eq!(clean("ab\u{8}\u{8}cd"), "cd");
 
@@ -1159,6 +1328,124 @@ mod tests {
             Level::Err
         );
         assert_eq!(classify("flutter: just a print"), Level::Inf);
+
+        // Stack traces within Flutter prefix and box borders
+        assert_eq!(
+            classify("flutter: │ #0   AppLogger.error (package:member_apps/core/utils/app_logger.dart:31:12)"),
+            Level::Err
+        );
+        assert_eq!(
+            classify("flutter: | #1   _AuthPinScreenState.build (auth_pin_screen.dart:43:21)"),
+            Level::Err
+        );
+
+        // Error markers: emojis, .error, AppLogger.error, [ERROR]
+        assert_eq!(
+            classify("flutter: │ ⛔ AuthPinScreen: PIN tidak sesuai"),
+            Level::Err
+        );
+        assert_eq!(
+            classify("flutter: │ ❌ Request failed"),
+            Level::Err
+        );
+        assert_eq!(
+            classify("flutter: [ERROR] Network timeout"),
+            Level::Err
+        );
+        assert_eq!(
+            classify("flutter: some.service.error occurred"),
+            Level::Err
+        );
+
+        // Warning markers
+        assert_eq!(
+            classify("flutter: ⚠️ Something is deprecated"),
+            Level::Wrn
+        );
+        assert_eq!(
+            classify("flutter: [WARNING] Cache missed"),
+            Level::Wrn
+        );
+    }
+
+    #[test]
+    fn feed_unifies_logger_error_box_levels() {
+        let mut app = App::new(State::Running);
+        app.logs.clear();
+
+        let lines = [
+            "flutter: ┌───────────────────────────────────────────────────────────",
+            "flutter: │ #0   AppLogger.error (package:member_apps/core/utils/app_logger.dart:31:12)",
+            "flutter: │ #1   LoginRepository._mapCall (package:member_apps/features/auth/login.dart:243:17)",
+            "flutter: ├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄",
+            "flutter: │ 15:39:39.440 (+0:00:00.000788)",
+            "flutter: ├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄",
+            "flutter: │ ⛔ Request to /validate-otp failed: Kode OTP tidak sesuai.",
+            "flutter: └───────────────────────────────────────────────────────────",
+        ];
+
+        for line in lines {
+            feed(&mut app, line);
+        }
+
+        assert_eq!(app.logs.len(), 8);
+        for (i, log) in app.logs.iter().enumerate() {
+            assert_eq!(
+                log.level,
+                Level::Err,
+                "line {i} ({:?}) should be Level::Err",
+                log.message
+            );
+        }
+    }
+
+    #[test]
+    fn feed_keeps_info_boxes_as_info() {
+        let mut app = App::new(State::Running);
+        app.logs.clear();
+
+        let lines = [
+            "flutter: ┌───────────────────────────────────────────────────────────",
+            "flutter: │ #0   AppLogger.info (package:member_apps/core/utils/app_logger.dart:31:12)",
+            "flutter: │ Normal informational message",
+            "flutter: └───────────────────────────────────────────────────────────",
+        ];
+
+        for line in lines {
+            feed(&mut app, line);
+        }
+
+        assert_eq!(app.logs.len(), 4);
+        for log in app.logs.iter() {
+            assert_eq!(log.level, Level::Inf);
+        }
+    }
+
+    #[test]
+    fn feed_unifies_logger_warning_box_levels() {
+        let mut app = App::new(State::Running);
+        app.logs.clear();
+
+        let lines = [
+            "flutter: ┌───────────────────────────────────────────────────────────",
+            "flutter: │ #0   AppLogger.warn (package:member_apps/core/utils/app_logger.dart:31:12)",
+            "flutter: │ ⚠️ Deprecated endpoint invoked",
+            "flutter: └───────────────────────────────────────────────────────────",
+        ];
+
+        for line in lines {
+            feed(&mut app, line);
+        }
+
+        assert_eq!(app.logs.len(), 4);
+        for (i, log) in app.logs.iter().enumerate() {
+            assert_eq!(
+                log.level,
+                Level::Wrn,
+                "line {i} ({:?}) should be Level::Wrn",
+                log.message
+            );
+        }
     }
 
     #[test]
