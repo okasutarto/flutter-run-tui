@@ -181,11 +181,11 @@ fn list(frame: &mut Frame, area: Rect, app: &mut App, _plan: &Budget) {
 
 const GAP: usize = 2;
 
-const ACTIVE: &str = " active ";
-const LAST_USED: &str = " last used ";
-const RUNNING: &str = " running ";
-const IN_USE: &str = " in use ";
-const KEEP: &str = " ⏎ Keep ";
+const ACTIVE: &str = "active";
+const LAST_USED: &str = "last used";
+const RUNNING: &str = "running";
+const IN_USE: &str = "in use";
+const KEEP: &str = "⏎ Keep";
 
 fn pill_width(label: &str) -> usize {
     crate::widgets::width(label) + 2

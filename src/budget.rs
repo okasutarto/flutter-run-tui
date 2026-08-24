@@ -150,7 +150,7 @@ impl Budget {
             return 1;
         }
 
-        4 + 2 + Self::TITLE_GAP
+        5 + 2 + Self::TITLE_GAP
     }
 
     /// SelectedTargetCard (2 columns x 2 rows: Device/Type & Platform/OS).
@@ -327,17 +327,17 @@ mod tests {
     #[test]
     fn full_chrome_matches_the_spec_arithmetic() {
         // Enumerated from the rows the cards actually draw:
-        // project 6 + target 4 + footer 1 = 11 rows.
+        // project 7 + target 4 + footer 1 = 12 rows.
         let chrome = Budget::full().chrome(State::Running, DONE);
 
         assert_eq!(
-            chrome, 11,
+            chrome, 12,
             "enumerated from the rows each card actually draws"
         );
 
         // Where the tracker does exist, it is charged:
-        // project 6 + target 4 + tracker 8 + footer 1 = 19.
-        assert_eq!(Budget::full().chrome(State::Building, DONE), 19);
+        // project 7 + target 4 + tracker 8 + footer 1 = 20.
+        assert_eq!(Budget::full().chrome(State::Building, DONE), 20);
     }
 
     /// Everything cut from the static cards lands in the log window, and this is
@@ -349,8 +349,8 @@ mod tests {
             h - plan.chrome(State::Running, DONE)
         };
 
-        // At the design target, full chrome leaves 34 rows for the log window.
-        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 34);
+        // At the design target, full chrome leaves 33 rows for the log window.
+        assert_eq!(45 - Budget::full().chrome(State::Running, DONE), 33);
         assert!(log_rows(45) >= Budget::floor(State::Running), "{} rows", log_rows(45));
 
         // Nothing is conceded at the design target.
@@ -369,7 +369,7 @@ mod tests {
                 ..Budget::full()
             }
         );
-        assert_eq!(60 - plan.chrome(State::Running, DONE), 49);
+        assert_eq!(60 - plan.chrome(State::Running, DONE), 48);
     }
 
     /// `Stopped` is laid out exactly like a live run: two cards, a footer, two gaps.
@@ -394,13 +394,13 @@ mod tests {
         let full = Budget::full();
         let flat = full;
 
-        // 4 content + 2 border + 0 title gap = 6.
-        assert_eq!(flat.project_h(), 6);
+        // 5 content + 2 border + 0 title gap = 7.
+        assert_eq!(flat.project_h(), 7);
 
         // 2 content + 2 border + 0 title gap = 4.
         assert_eq!(flat.target_h(), 4);
 
-        assert_eq!(full.project_h(), 6);
+        assert_eq!(full.project_h(), 7);
         assert_eq!(full.target_h(), 4);
     }
 
@@ -505,7 +505,7 @@ mod tests {
     /// The build is the exception: while it runs, its stage list outranks them.
     #[test]
     fn a_running_build_keeps_its_stage_list_instead() {
-        let plan = Budget::solve(area(106, 22), State::Building, 5);
+        let plan = Budget::solve(area(106, 23), State::Building, 5);
 
         assert!(plan.full_build, "the stage list is what is moving");
     }

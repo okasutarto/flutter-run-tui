@@ -90,10 +90,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 
         if is_current {
             spans.push(Span::raw("  "));
-            spans.extend(pill(" CURRENT ", app.theme.emerald, &app.theme));
+            spans.extend(pill("CURRENT", app.theme.emerald, &app.theme));
         } else if selected {
             spans.push(Span::raw("  "));
-            spans.extend(pill(" PREVIEW ", app.theme.amber, &app.theme));
+            spans.extend(pill("PREVIEW", app.theme.amber, &app.theme));
         }
 
         lines.push(Line::from(spans));

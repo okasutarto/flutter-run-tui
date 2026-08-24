@@ -19,7 +19,7 @@ Application design follows strict Text User Interface (TUI) paradigms popularize
 
 * **Zero Ambient FX**: No drop shadows (`shadow-*`), backdrop blurs (`backdrop-blur-*`), or decorative radial gradients.
 * **Pixel-Sharp Seamless Borders**: Structural separation relies entirely on 1px crisp rounded borders with 0-gap vertical stack integration (`spacing(0)`).
-* **Curved Border-Radius Badges & Pills**: Status pills and log level badges utilize Powerline rounded caps (`` and ``) to harmonize with the rounded card corners.
+* **Rounded Border-Radius Badges & Pills**: Status pills and log level badges utilize Powerline rounded caps (`` and ``) with compact horizontal padding matching vertical density.
 * **Strict Monospace Hierarchy & Uniform Bold Typography**: Typography utilizes fixed-width character alignment across all columns, headers, tables, and gutter blocks with consistent bold font weights for balanced legibility.
 * **Symbol & ASCII Art Accents**: Uses UTF-8 box characters and glyphs (`◆`, `✔`, `✖`, `❯`, `▶`, `⚡`, `⠋`) for structural guidance and status indication.
 
@@ -176,7 +176,7 @@ already the component describing what is being run and where.
   * **3-Column Technical Stats Row**: `Flutter` (`3.29.3`), `Dart` (`3.7.2`),
     `Runtime` (`FVM`, `SDK`, or the version manager's own name — whatever
     `probe::toolchain` resolved, see 8.11).
-* **Ultra-Compact 6-Row Layout**: Total card height is strictly 6 rows (4 content + 2 border). Metadata rows and technical stats are laid out consecutively without artificial blank line clutter, maximizing vertical efficiency.
+* **Compact 7-Row Layout**: Total card height is 7 rows (5 content + 2 border), with 1 blank space row between metadata rows (`Name`, `Branch`, `Git Status`) and the technical stats row (`Flutter · Dart · Runtime`).
 * **Widths follow the terminal.** Values right-align to the card border and the
   layout spans the block cleanly.
 * **Technical stats row** is three columns spaced across the width: Flutter

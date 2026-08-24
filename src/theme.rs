@@ -325,19 +325,19 @@ impl Theme {
             ]))
     }
 
-    /// Filled badge with rounded caps matching card border radius. Text is bold in select/switch device.
+    /// Filled badge with rounded caps and compact padding. Text is bold.
     pub fn pill<'a>(&self, text: impl Into<Cow<'a, str>>, color: Color) -> Vec<Span<'a>> {
         let fg = self.badge_fg(color);
         let s = text.into();
         let trimmed = s.trim();
         vec![
             Span::styled(PILL_L, Style::new().fg(color)),
-            Span::styled(format!(" {trimmed} "), Style::new().bg(color).fg(fg).bold()),
+            Span::styled(trimmed.to_string(), Style::new().bg(color).fg(fg).bold()),
             Span::styled(PILL_R, Style::new().fg(color)),
         ]
     }
 
-    /// Compact badge with rounded caps for log levels (non-bold for readability).
+    /// Compact rounded badge for log levels (non-bold for readability).
     pub fn badge<'a>(&self, text: impl Into<Cow<'a, str>>, color: Color) -> Vec<Span<'a>> {
         let fg = self.badge_fg(color);
         let s = text.into();

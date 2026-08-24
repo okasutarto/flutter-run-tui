@@ -15,8 +15,8 @@ use crate::widgets::{card, elide, field, spread, strong, text};
 const BRANCH_MAX: usize = 30;
 
 /// Size of the logo artwork box, inside the wider left column.
-const ART_W: u16 = 7;
-const ART_H: u16 = 3;
+const ART_W: u16 = 9;
+const ART_H: u16 = 4;
 
 /// The wordmark under the artwork.
 const LABEL: &str = "flutter-run-tui";
@@ -25,14 +25,11 @@ const LABEL_W: u16 = LABEL.len() as u16;
 /// Content width of the logo column: whichever of the artwork and its wordmark is wider.
 const LOGO_W: u16 = if ART_W > LABEL_W { ART_W } else { LABEL_W };
 
-/// Blank columns either side of the logo block, measured from the card border.
-const GUTTER: u16 = 3;
-
-/// The card's own horizontal padding, which `card()` has already taken out of `inner`.
-const CARD_PAD: u16 = 1;
+/// Gap between the logo column and the metadata column.
+const GAP: u16 = 3;
 
 /// Total width the logo column claims out of the card body.
-const LOGO_COL: u16 = (GUTTER - CARD_PAD) + LOGO_W + GUTTER;
+const LOGO_COL: u16 = LOGO_W + GAP;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut Logo) {
     if !plan.full_cards {
@@ -86,13 +83,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, plan: &Budget, art: &mut
 
     let rows = Layout::vertical([
         Constraint::Length(3), // metadata: consecutive compact rows
+        Constraint::Length(1), // 1 blank space
         Constraint::Length(1), // stats: Flutter · Dart · Runtime
     ])
     .split(body);
 
     frame.render_widget(Paragraph::new(lines), rows[0]);
 
-    stats(frame, rows[1], app);
+    stats(frame, rows[2], app);
 }
 
 /// The technical stats row from DESIGN.md 3.1.
@@ -146,17 +144,16 @@ fn collapsed(frame: &mut Frame, area: Rect, app: &App) {
 
 fn logo(frame: &mut Frame, area: Rect, art: &mut Logo, theme: &Theme) {
     let cols = Layout::horizontal([
-        Constraint::Length(GUTTER - CARD_PAD),
         Constraint::Length(LOGO_W),
         Constraint::Fill(1),
     ])
     .split(area);
 
     let rows = Layout::vertical([
-        Constraint::Length(ART_H), // 3 rows: height matches Name, Branch, Git Status
+        Constraint::Length(ART_H), // 4 rows: enlarged logo
         Constraint::Length(1),     // 1 row wordmark: matches stats row
     ])
-    .split(cols[1]);
+    .split(cols[0]);
 
     let art_cols = Layout::horizontal([
         Constraint::Fill(1),
