@@ -1464,17 +1464,36 @@ fn boot_sim(udid: &str) -> Result<Booted, String> {
     // Only read on a cold launch, which is the only launch that boots anything: an
     // already-running Simulator ignores `--args` and is merely activated, and there is
     // no extra device for it to bring up.
-    let _ = run(
-        "open",
-        &["-a", "Simulator", "--args", "-CurrentDeviceUDID", udid],
-        QUICK,
-    );
+    let device_hub = run("xcode-select", &["-p"], QUICK)
+        .and_then(|developer_dir| device_hub_path(&developer_dir))
+        .filter(|path| path.is_dir());
+
+    let opened = device_hub
+        .as_deref()
+        .and_then(Path::to_str)
+        .and_then(|app| run("open", &[app, "--args", "-CurrentDeviceUDID", udid], QUICK));
+
+    // Xcode 27 replaced the standalone Simulator app with Device Hub. Keep the
+    // old launch path for older Xcodes and unusual toolchains without Device Hub.
+    if opened.is_none() {
+        let _ = run(
+            "open",
+            &["-a", "Simulator", "--args", "-CurrentDeviceUDID", udid],
+            QUICK,
+        );
+    }
 
     // `bootstatus -b` boots if needed and blocks until the device is ready, so
     // there is no polling loop to write.
     run("xcrun", &["simctl", "bootstatus", udid, "-b"], BOOT_LIMIT)
         .map(|_| Booted::bare(udid.to_string()))
         .ok_or_else(|| "did not finish booting".to_string())
+}
+
+fn device_hub_path(developer_dir: &str) -> Option<PathBuf> {
+    Path::new(developer_dir.trim())
+        .parent()
+        .map(|contents| contents.join("Applications/DeviceHub.app"))
 }
 
 fn avd_boot_finished(ready: bool, reported_by_adb: Option<bool>) -> Result<bool, &'static str> {
@@ -1874,6 +1893,16 @@ mod tests {
         );
         assert_eq!(sdk_name("iOS 18.2 22C150"), "iOS 18.2 22C150");
         assert_eq!(sdk_name("-"), "-");
+    }
+
+    #[test]
+    fn device_hub_sits_next_to_xcodes_contents_directory() {
+        assert_eq!(
+            device_hub_path("/Applications/Xcode.app/Contents/Developer\n"),
+            Some(PathBuf::from(
+                "/Applications/Xcode.app/Contents/Applications/DeviceHub.app"
+            ))
+        );
     }
 
     /// 8.4: a device is taken when a `flutter run` says `-d` on it, and not otherwise.
