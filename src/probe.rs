@@ -1633,12 +1633,21 @@ fn boot_avd(name: &str) -> Result<Booted, String> {
 /// Blocking, so it belongs on a worker thread. Nothing is reported back: a device
 /// that refuses to stop costs memory and nothing else, and the run that matters is
 /// already starting on another one.
-pub fn shutdown(id: &str, platform: Platform) {
+///
+/// `window` is the title of the Device Hub window to close afterwards, or `None` to
+/// leave every window alone.
+pub fn shutdown(id: &str, platform: Platform, window: Option<&str>) {
     match platform {
         // `simctl shutdown` leaves the Simulator app open with no device booted,
-        // which is what quitting a simulator from its own menu does.
+        // which is what quitting a simulator from its own menu does. Simulator.app
+        // closes that device's window with it; Device Hub keeps it open on a
+        // shut-down device, so it is closed here instead.
         Platform::Ios => {
             let _ = run("xcrun", &["simctl", "shutdown", id], QUICK);
+
+            if let Some(title) = window {
+                close_device_hub_window(title);
+            }
         }
 
         // `emu kill` is the emulator's own console command and stops the process.
@@ -1653,6 +1662,55 @@ pub fn shutdown(id: &str, platform: Platform) {
         // nearest equivalent would be closing the user's browser.
         Platform::Desktop | Platform::Web => {}
     }
+}
+
+/// Close Device Hub's window for one device, through its close button.
+///
+/// Device Hub has no URL action or scripting dictionary for closing a window — its
+/// URL actions are `open`, `select` and `showInspector` — so this goes through
+/// System Events, which needs Accessibility permission for the terminal frun runs
+/// in. Without it, or without Device Hub running, `osascript` fails and the window
+/// stays open, which is where this was before: harmless.
+///
+/// Matched on the exact window title from `device_hub_title`, so "iPhone 17" never
+/// closes "iPhone 17 Pro". The title travels as `argv`, so it needs no quoting.
+fn close_device_hub_window(title: &str) {
+    let script = [
+        "on run argv",
+        "tell application \"System Events\"",
+        "if not (exists process \"DeviceHub\") then return",
+        "tell process \"DeviceHub\"",
+        "repeat with w in (every window whose name is (item 1 of argv))",
+        "click (first button of w whose subrole is \"AXCloseButton\")",
+        "end repeat",
+        "end tell",
+        "end tell",
+        "end run",
+    ];
+
+    let mut args: Vec<&str> = script.iter().flat_map(|line| ["-e", *line]).collect();
+    args.push(title);
+
+    let _ = run("osascript", &args, QUICK);
+}
+
+/// The title Device Hub gives a simulator's window: `iPhone 17 – iOS 27.0`, the
+/// name and the runtime joined by an en dash. Measured on Xcode 27.2.
+///
+/// Rebuilt from `sdk`, which for a simulator is the runtime as `sdk_name` spells it
+/// (`iOS-27-0`). `None` for anything else, so a device whose title cannot be known
+/// keeps its window rather than risking someone else's.
+pub fn device_hub_title(name: &str, sdk: &str) -> Option<String> {
+    let (os, version) = sdk.split_once('-')?;
+
+    let parts: Vec<&str> = version.split('-').collect();
+    let numeric = |part: &&str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
+
+    if os.is_empty() || !parts.iter().all(numeric) {
+        return None;
+    }
+
+    Some(format!("{name} \u{2013} {os} {}", parts.join(".")))
 }
 
 /// `targetPlatform` and `sdk` for a booted emulator, asked of the emulator.
@@ -1921,6 +1979,22 @@ mod tests {
                 "/Applications/Xcode.app/Contents/Applications/DeviceHub.app"
             ))
         );
+    }
+
+    #[test]
+    fn device_hub_title_is_name_dash_runtime() {
+        assert_eq!(
+            device_hub_title("iPhone 17", "iOS-27-0").as_deref(),
+            Some("iPhone 17 \u{2013} iOS 27.0")
+        );
+        assert_eq!(
+            device_hub_title("iPad Pro 11-inch (M5)", "iOS-26-5").as_deref(),
+            Some("iPad Pro 11-inch (M5) \u{2013} iOS 26.5")
+        );
+
+        // Not a simulator runtime: no title, so no window is closed.
+        assert_eq!(device_hub_title("Pixel 8", "Android 17 (API 37)"), None);
+        assert_eq!(device_hub_title("iPhone 17", ""), None);
     }
 
     #[test]

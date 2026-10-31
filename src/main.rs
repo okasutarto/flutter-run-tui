@@ -1564,7 +1564,7 @@ fn enter(app: &mut App, ctx: &mut Ctx) -> bool {
 /// describing the outgoing device.
 fn commit_switch(app: &mut App, device: probe::Device) {
     // Read the outgoing target before `choose` replaces it.
-    release_target(app);
+    release_target(app, &device);
     app.choose(device);
 }
 
@@ -1819,15 +1819,22 @@ fn tab_command(
 ///
 /// Physical devices are untouched — there is nothing here that could — and so are
 /// macOS and Chrome, where the nearest equivalent is closing the user's browser.
-fn release_target(app: &App) {
+///
+/// The outgoing device's Device Hub window is closed by its title, so it is left
+/// open when the incoming device's window would carry the same one — two
+/// simulators of one name on one runtime — or the new window would close too.
+fn release_target(app: &App, incoming: &probe::Device) {
     let Some(device) = app.target.as_ref().filter(|d| d.virtual_device) else {
         return;
     };
 
     let id = device.id.clone();
     let platform = device.platform;
+    let window = probe::device_hub_title(&device.name, &device.sdk).filter(|title| {
+        probe::device_hub_title(&incoming.name, &incoming.sdk).as_ref() != Some(title)
+    });
 
-    std::thread::spawn(move || probe::shutdown(&id, platform));
+    std::thread::spawn(move || probe::shutdown(&id, platform, window.as_deref()));
 }
 
 /// Kill and reap the current child, if there is one.
