@@ -574,23 +574,29 @@ fn path_sdk() -> Option<PathBuf> {
 
 /// Resolve the SDK this project pins.
 ///
-/// Two routes, in the order FVM itself creates them: the per-project symlink
-/// when it exists, otherwise the pin in `.fvmrc` resolved against the cache.
+/// Two routes, in the order `fvm flutter` itself resolves them: the pin in
+/// `.fvmrc` against the cache, otherwise the per-project symlink.
+///
+/// **The pin first, because it is what the build runs.** The symlink is only
+/// rewritten by `fvm use`, so editing `.fvmrc` by hand leaves it pointing at the
+/// old SDK. Measured: `.fvmrc` said 3.47.0, `.fvm/flutter_sdk` still led to
+/// 3.29.3, `fvm flutter --version` answered 3.47.0 — and the card said 3.29.3.
+/// The symlink stays as the fallback for projects from FVM releases that wrote
+/// no `.fvmrc`.
 fn fvm_sdk() -> Option<PathBuf> {
-    let link = Path::new(".fvm/flutter_sdk");
+    let pinned = std::fs::read_to_string(".fvmrc")
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|project| {
+            project
+                .get("flutter")
+                .or_else(|| project.get("flutterSdkVersion"))
+                .and_then(Value::as_str)
+                .map(|pin| fvm_cache().join("versions").join(pin))
+        })
+        .filter(|sdk| sdk.is_dir());
 
-    if link.exists() {
-        return std::fs::canonicalize(link).ok();
-    }
-
-    let project: Value = serde_json::from_str(&std::fs::read_to_string(".fvmrc").ok()?).ok()?;
-
-    let pin = project
-        .get("flutter")
-        .or_else(|| project.get("flutterSdkVersion"))
-        .and_then(Value::as_str)?;
-
-    Some(fvm_cache().join("versions").join(pin))
+    pinned.or_else(|| std::fs::canonicalize(".fvm/flutter_sdk").ok())
 }
 
 fn fvm_cache() -> PathBuf {
