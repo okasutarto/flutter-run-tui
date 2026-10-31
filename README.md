@@ -57,6 +57,7 @@
 brew tap okasutarto/frun
 brew install frun
 ```
+*On Apple Silicon this installs a prebuilt binary in seconds, with no Rust toolchain needed. Intel Macs build from source.*
 
 ---
 
