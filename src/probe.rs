@@ -1464,6 +1464,19 @@ fn boot_sim(udid: &str) -> Result<Booted, String> {
     // Only read on a cold launch, which is the only launch that boots anything: an
     // already-running Simulator ignores `--args` and is merely activated, and there is
     // no extra device for it to bring up.
+    //
+    // **Xcode 27 replaced Simulator.app with Device Hub, and none of the above holds
+    // there.** Device Hub boots nothing on a cold launch and ignores
+    // `-CurrentDeviceUDID`, so there is no second boot to stop — but launched bare it
+    // also shows only its one management window, and a second device booted next to
+    // the first gets no window of its own. Measured: two simulators booted, one Device
+    // Hub window on screen. `devices://device/open?id=<udid>` is Device Hub's own URL
+    // action for a device window: it opens one per device, brings an existing one
+    // forward instead of duplicating it, and boots nothing itself, so `bootstatus`
+    // below stays the only boot.
+    //
+    // Opened with `-a` on the Device Hub of the selected Xcode, so a second Xcode
+    // installed next to it cannot claim the `devices:` scheme.
     let device_hub = run("xcode-select", &["-p"], QUICK)
         .and_then(|developer_dir| device_hub_path(&developer_dir))
         .filter(|path| path.is_dir());
@@ -1471,10 +1484,9 @@ fn boot_sim(udid: &str) -> Result<Booted, String> {
     let opened = device_hub
         .as_deref()
         .and_then(Path::to_str)
-        .and_then(|app| run("open", &[app, "--args", "-CurrentDeviceUDID", udid], QUICK));
+        .and_then(|app| run("open", &["-a", app, &device_hub_url(udid)], QUICK));
 
-    // Xcode 27 replaced the standalone Simulator app with Device Hub. Keep the
-    // old launch path for older Xcodes and unusual toolchains without Device Hub.
+    // Older Xcodes, and toolchains without Device Hub, still have Simulator.app.
     if opened.is_none() {
         let _ = run(
             "open",
@@ -1494,6 +1506,12 @@ fn device_hub_path(developer_dir: &str) -> Option<PathBuf> {
     Path::new(developer_dir.trim())
         .parent()
         .map(|contents| contents.join("Applications/DeviceHub.app"))
+}
+
+/// Device Hub's URL for one device's own window. A UDID is hex and dashes, so it
+/// needs no escaping.
+fn device_hub_url(udid: &str) -> String {
+    format!("devices://device/open?id={udid}")
 }
 
 fn avd_boot_finished(ready: bool, reported_by_adb: Option<bool>) -> Result<bool, &'static str> {
@@ -1902,6 +1920,14 @@ mod tests {
             Some(PathBuf::from(
                 "/Applications/Xcode.app/Contents/Applications/DeviceHub.app"
             ))
+        );
+    }
+
+    #[test]
+    fn device_hub_opens_the_picked_simulator_by_udid() {
+        assert_eq!(
+            device_hub_url("933A6328-6BC9-4756-98BB-1151C805BE60"),
+            "devices://device/open?id=933A6328-6BC9-4756-98BB-1151C805BE60"
         );
     }
 
