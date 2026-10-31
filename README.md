@@ -25,8 +25,9 @@
 
 - **⚡ Fast Device Picker (<200ms):** Queries `adb`, `emulator`, and `simctl` directly to display running and bootable targets instantly, rather than waiting 6–9s on `flutter devices`.
 - **🚀 Boot on Enter:** Select any shut-down simulator or AVD and press `Enter` to boot it and start the build automatically.
+- **🍎 Xcode 27 Device Hub Ready:** On Xcode 27, each simulator opens in its own Device Hub window (one window per device, never duplicated across tabs). Older Xcodes keep using Simulator.app.
 - **⏱️ Honest Build Timings:** Separate tracking for toolchain startup time (Dart VM & `flutter_tools`) and actual compilation time (Gradle/Xcode).
-- **🔄 Smart Device Switching (`^D`):** Switch targets mid-session without exiting. Press `⇧Enter` to launch another device in a separate Ghostty or tmux tab.
+- **🔄 Smart Device Switching (`^D`):** Switch targets mid-session without exiting. The outgoing simulator or emulator is shut down, and on Xcode 27 its Device Hub window is closed too. Press `⇧Enter` to launch another device in a separate Ghostty or tmux tab.
 - **🎨 10 Curated Themes (`t`):** Instant floating modal with real-time live preview, 10 curated dark palettes (Color Hunt & developer favorites), smart text contrast, and persistent settings across sessions.
 - **🧱 Seamless 0-Gap Dashboard:** Compact, modular card layout with 0 outer spacing, 7-row ProjectCard with balanced spacing, and optimal vertical log space.
 - **💊 Rounded Border-Radius Badges:** Status pills (` Running`, `last used`) and log tags (`WRN`, `ERR`, `INF`) feature curved Powerline caps matching card rounded corners with snug padding.
@@ -41,7 +42,8 @@
 | :--- | :--- |
 | **Rust** | Stable toolchain (2021 edition) |
 | **Flutter** | `flutter` on `PATH` or managed via [FVM](https://fvm.app) (auto-detected) |
-| **Android / iOS** | `adb` & `emulator` (Android) / Xcode CLI tools with `xcrun simctl` (iOS) |
+| **Android / iOS** | `adb` & `emulator` (Android) / Xcode with `xcrun simctl` (iOS). Tested on Xcode 27.2 with Device Hub on macOS 27.2; Simulator.app is used on older Xcodes. |
+| **Accessibility** *(optional)* | Xcode 27 only: grant your terminal Accessibility access (System Settings → Privacy & Security → Accessibility) so `^D` can close the outgoing simulator's Device Hub window. Without it, everything else works and the old window simply stays open. |
 | **Font** | Nerd Font (JetBrains Mono, Fira Code) for status glyphs and platform icons |
 | **Terminal** | Any terminal ([Ghostty](https://ghostty.org/) recommended for Kitty graphics, truecolor & `adjust-cell-height = 10%`) |
 
@@ -174,6 +176,8 @@ Press **`t`** from any screen to open the **Theme Switcher** modal with instant 
 1. `FRUN_FLUTTER` environment variable (if set)
 2. Project-level `.fvmrc` or `.fvm/` directory with `fvm` on `PATH`
 3. Global `flutter` on `PATH`
+
+With FVM, the version shown on the Project card comes from the `.fvmrc` pin, the same one `fvm flutter` builds with. The `.fvm/flutter_sdk` symlink is only a fallback, because it is rewritten by `fvm use` alone and goes stale when `.fvmrc` is edited by hand.
 
 Custom runners can be supplied via `FRUN_FLUTTER`:
 ```bash
